@@ -5,6 +5,7 @@ from windcode.tui.widgets.messages import MessageStream
 from windcode.tui.widgets.question import QuestionWidget
 from windcode.tui.widgets.sessions import SessionSelector
 from windcode.tui.widgets.status import StatusBar
+from windcode.tui.widgets.subagents import SubagentGroup, SubagentRow
 from windcode.tui.widgets.tools import ToolBlock
 from windcode.tui.widgets.welcome import WelcomeView
 
@@ -16,6 +17,8 @@ __all__ = [
     "QuestionWidget",
     "SessionSelector",
     "StatusBar",
+    "SubagentGroup",
+    "SubagentRow",
     "ToolBlock",
     "WelcomeView",
 ]

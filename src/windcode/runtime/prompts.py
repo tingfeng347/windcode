@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from windcode.config import PermissionMode
+from windcode.config import DelegationMode, PermissionMode
 from windcode.instructions import InstructionBlock
 from windcode.tools import ToolRegistry
 
@@ -13,11 +13,29 @@ def build_system_prompt(
     permission_mode: PermissionMode,
     instructions: tuple[InstructionBlock, ...],
     tools: ToolRegistry,
+    delegation_mode: DelegationMode | None = None,
+    is_subagent: bool = False,
 ) -> str:
     tool_lines = "\n".join(f"- {schema.name}: {schema.description}" for schema in tools.schemas())
     instruction_sections = "\n\n".join(
         f"### {block.path}\n{block.content.rstrip()}" for block in instructions
     )
+    delegation = ""
+    if is_subagent:
+        delegation = (
+            "\n\n## 子智能体约束\n"
+            "你是单层临时子智能体, 只执行收到的自包含任务; 不得继续委派, 也不得直接询问用户。"
+        )
+    elif delegation_mode is DelegationMode.EXPLICIT:
+        delegation = (
+            "\n\n## 委派策略: explicit\n"
+            "仅当用户明确要求委派、并行或使用子智能体时, 才可调用子智能体工具。"
+        )
+    elif delegation_mode is DelegationMode.PROACTIVE:
+        delegation = (
+            "\n\n## 委派策略: proactive\n"
+            "可在任务确实独立且适合并行时主动委派; 必须保持任务有界、状态可见并统一汇总。"
+        )
     return (
         "你是 Windcode, 在终端中帮助用户完成软件工程任务的本地编码 Agent.\n"
         "先判断用户是否提出了明确且需要项目上下文的编码任务. "
@@ -33,4 +51,5 @@ def build_system_prompt(
         f"## 可用工具\n{tool_lines or '- 无'}\n\n"
         f"## 项目指令 (按根目录到当前目录排列, 后者优先)\n"
         f"{instruction_sections or '无项目指令'}"
+        f"{delegation}"
     )

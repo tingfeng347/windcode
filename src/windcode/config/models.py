@@ -30,6 +30,36 @@ class BudgetConfig(StrictModel):
     shell_timeout_seconds: float = Field(default=120.0, gt=0)
 
 
+HARD_MAX_SUBAGENT_TASKS = 16
+HARD_MAX_CONCURRENT_SUBAGENTS = 8
+
+
+class DelegationMode(StrEnum):
+    EXPLICIT = "explicit"
+    PROACTIVE = "proactive"
+
+
+class SubagentConfig(StrictModel):
+    mode: DelegationMode = DelegationMode.EXPLICIT
+    max_tasks: int = Field(default=8, ge=1, le=HARD_MAX_SUBAGENT_TASKS)
+    max_concurrent: int = Field(default=4, ge=1, le=HARD_MAX_CONCURRENT_SUBAGENTS)
+    max_model_steps: int = Field(default=20, ge=1)
+    max_tool_calls: int = Field(default=50, ge=1)
+    max_runtime_seconds: float = Field(default=900.0, gt=0)
+    max_total_model_steps: int = Field(default=80, ge=1)
+    max_total_tool_calls: int = Field(default=200, ge=1)
+
+    @model_validator(mode="after")
+    def validate_aggregate_limits(self) -> Self:
+        if self.max_concurrent > self.max_tasks:
+            raise ValueError("max_concurrent cannot exceed max_tasks")
+        if self.max_total_model_steps < self.max_model_steps:
+            raise ValueError("max_total_model_steps cannot be below max_model_steps")
+        if self.max_total_tool_calls < self.max_tool_calls:
+            raise ValueError("max_total_tool_calls cannot be below max_tool_calls")
+        return self
+
+
 class PermissionMode(StrEnum):
     PLAN = "plan"
     DEFAULT = "default"
@@ -67,6 +97,7 @@ class AppConfig(StrictModel):
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     context: ContextConfig = Field(default_factory=ContextConfig)
     trace: TraceConfig = Field(default_factory=TraceConfig)
+    subagents: SubagentConfig = Field(default_factory=SubagentConfig)
 
     @model_validator(mode="after")
     def validate_provider_chain(self) -> Self:

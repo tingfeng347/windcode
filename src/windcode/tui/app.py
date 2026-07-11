@@ -15,6 +15,7 @@ from windcode.config import AppConfig, PermissionMode
 from windcode.domain.events import (
     ApprovalRequested,
     ApprovalResponse,
+    SubagentEvent,
     ToolFinished,
     ToolProgress,
     ToolStarted,
@@ -31,6 +32,7 @@ from windcode.tui.widgets import (
     QuestionWidget,
     SessionSelector,
     StatusBar,
+    SubagentGroup,
     ToolBlock,
     WelcomeView,
 )
@@ -67,6 +69,7 @@ class WindcodeApp(App[None]):
         self.tool_blocks: dict[str, ToolBlock] = {}
         self.approval_widgets: dict[str, ApprovalWidget] = {}
         self.session_selector: SessionSelector | None = None
+        self.subagent_group: SubagentGroup | None = None
         self.ui_mode: Literal["welcome", "chat"] = "chat"
 
     def _display_model(self) -> str:
@@ -138,6 +141,7 @@ class WindcodeApp(App[None]):
             permission=self.permission_mode,
             sandbox=self.config.sandbox.enabled,
             state=state,
+            delegation=self.config.subagents.mode.value,
         )
         self.query_one("#welcome-view", WelcomeView).set_context(
             model=self._display_model(),
@@ -230,6 +234,12 @@ class WindcodeApp(App[None]):
             elif isinstance(event, UserInputRequested):
                 await messages.begin_block()
                 await messages.mount(QuestionWidget(event))
+            elif isinstance(event, SubagentEvent):
+                if self.subagent_group is None or not self.subagent_group.is_attached:
+                    await messages.begin_block()
+                    self.subagent_group = SubagentGroup()
+                    await messages.mount_in_ai_row(self.subagent_group)
+                await self.subagent_group.apply_event(event)
             messages.scroll_end(animate=False)
         result = await handle.result()
         self._update_status(result.status)
@@ -272,6 +282,7 @@ class WindcodeApp(App[None]):
                 raise ValueError("任务运行期间不能新建会话")
             self.session_id = None
             await messages.clear()
+            self.subagent_group = None
             self._set_ui_mode("welcome")
             self.query_one("#welcome-view", WelcomeView).clear_notice()
             self.query_one("#chat-input", ChatInput).focus()
@@ -338,8 +349,25 @@ class WindcodeApp(App[None]):
         elif command.name == "status":
             await self._show_system_message(
                 f"会话: {self.session_id or '新会话'}  模型: {self._display_model()}  "
-                f"权限: {self.permission_mode}"
+                f"权限: {self.permission_mode}  委派: {self.config.subagents.mode.value}"
             )
+        elif command.name == "agents":
+            if command.arguments:
+                raise ValueError("用法: /agents")
+            records = () if self.handle is None else self.handle.subagents()
+            if not records:
+                await self._show_system_message("当前没有子智能体任务")
+            else:
+                lines = ["子智能体任务:"]
+                for record in records:
+                    line = (
+                        f"{record.task_index + 1}. {record.spec.task_name} · "
+                        f"{record.spec.role.value} · {record.status.value}"
+                    )
+                    if record.worktree_path is not None:
+                        line += f" · Worktree: {record.worktree_path}"
+                    lines.append(line)
+                await self._show_system_message("\n".join(lines))
         self._update_status("running" if self.handle and not self.handle.done else "idle")
 
     async def action_cancel_or_quit(self) -> None:

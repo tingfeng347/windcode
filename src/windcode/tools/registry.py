@@ -19,6 +19,14 @@ class ToolRegistry:
             raise ValueError(f"tool already registered: {tool.name}")
         self._tools[tool.name] = tool
 
+    def clone(self) -> ToolRegistry:
+        registry = ToolRegistry()
+        registry._tools = self._tools.copy()
+        return registry
+
+    def names(self) -> tuple[str, ...]:
+        return tuple(self._tools)
+
     def get(self, name: str) -> Tool:
         try:
             return self._tools[name]

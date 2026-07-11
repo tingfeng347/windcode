@@ -24,9 +24,18 @@ def detect_bubblewrap(executable: str = "bwrap") -> SandboxStatus:
 
 
 class BubblewrapSandbox:
-    def __init__(self, workspace: Path, status: SandboxStatus | None = None) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        status: SandboxStatus | None = None,
+        *,
+        read_only_workspace: bool = False,
+        writable_paths: tuple[Path, ...] = (),
+    ) -> None:
         self.workspace = workspace.expanduser().resolve()
         self.status = status or detect_bubblewrap()
+        self.read_only_workspace = read_only_workspace
+        self.writable_paths = tuple(path.expanduser().resolve() for path in writable_paths)
 
     def wrap(
         self,
@@ -40,6 +49,13 @@ class BubblewrapSandbox:
         working_directory = (cwd or self.workspace).resolve()
         if not working_directory.is_relative_to(self.workspace):
             raise ValueError("sandbox working directory must be inside the workspace")
+        temporary_mount = [] if self.workspace.is_relative_to(Path("/tmp")) else ["--tmpfs", "/tmp"]
+        workspace_mount = (
+            [] if self.read_only_workspace else ["--bind", str(self.workspace), str(self.workspace)]
+        )
+        additional_mounts = [
+            item for path in self.writable_paths for item in ("--bind", str(path), str(path))
+        ]
         arguments = [
             str(self.status.executable),
             "--die-with-parent",
@@ -47,11 +63,9 @@ class BubblewrapSandbox:
             "--ro-bind",
             "/",
             "/",
-            "--bind",
-            str(self.workspace),
-            str(self.workspace),
-            "--tmpfs",
-            "/tmp",
+            *workspace_mount,
+            *additional_mounts,
+            *temporary_mount,
             "--proc",
             "/proc",
             "--dev",

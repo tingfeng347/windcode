@@ -108,6 +108,10 @@ class ApprovalRequested(AgentEvent):
     summary: str = ""
     risk: str = ""
     choices: tuple[str, ...] = ()
+    subagent_id: str | None = None
+    subagent_role: str | None = None
+    tool_name: str | None = None
+    arguments_summary: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +169,84 @@ class RunCancelled(AgentEvent):
     reason: str = "cancelled by user"
 
 
+@dataclass(frozen=True, slots=True)
+class SubagentEvent(AgentEvent):
+    parent_run_id: str = ""
+    subagent_id: str = ""
+    task_index: int = 0
+    role: str = ""
+    task_name: str = ""
+    summary: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class SubagentQueued(SubagentEvent):
+    kind: ClassVar[str] = "subagent_queued"
+
+
+@dataclass(frozen=True, slots=True)
+class SubagentStarted(SubagentEvent):
+    kind: ClassVar[str] = "subagent_started"
+    workspace: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class SubagentProgress(SubagentEvent):
+    kind: ClassVar[str] = "subagent_progress"
+    activity: str = ""
+    usage: Usage = field(default_factory=Usage)
+
+
+@dataclass(frozen=True, slots=True)
+class SubagentBlocked(SubagentEvent):
+    kind: ClassVar[str] = "subagent_blocked"
+    reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class SubagentCompleted(SubagentEvent):
+    kind: ClassVar[str] = "subagent_completed"
+    commit: str | None = None
+    changed_files: tuple[str, ...] = ()
+    verification: tuple[str, ...] = ()
+    usage: Usage = field(default_factory=Usage)
+
+
+@dataclass(frozen=True, slots=True)
+class SubagentFailed(SubagentEvent):
+    kind: ClassVar[str] = "subagent_failed"
+    message: str = ""
+    category: str = "internal"
+
+
+@dataclass(frozen=True, slots=True)
+class SubagentCancelled(SubagentEvent):
+    kind: ClassVar[str] = "subagent_cancelled"
+    reason: str = "cancelled"
+
+
+@dataclass(frozen=True, slots=True)
+class SubagentIntegrated(SubagentEvent):
+    kind: ClassVar[str] = "subagent_integrated"
+    commit: str = ""
+    verification: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SubagentConflict(SubagentEvent):
+    kind: ClassVar[str] = "subagent_conflict"
+    conflict_files: tuple[str, ...] = ()
+    message: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class SubagentCleanup(SubagentEvent):
+    kind: ClassVar[str] = "subagent_cleanup"
+    removed: bool = False
+    retained_path: str | None = None
+    reason: str | None = None
+
+
 AgentEventType = (
     RunStarted
     | ModelStarted
@@ -182,6 +264,16 @@ AgentEventType = (
     | RunCompleted
     | RunFailed
     | RunCancelled
+    | SubagentQueued
+    | SubagentStarted
+    | SubagentProgress
+    | SubagentBlocked
+    | SubagentCompleted
+    | SubagentFailed
+    | SubagentCancelled
+    | SubagentIntegrated
+    | SubagentConflict
+    | SubagentCleanup
 )
 
 
@@ -257,6 +349,18 @@ def _common(raw: Mapping[str, object]) -> dict[str, Any]:
     }
 
 
+def _subagent_common(raw: Mapping[str, object]) -> dict[str, Any]:
+    return {
+        **_common(raw),
+        "parent_run_id": str(raw.get("parent_run_id", "")),
+        "subagent_id": str(raw.get("subagent_id", "")),
+        "task_index": _int_value(raw.get("task_index")),
+        "role": str(raw.get("role", "")),
+        "task_name": str(raw.get("task_name", "")),
+        "summary": str(raw.get("summary", "")),
+    }
+
+
 def event_from_dict(value: Mapping[str, object]) -> AgentEventType:
     raw = {str(key): item for key, item in value.items()}
     kind = str(raw.get("kind", ""))
@@ -305,6 +409,14 @@ def event_from_dict(value: Mapping[str, object]) -> AgentEventType:
             summary=str(raw.get("summary", "")),
             risk=str(raw.get("risk", "")),
             choices=tuple(str(item) for item in cast(list[object] | tuple[object, ...], choices)),
+            subagent_id=(None if raw.get("subagent_id") is None else str(raw.get("subagent_id"))),
+            subagent_role=(
+                None if raw.get("subagent_role") is None else str(raw.get("subagent_role"))
+            ),
+            tool_name=None if raw.get("tool_name") is None else str(raw.get("tool_name")),
+            arguments_summary=(
+                None if raw.get("arguments_summary") is None else str(raw.get("arguments_summary"))
+            ),
         )
     if kind == UserInputRequested.kind:
         questions = raw.get("questions", ())
@@ -363,4 +475,67 @@ def event_from_dict(value: Mapping[str, object]) -> AgentEventType:
         )
     if kind == RunCancelled.kind:
         return RunCancelled(**common, reason=str(raw.get("reason", "cancelled by user")))
+    if kind == SubagentQueued.kind:
+        return SubagentQueued(**_subagent_common(raw))
+    if kind == SubagentStarted.kind:
+        return SubagentStarted(**_subagent_common(raw), workspace=str(raw.get("workspace", "")))
+    if kind == SubagentProgress.kind:
+        return SubagentProgress(
+            **_subagent_common(raw),
+            activity=str(raw.get("activity", "")),
+            usage=_usage(raw.get("usage")),
+        )
+    if kind == SubagentBlocked.kind:
+        return SubagentBlocked(**_subagent_common(raw), reason=str(raw.get("reason", "")))
+    if kind == SubagentCompleted.kind:
+        changed = raw.get("changed_files", ())
+        verification = raw.get("verification", ())
+        return SubagentCompleted(
+            **_subagent_common(raw),
+            commit=None if raw.get("commit") is None else str(raw.get("commit")),
+            changed_files=tuple(
+                str(item) for item in cast(list[object] | tuple[object, ...], changed)
+            ),
+            verification=tuple(
+                str(item) for item in cast(list[object] | tuple[object, ...], verification)
+            ),
+            usage=_usage(raw.get("usage")),
+        )
+    if kind == SubagentFailed.kind:
+        return SubagentFailed(
+            **_subagent_common(raw),
+            message=str(raw.get("message", "")),
+            category=str(raw.get("category", "internal")),
+        )
+    if kind == SubagentCancelled.kind:
+        return SubagentCancelled(
+            **_subagent_common(raw), reason=str(raw.get("reason", "cancelled"))
+        )
+    if kind == SubagentIntegrated.kind:
+        verification = raw.get("verification", ())
+        return SubagentIntegrated(
+            **_subagent_common(raw),
+            commit=str(raw.get("commit", "")),
+            verification=tuple(
+                str(item) for item in cast(list[object] | tuple[object, ...], verification)
+            ),
+        )
+    if kind == SubagentConflict.kind:
+        conflict_files = raw.get("conflict_files", ())
+        return SubagentConflict(
+            **_subagent_common(raw),
+            conflict_files=tuple(
+                str(item) for item in cast(list[object] | tuple[object, ...], conflict_files)
+            ),
+            message=str(raw.get("message", "")),
+        )
+    if kind == SubagentCleanup.kind:
+        return SubagentCleanup(
+            **_subagent_common(raw),
+            removed=bool(raw.get("removed", False)),
+            retained_path=(
+                None if raw.get("retained_path") is None else str(raw.get("retained_path"))
+            ),
+            reason=None if raw.get("reason") is None else str(raw.get("reason")),
+        )
     raise ValueError(f"unknown agent event kind: {kind}")

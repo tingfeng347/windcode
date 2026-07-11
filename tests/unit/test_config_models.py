@@ -1,7 +1,15 @@
 import pytest
 from pydantic import ValidationError
 
-from windcode.config import AppConfig, ProviderConfig, ProviderProtocol
+from windcode.config import (
+    HARD_MAX_CONCURRENT_SUBAGENTS,
+    HARD_MAX_SUBAGENT_TASKS,
+    AppConfig,
+    DelegationMode,
+    ProviderConfig,
+    ProviderProtocol,
+    SubagentConfig,
+)
 
 
 def provider(model: str = "test-model") -> ProviderConfig:
@@ -50,3 +58,35 @@ def test_plaintext_api_key_is_not_a_provider_field() -> None:
                 "api_key": "secret",
             }
         )
+
+
+def test_subagent_defaults_and_valid_override() -> None:
+    defaults = AppConfig().subagents
+    assert defaults.mode is DelegationMode.EXPLICIT
+    assert (defaults.max_tasks, defaults.max_concurrent) == (8, 4)
+
+    configured = SubagentConfig(
+        mode=DelegationMode.PROACTIVE,
+        max_tasks=6,
+        max_concurrent=3,
+        max_model_steps=10,
+        max_tool_calls=15,
+        max_total_model_steps=30,
+        max_total_tool_calls=45,
+    )
+    assert configured.mode is DelegationMode.PROACTIVE
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"max_tasks": HARD_MAX_SUBAGENT_TASKS + 1},
+        {"max_concurrent": HARD_MAX_CONCURRENT_SUBAGENTS + 1},
+        {"max_tasks": 2, "max_concurrent": 3},
+        {"max_model_steps": 20, "max_total_model_steps": 19},
+        {"max_tool_calls": 50, "max_total_tool_calls": 49},
+    ],
+)
+def test_invalid_subagent_limits_are_rejected(data: dict[str, int]) -> None:
+    with pytest.raises(ValidationError):
+        SubagentConfig.model_validate(data)

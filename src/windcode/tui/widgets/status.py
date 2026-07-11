@@ -18,6 +18,7 @@ class StatusBar(Horizontal):
         permission: str,
         sandbox: bool,
         state: str,
+        delegation: str | None = None,
     ) -> None:
         permissions = {
             "plan": "计划",
@@ -36,5 +37,11 @@ class StatusBar(Horizontal):
         self.query_one("#mode-label", Static).update(
             f"  {states.get(state, state)} · {permissions.get(permission, permission)}"
         )
-        self.query_one("#sandbox-label", Static).update(f"沙箱: {'开启' if sandbox else '关闭'}")
+        delegation_label = {"explicit": "显式", "proactive": "主动"}.get(
+            delegation or "", delegation or ""
+        )
+        suffix = f" · 委派: {delegation_label}" if delegation_label else ""
+        self.query_one("#sandbox-label", Static).update(
+            f"沙箱: {'开启' if sandbox else '关闭'}{suffix}"
+        )
         self.query_one("#model-label", Static).update(model or "按配置")

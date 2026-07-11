@@ -22,6 +22,7 @@ COMMAND_CATALOG = (
     CommandDefinition("model", "切换当前模型", "<模型>"),
     CommandDefinition("compact", "压缩当前上下文"),
     CommandDefinition("status", "显示会话状态"),
+    CommandDefinition("agents", "显示子智能体状态"),
     CommandDefinition("quit", "退出 Windcode"),
 )
 

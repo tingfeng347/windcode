@@ -56,6 +56,10 @@ from windcode.runtime.scheduler import ScheduledCall, ToolScheduler
 from windcode.sessions import ArtifactStore, SessionStatus
 
 
+class AgentBlocked(RuntimeError):
+    pass
+
+
 def _add_usage(left: Usage, right: Usage) -> Usage:
     return Usage(
         input_tokens=left.input_tokens + right.input_tokens,
@@ -81,6 +85,7 @@ class AgentLoop:
         artifact_store: ArtifactStore | None = None,
         preserve_recent_turns: int = 8,
         max_tool_result_chars: int = 20_000,
+        close_event_bus: bool = True,
     ) -> None:
         if not model_chain:
             raise ValueError("model_chain cannot be empty")
@@ -96,6 +101,7 @@ class AgentLoop:
         self.artifact_store = artifact_store
         self.preserve_recent_turns = preserve_recent_turns
         self.max_tool_result_chars = max_tool_result_chars
+        self.close_event_bus = close_event_bus
         self._turn = 0
         self.scheduler.approval_handler = self._approval_handler
         self.scheduler.before_execute = self._before_tool_execute
@@ -405,9 +411,17 @@ class AgentLoop:
             return RunResult(status="cancelled", final_text=final_text, usage=total_usage)
         except BudgetExceeded as exc:
             return await self._terminal_failure(str(exc), "budget")
+        except AgentBlocked as exc:
+            result = RunResult(status="blocked", final_text=str(exc), usage=total_usage)
+            await self.event_bus.publish(
+                RunFailed(**self._common(), message=str(exc), category="blocked"), durable=True
+            )
+            self.event_bus.session_store.set_status(SessionStatus.FAILED)
+            return result
         except WindcodeError as exc:
             return await self._terminal_failure(str(exc), exc.category.value)
         except Exception as exc:
             return await self._terminal_failure(str(exc), "internal")
         finally:
-            await self.event_bus.close()
+            if self.close_event_bus:
+                await self.event_bus.close()

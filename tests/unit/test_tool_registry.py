@@ -47,3 +47,17 @@ def test_rejects_duplicate_names() -> None:
     registry.register(EchoTool())
     with pytest.raises(ValueError, match="already registered"):
         registry.register(EchoTool())
+
+
+def test_clone_preserves_order_and_isolates_replacements() -> None:
+    registry = ToolRegistry()
+    original = EchoTool()
+    registry.register(original)
+
+    cloned = registry.clone()
+    replacement = EchoTool()
+    cloned.register(replacement, replace=True)
+
+    assert registry.names() == cloned.names() == ("echo",)
+    assert registry.get("echo") is original
+    assert cloned.get("echo") is replacement

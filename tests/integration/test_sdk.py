@@ -1,3 +1,5 @@
+import asyncio
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import cast
@@ -6,7 +8,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from windcode import Windcode
-from windcode.domain.events import RunRequest
+from windcode.domain.events import AgentEventType, RunRequest, SubagentEvent
 from windcode.domain.messages import Role, TextBlock
 from windcode.domain.models import (
     ModelCompleted,
@@ -17,7 +19,9 @@ from windcode.domain.models import (
     ToolCallDelta,
 )
 from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
+from windcode.sdk import RunHandle
 from windcode.sessions import SessionStore
+from windcode.types import SubagentRecord, SubagentStatus
 
 
 class CustomInput(BaseModel):
@@ -67,6 +71,46 @@ class HistoryTransport:
     async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
         self.requests.append(request)
         yield TextDelta(next(self.responses))
+        yield ModelCompleted(StopReason.STOP)
+
+    async def aclose(self) -> None:
+        pass
+
+
+class DelegatingTransport:
+    name = "delegating"
+
+    def __init__(self) -> None:
+        self.root_tools: list[tuple[str, ...]] = []
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        if "## 子智能体约束" in request.system_prompt:
+            yield TextDelta("child complete")
+            yield ModelCompleted(StopReason.STOP)
+            return
+        self.root_tools.append(tuple(tool.name for tool in request.tools))
+        if request.messages[-1].role is Role.USER:
+            block = request.messages[-1].content[0]
+            assert isinstance(block, TextBlock)
+            task_name = f"task_{block.text}"
+            arguments = {
+                "tasks": [
+                    {
+                        "task_name": task_name,
+                        "role": "researcher",
+                        "kind": "read",
+                        "goal": "inspect",
+                        "context": "self-contained",
+                        "expected_output": "report",
+                        "verification": ["cite evidence"],
+                    }
+                ]
+            }
+            yield ToolCallDelta("spawn", "spawn_subagents", json.dumps(arguments))
+            yield ModelCompleted(StopReason.TOOL_USE)
+            return
+        await asyncio.sleep(0.05)
+        yield TextDelta("root complete")
         yield ModelCompleted(StopReason.STOP)
 
     async def aclose(self) -> None:
@@ -138,3 +182,45 @@ async def test_resume_restores_messages_from_current_session_branch(tmp_path: Pa
         (TextBlock("first response"),),
         (TextBlock("branch prompt"),),
     ]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_root_runs_have_isolated_subagent_coordinators(tmp_path: Path) -> None:
+    transport = DelegatingTransport()
+    async with Windcode.open(state_root=tmp_path / "state") as client:
+        client.register_transport("delegate", "model", transport, primary=True)
+        first = client.start_run(RunRequest("root_a", tmp_path, permission_mode="full_access"))
+        second = client.start_run(RunRequest("root_b", tmp_path, permission_mode="full_access"))
+
+        async def collect(handle: RunHandle) -> list[AgentEventType]:
+            events: list[AgentEventType] = []
+            async for event in handle:
+                events.append(event)
+            return events
+
+        first_events, second_events, _, _ = await asyncio.gather(
+            collect(first), collect(second), first.result(), second.result()
+        )
+
+        assert [record.spec.task_name for record in first.subagents()] == ["task_root_a"]
+        assert [record.spec.task_name for record in second.subagents()] == ["task_root_b"]
+        assert first.subagents()[0].status is SubagentStatus.COMPLETED
+        assert second.subagents()[0].status is SubagentStatus.COMPLETED
+        assert all("spawn_subagents" in tools for tools in transport.root_tools)
+        for events in (first_events, second_events):
+            child_events = [event for event in events if isinstance(event, SubagentEvent)]
+            assert [event.kind for event in child_events if event.kind != "subagent_progress"] == [
+                "subagent_queued",
+                "subagent_started",
+                "subagent_completed",
+            ]
+            sequences = [event.sequence for event in child_events]
+            assert all(sequence is not None for sequence in sequences)
+            assert sequences == sorted(set(sequences), key=lambda value: value or 0)
+        with pytest.raises(RuntimeError, match="after the parent run"):
+            await first.cancel_subagent(first.subagents()[0].subagent_id)
+
+
+def test_public_subagent_types_are_importable() -> None:
+    assert SubagentRecord.__name__ == "SubagentRecord"
+    assert SubagentStatus.QUEUED.value == "queued"

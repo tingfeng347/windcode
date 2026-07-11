@@ -42,6 +42,7 @@ async def test_new_session_shows_welcome_and_accepts_status_command(tmp_path: Pa
 
         notice = app.query_one("#welcome-notice", Static)
         assert "会话: 新会话" in str(notice.content)
+        assert "委派: explicit" in str(notice.content)
         assert not app.query_one("#command-menu", CommandMenu).is_open
 
 
@@ -64,6 +65,7 @@ async def test_resumed_session_uses_compact_chat_layout(tmp_path: Path) -> None:
         assert app.ui_mode == "chat"
         assert app.query_one("#mode-label", Static)
         assert app.query_one("#model-label", Static)
+        assert "委派: 显式" in str(app.query_one("#sandbox-label", Static).content)
 
 
 @pytest.mark.asyncio
