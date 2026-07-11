@@ -4,6 +4,7 @@ from windcode.tools.subagents.cancel import CancelSubagentTool
 from windcode.tools.subagents.integrate import IntegrateSubagentTool
 from windcode.tools.subagents.list import ListSubagentsTool
 from windcode.tools.subagents.spawn import SpawnSubagentsTool
+from windcode.tools.subagents.wait import WaitSubagentsTool
 
 
 def register_subagent_tools(
@@ -13,6 +14,7 @@ def register_subagent_tools(
     for tool in (
         SpawnSubagentsTool(coordinator),
         ListSubagentsTool(coordinator),
+        WaitSubagentsTool(coordinator),
         CancelSubagentTool(coordinator),
         IntegrateSubagentTool(coordinator),
     ):
@@ -24,5 +26,6 @@ __all__ = [
     "IntegrateSubagentTool",
     "ListSubagentsTool",
     "SpawnSubagentsTool",
+    "WaitSubagentsTool",
     "register_subagent_tools",
 ]

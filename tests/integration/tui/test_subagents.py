@@ -83,6 +83,12 @@ async def test_subagent_events_update_one_stable_row() -> None:
             )
         )
         await group.apply_event(
+            SubagentProgress(
+                **event_fields("reasoning", offset=2),  # type: ignore[arg-type]
+                activity="继续分析",
+            )
+        )
+        await group.apply_event(
             SubagentCompleted(
                 **event_fields("completed", offset=3),  # type: ignore[arg-type]
                 commit="abc123",

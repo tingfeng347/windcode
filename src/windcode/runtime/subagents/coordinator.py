@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
+from time import monotonic
 from typing import Any, cast
 from uuid import uuid4
 
@@ -26,6 +28,7 @@ from windcode.domain.events import (
     ToolStarted,
     UsageUpdated,
 )
+from windcode.domain.models import Usage
 from windcode.domain.subagents import (
     SubagentRecord,
     SubagentResult,
@@ -65,6 +68,7 @@ class SubagentCoordinator:
         factory: ChildRuntimeFactory,
         worktrees: WorktreeManager,
         verification: VerificationRunner,
+        network_enabled: bool = False,
     ) -> None:
         self.parent_session_id = parent_session_id
         self.parent_run_id = parent_run_id
@@ -75,6 +79,7 @@ class SubagentCoordinator:
         self.factory = factory
         self.worktrees = worktrees
         self.verification = verification
+        self.network_enabled = network_enabled
         self.aggregate_budget = AggregateBudget(
             max_model_steps=config.max_total_model_steps,
             max_tool_calls=config.max_total_tool_calls,
@@ -91,6 +96,7 @@ class SubagentCoordinator:
         self._runtimes: dict[str, ChildRuntime] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._completion: dict[str, asyncio.Future[SubagentResult]] = {}
+        self._usage: dict[str, Usage] = {}
         self._queue: deque[str] = deque()
         self._active = 0
         self._closed = False
@@ -128,6 +134,18 @@ class SubagentCoordinator:
             if len(set(names)) != len(names) or existing_names.intersection(names):
                 raise SubagentCoordinatorError(
                     "duplicate_task_name", "task names must be unique within a parent run"
+                )
+            unavailable_network = [
+                spec.task_name
+                for spec in specs
+                if spec.requires_network
+                and (spec.kind is SubagentTaskKind.READ or not self.network_enabled)
+            ]
+            if unavailable_network:
+                raise SubagentCoordinatorError(
+                    "capability_unavailable",
+                    "external network is unavailable for subagent tasks: "
+                    + ", ".join(unavailable_network),
                 )
             baseline: GitBaseline | None = None
             if any(spec.kind is SubagentTaskKind.WRITE for spec in specs):
@@ -219,9 +237,12 @@ class SubagentCoordinator:
         return updated
 
     async def _forward_child_events(self, runtime: ChildRuntime) -> None:
+        reasoning = ""
+        last_reasoning_publish = monotonic()
         async for event in runtime.event_bus.subscribe():
             record = self._records[runtime.record.subagent_id]
             if isinstance(event, UsageUpdated):
+                self._usage[record.subagent_id] = event.usage
                 await self._publish_record_event(
                     record,
                     SubagentProgress,
@@ -237,12 +258,24 @@ class SubagentCoordinator:
                     activity=event.tool_name,
                 )
             elif isinstance(event, ReasoningStatus):
-                await self._publish_record_event(
-                    record,
-                    SubagentProgress,
-                    summary="reasoning",
-                    activity=event.status[:500],
-                )
+                reasoning += event.status
+                if monotonic() - last_reasoning_publish >= 0.5:
+                    await self._publish_record_event(
+                        record,
+                        SubagentProgress,
+                        summary="reasoning",
+                        activity=reasoning[-500:],
+                    )
+                    reasoning = ""
+                    last_reasoning_publish = monotonic()
+        if reasoning:
+            record = self._records[runtime.record.subagent_id]
+            await self._publish_record_event(
+                record,
+                SubagentProgress,
+                summary="reasoning",
+                activity=reasoning[-500:],
+            )
 
     async def _execute(self, subagent_id: str) -> None:
         try:
@@ -292,8 +325,8 @@ class SubagentCoordinator:
             finally:
                 await forwarding
 
-            if run_result.status == "cancelled":
-                await self._finish_cancelled(record, "child run cancelled")
+            if runtime.control.cancelled or run_result.status == "cancelled":
+                await self._finish_cancelled(record, "child run cancelled", usage=run_result.usage)
                 return
             if run_result.status == "blocked":
                 blocked = await self._transition(
@@ -320,7 +353,12 @@ class SubagentCoordinator:
                 )
                 return
             if run_result.status == "failed":
-                await self._finish_failed(record, "child_run_failed", run_result.final_text)
+                await self._finish_failed(
+                    record,
+                    "child_run_failed",
+                    run_result.final_text,
+                    usage=run_result.usage,
+                )
                 return
 
             changed_files: tuple[str, ...] = ()
@@ -396,11 +434,25 @@ class SubagentCoordinator:
                 "commit": result.commit,
                 "error_category": result.error_category,
                 "error_message": result.error_message,
+                "usage": {
+                    "input_tokens": result.usage.input_tokens,
+                    "output_tokens": result.usage.output_tokens,
+                    "cache_read_tokens": result.usage.cache_read_tokens,
+                    "cache_write_tokens": result.usage.cache_write_tokens,
+                },
             },
             durable=True,
         )
 
-    async def _finish_failed(self, record: SubagentRecord, category: str, message: str) -> None:
+    async def _finish_failed(
+        self,
+        record: SubagentRecord,
+        category: str,
+        message: str,
+        *,
+        usage: Usage | None = None,
+    ) -> None:
+        final_usage = usage or self._usage.get(record.subagent_id, Usage())
         failed = await self._transition(
             record,
             SubagentStatus.FAILED,
@@ -412,6 +464,7 @@ class SubagentCoordinator:
             record.spec.task_name,
             SubagentStatus.FAILED,
             message,
+            usage=final_usage,
             error_category=category,
             error_message=message,
         )
@@ -422,9 +475,17 @@ class SubagentCoordinator:
             summary="subagent failed",
             message=message,
             category=category,
+            usage=final_usage,
         )
 
-    async def _finish_cancelled(self, record: SubagentRecord, reason: str) -> None:
+    async def _finish_cancelled(
+        self,
+        record: SubagentRecord,
+        reason: str,
+        *,
+        usage: Usage | None = None,
+    ) -> None:
+        final_usage = usage or self._usage.get(record.subagent_id, Usage())
         cancelled = await self._transition(
             record,
             SubagentStatus.CANCELLED,
@@ -436,6 +497,7 @@ class SubagentCoordinator:
             record.spec.task_name,
             SubagentStatus.CANCELLED,
             reason,
+            usage=final_usage,
             error_category="cancelled",
             error_message=reason,
         )
@@ -445,6 +507,7 @@ class SubagentCoordinator:
             SubagentCancelled,
             summary="subagent cancelled",
             reason=reason,
+            usage=final_usage,
         )
 
     async def cancel(self, subagent_id: str) -> SubagentRecord:
@@ -525,6 +588,7 @@ class SubagentCoordinator:
                 summary="parent verification failed",
                 message="parent verification failed after integration",
                 category="parent_verification_failed",
+                usage=result.usage,
             )
             return result
 
@@ -586,12 +650,25 @@ class SubagentCoordinator:
                 continue
             raw_result = persisted_results.get(record.subagent_id)
             if raw_result is not None:
+                raw_usage = raw_result.get("usage")
+                usage_values: Mapping[str, object] = (
+                    cast(Mapping[str, object], raw_usage)
+                    if isinstance(raw_usage, Mapping)
+                    else dict[str, object]()
+                )
+                usage = Usage(
+                    input_tokens=int(str(usage_values.get("input_tokens", 0))),
+                    output_tokens=int(str(usage_values.get("output_tokens", 0))),
+                    cache_read_tokens=int(str(usage_values.get("cache_read_tokens", 0))),
+                    cache_write_tokens=int(str(usage_values.get("cache_write_tokens", 0))),
+                )
                 result = SubagentResult(
                     record.subagent_id,
                     record.spec.task_name,
                     record.status,
                     str(raw_result.get("summary", "")),
                     commit=record.commit,
+                    usage=usage,
                     error_category=(
                         None
                         if raw_result.get("error_category") is None

@@ -156,7 +156,8 @@ class SubagentGroup(Vertical):
         elif isinstance(event, SubagentProgress):
             state.status = "running"
             state.activity = event.activity or "运行中"
-            state.usage = event.usage
+            if event.usage != Usage():
+                state.usage = event.usage
         elif isinstance(event, SubagentBlocked):
             state.status = "blocked"
             state.activity = event.reason or "需要父智能体处理"
@@ -169,9 +170,13 @@ class SubagentGroup(Vertical):
         elif isinstance(event, SubagentFailed):
             state.status = "failed"
             state.activity = event.message or event.category
+            if event.usage != Usage():
+                state.usage = event.usage
         elif isinstance(event, SubagentCancelled):
             state.status = "cancelled"
             state.activity = event.reason
+            if event.usage != Usage():
+                state.usage = event.usage
         elif isinstance(event, SubagentIntegrated):
             state.status = "integrated"
             state.activity = "提交已集成"

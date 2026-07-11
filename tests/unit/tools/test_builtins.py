@@ -31,9 +31,10 @@ def test_root_subagent_tools_are_added_to_a_clone_only() -> None:
     root = base.clone()
     add_subagent_tools(root, cast(SubagentCoordinator, object()))
     assert base.names()[-1] == "ask_user"
-    assert root.names()[-4:] == (
+    assert root.names()[-5:] == (
         "spawn_subagents",
         "list_subagents",
+        "wait_subagents",
         "cancel_subagent",
         "integrate_subagent",
     )

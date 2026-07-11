@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 from windcode.config import AppConfig, PermissionMode, SubagentConfig
+from windcode.domain.errors import ErrorCategory, WindcodeError
 from windcode.domain.messages import TextBlock
 from windcode.domain.models import ModelCompleted, ModelEvent, ModelRequest, StopReason, TextDelta
 from windcode.domain.subagents import (
@@ -42,6 +43,17 @@ class ControlledTransport:
 
     async def aclose(self) -> None:
         pass
+
+
+class WrappedCancellationTransport(ControlledTransport):
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        del request
+        self.hanging_started.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError as exc:
+            raise WindcodeError("model request cancelled", ErrorCategory.CANCELLED) from exc
+        yield TextDelta("unexpected")
 
 
 def task(name: str) -> SubagentTaskSpec:
@@ -93,3 +105,16 @@ async def test_running_cancel_isolated_from_completed_sibling(tmp_path: Path) ->
     hanging_result = await coord.wait(hanging.subagent_id)
     assert hanging_result.status is SubagentStatus.CANCELLED
     assert coord.list()[1].status is SubagentStatus.COMPLETED
+
+
+async def test_provider_wrapped_model_cancellation_stays_cancelled(tmp_path: Path) -> None:
+    transport = WrappedCancellationTransport()
+    coord = coordinator(tmp_path, transport)
+    (record,) = await coord.spawn((task("hanging"),))
+    await transport.hanging_started.wait()
+
+    cancelled = await coord.cancel(record.subagent_id)
+    result = await coord.wait(record.subagent_id)
+    assert cancelled.status is SubagentStatus.CANCELLED
+    assert result.status is SubagentStatus.CANCELLED
+    assert result.error_category == "cancelled"

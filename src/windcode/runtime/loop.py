@@ -209,8 +209,14 @@ class AgentLoop:
         )
         await self.event_bus.publish(ModelStarted(**self._common(), model=target.model))
 
-    async def _terminal_failure(self, message: str, category: str) -> RunResult:
-        result = RunResult(status="failed", final_text=message)
+    async def _terminal_failure(
+        self,
+        message: str,
+        category: str,
+        *,
+        usage: Usage | None = None,
+    ) -> RunResult:
+        result = RunResult(status="failed", final_text=message, usage=usage or Usage())
         await self.event_bus.publish(
             RunFailed(**self._common(), message=message, category=category),
             durable=True,
@@ -410,7 +416,7 @@ class AgentLoop:
             self.event_bus.session_store.set_status(SessionStatus.CANCELLED)
             return RunResult(status="cancelled", final_text=final_text, usage=total_usage)
         except BudgetExceeded as exc:
-            return await self._terminal_failure(str(exc), "budget")
+            return await self._terminal_failure(str(exc), "budget", usage=total_usage)
         except AgentBlocked as exc:
             result = RunResult(status="blocked", final_text=str(exc), usage=total_usage)
             await self.event_bus.publish(
@@ -419,9 +425,9 @@ class AgentLoop:
             self.event_bus.session_store.set_status(SessionStatus.FAILED)
             return result
         except WindcodeError as exc:
-            return await self._terminal_failure(str(exc), exc.category.value)
+            return await self._terminal_failure(str(exc), exc.category.value, usage=total_usage)
         except Exception as exc:
-            return await self._terminal_failure(str(exc), "internal")
+            return await self._terminal_failure(str(exc), "internal", usage=total_usage)
         finally:
             if self.close_event_bus:
                 await self.event_bus.close()

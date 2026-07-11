@@ -191,6 +191,16 @@ async def test_default_total_limit_rejects_ninth_task_without_partial_creation(
     assert coord.list() == ()
 
 
+async def test_network_read_task_is_rejected_before_creation(tmp_path: Path) -> None:
+    coord, factory, _ = coordinator(tmp_path)
+    network_task = replace(task("weather"), requires_network=True)
+    with pytest.raises(SubagentCoordinatorError) as error:
+        await coord.spawn((network_task,))
+    assert error.value.category == "capability_unavailable"
+    assert coord.list() == ()
+    assert factory.started == []
+
+
 async def test_cancel_queued_task_does_not_affect_running_sibling(tmp_path: Path) -> None:
     coord, factory, _ = coordinator(
         tmp_path,

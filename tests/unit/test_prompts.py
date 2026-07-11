@@ -51,6 +51,9 @@ def test_prompt_describes_explicit_and_proactive_delegation_modes(tmp_path: Path
         is_subagent=True,
     )
     assert "用户明确要求" in explicit
+    assert "wait_subagents" in explicit
+    assert "禁止循环调用 list_subagents" in explicit
+    assert "不得委派实时网络任务" in explicit
     assert "主动委派" in proactive
     assert "不得继续委派" in child
     assert "不得直接询问用户" in child

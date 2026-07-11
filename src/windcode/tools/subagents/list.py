@@ -14,7 +14,10 @@ class ListSubagentsInput(BaseModel):
 
 class ListSubagentsTool:
     name = "list_subagents"
-    description = "List temporary subagents in stable task order."
+    description = (
+        "Take a non-blocking subagent status snapshot for explicit inspection. "
+        "Do not poll this tool; use wait_subagents to await completion."
+    )
     input_model = ListSubagentsInput
     effects = frozenset({ToolEffect.READ})
 

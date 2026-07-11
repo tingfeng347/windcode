@@ -217,12 +217,14 @@ class SubagentFailed(SubagentEvent):
     kind: ClassVar[str] = "subagent_failed"
     message: str = ""
     category: str = "internal"
+    usage: Usage = field(default_factory=Usage)
 
 
 @dataclass(frozen=True, slots=True)
 class SubagentCancelled(SubagentEvent):
     kind: ClassVar[str] = "subagent_cancelled"
     reason: str = "cancelled"
+    usage: Usage = field(default_factory=Usage)
 
 
 @dataclass(frozen=True, slots=True)
@@ -506,10 +508,13 @@ def event_from_dict(value: Mapping[str, object]) -> AgentEventType:
             **_subagent_common(raw),
             message=str(raw.get("message", "")),
             category=str(raw.get("category", "internal")),
+            usage=_usage(raw.get("usage")),
         )
     if kind == SubagentCancelled.kind:
         return SubagentCancelled(
-            **_subagent_common(raw), reason=str(raw.get("reason", "cancelled"))
+            **_subagent_common(raw),
+            reason=str(raw.get("reason", "cancelled")),
+            usage=_usage(raw.get("usage")),
         )
     if kind == SubagentIntegrated.kind:
         verification = raw.get("verification", ())

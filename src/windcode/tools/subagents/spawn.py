@@ -22,6 +22,10 @@ class SubagentTaskInput(BaseModel):
     verification: tuple[str, ...] = Field(min_length=1)
     allowed_tools: frozenset[str] | None = None
     model: str | None = None
+    requires_network: bool = Field(
+        default=False,
+        description="Whether the task requires external network access.",
+    )
 
     def to_spec(self) -> SubagentTaskSpec:
         return SubagentTaskSpec(
@@ -34,6 +38,7 @@ class SubagentTaskInput(BaseModel):
             self.verification,
             self.allowed_tools,
             self.model,
+            self.requires_network,
         )
 
 
@@ -45,7 +50,10 @@ class SpawnSubagentsInput(BaseModel):
 
 class SpawnSubagentsTool:
     name = "spawn_subagents"
-    description = "Create one or more bounded temporary subagents for self-contained tasks."
+    description = (
+        "Create bounded temporary subagents. Declare requires_network for network-dependent "
+        "tasks; read-only subagents cannot use external networks."
+    )
     input_model = SpawnSubagentsInput
     effects = frozenset({ToolEffect.PROCESS, ToolEffect.WORKSPACE_WRITE})
 

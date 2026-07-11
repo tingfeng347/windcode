@@ -288,6 +288,7 @@ class Windcode:
                 sandbox=sandbox,
                 timeout_seconds=self.config.budgets.shell_timeout_seconds,
             ),
+            network_enabled=self.config.sandbox.network_enabled,
         )
         add_subagent_tools(run_registry, coordinator)
         system_prompt = build_system_prompt(

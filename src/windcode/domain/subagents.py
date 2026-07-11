@@ -78,6 +78,7 @@ class SubagentTaskSpec:
     verification: tuple[str, ...]
     allowed_tools: frozenset[str] | None = None
     model: str | None = None
+    requires_network: bool = False
 
     def __post_init__(self) -> None:
         if not _TASK_NAME.fullmatch(self.task_name):
@@ -186,6 +187,7 @@ def subagent_record_to_dict(record: SubagentRecord) -> dict[str, Any]:
             "verification": list(spec.verification),
             "allowed_tools": None if spec.allowed_tools is None else sorted(spec.allowed_tools),
             "model": spec.model,
+            "requires_network": spec.requires_network,
         },
         "status": record.status.value,
         "base_commit": record.base_commit,
@@ -227,6 +229,7 @@ def subagent_record_from_dict(value: Mapping[str, object]) -> SubagentRecord:
             else frozenset(str(item) for item in allowed_tool_values)
         ),
         model=None if spec_values.get("model") is None else str(spec_values.get("model")),
+        requires_network=bool(spec_values.get("requires_network", False)),
     )
 
     def optional_time(name: str) -> datetime | None:

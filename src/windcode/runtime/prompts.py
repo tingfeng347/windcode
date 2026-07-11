@@ -30,11 +30,15 @@ def build_system_prompt(
         delegation = (
             "\n\n## 委派策略: explicit\n"
             "仅当用户明确要求委派、并行或使用子智能体时, 才可调用子智能体工具。"
+            "创建后调用 wait_subagents 一次等待结果; 禁止循环调用 list_subagents。"
+            "子智能体不能访问外部网络, 不得委派实时网络任务。"
         )
     elif delegation_mode is DelegationMode.PROACTIVE:
         delegation = (
             "\n\n## 委派策略: proactive\n"
             "可在任务确实独立且适合并行时主动委派; 必须保持任务有界、状态可见并统一汇总。"
+            "创建后调用 wait_subagents 一次等待结果; 禁止循环调用 list_subagents。"
+            "子智能体不能访问外部网络, 不得委派实时网络任务。"
         )
     return (
         "你是 Windcode, 在终端中帮助用户完成软件工程任务的本地编码 Agent.\n"
