@@ -51,7 +51,7 @@ def build_run_result(
 
     if failed_verification:
         status = "failed"
-    elif not verification:
+    elif changed_files and not verification:
         status = "unverified"
     else:
         status = "completed"

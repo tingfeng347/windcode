@@ -33,4 +33,15 @@ def test_failed_or_missing_verification_is_not_success() -> None:
         ),
     )
     assert failed.status == "failed"
-    assert build_run_result("done", ()).status == "unverified"
+    unverified_change = build_run_result(
+        "done",
+        (
+            ToolExecutionRecord(
+                "write_file",
+                {"path": "a.py"},
+                ToolResult("changed", data={"path": "a.py", "action": "modified"}),
+            ),
+        ),
+    )
+    assert unverified_change.status == "unverified"
+    assert build_run_result("done", ()).status == "completed"

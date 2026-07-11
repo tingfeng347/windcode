@@ -33,6 +33,7 @@ class ScheduledResult:
 
 ApprovalHandler = Callable[[PolicyRequest, PolicyDecision], Awaitable[ApprovalChoice]]
 BeforeExecute = Callable[[ScheduledCall, PolicyRequest], Awaitable[None]]
+SessionApprovalRecorder = Callable[[PolicyRequest], None]
 
 
 class ToolScheduler:
@@ -43,11 +44,13 @@ class ToolScheduler:
         *,
         approval_handler: ApprovalHandler | None = None,
         before_execute: BeforeExecute | None = None,
+        session_approval_recorder: SessionApprovalRecorder | None = None,
     ) -> None:
         self.registry = registry
         self.policy = policy
         self.approval_handler = approval_handler
         self.before_execute = before_execute
+        self.session_approval_recorder = session_approval_recorder
 
     def _policy_request(self, call: ScheduledCall, context: ToolContext) -> PolicyRequest:
         tool = self.registry.get(call.tool_name)
@@ -114,6 +117,8 @@ class ToolScheduler:
                 )
             if choice is ApprovalChoice.ALLOW_SESSION:
                 self.policy.approve_for_session(request)
+                if self.session_approval_recorder is not None:
+                    self.session_approval_recorder(request)
         if self.before_execute is not None:
             await self.before_execute(call, request)
         result = await self.registry.execute(call.tool_name, context, call.arguments)

@@ -30,7 +30,7 @@ class StatusBar(Horizontal):
             "idle": "空闲",
             "running": "运行中",
             "completed": "已完成",
-            "unverified": "未验证",
+            "unverified": "已完成 · 未验证",
             "failed": "失败",
             "cancelled": "已取消",
         }

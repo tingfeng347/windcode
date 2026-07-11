@@ -62,6 +62,13 @@ class PolicyEngine:
     def approve_for_session(self, request: PolicyRequest) -> None:
         self._session_approvals.add(self._fingerprint(request))
 
+    def restore_session_approval(
+        self,
+        tool_name: str,
+        effects: frozenset[ToolEffect],
+    ) -> None:
+        self._session_approvals.add((tool_name, effects))
+
     def evaluate(self, request: PolicyRequest) -> PolicyDecision:
         risk = assess_risk(request)
         if self._fingerprint(request) in self._session_approvals:

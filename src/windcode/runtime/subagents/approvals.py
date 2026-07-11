@@ -7,7 +7,12 @@ from uuid import uuid4
 
 from windcode.domain.events import ApprovalRequested, ApprovalResponse
 from windcode.domain.subagents import SubagentRole
-from windcode.policy.models import ApprovalChoice, PolicyDecision, PolicyRequest
+from windcode.policy.models import (
+    ApprovalChoice,
+    PolicyDecision,
+    PolicyRequest,
+    summarize_policy_arguments,
+)
 
 
 @dataclass(slots=True)
@@ -39,7 +44,7 @@ class ApprovalRouter:
         parent_request_id = uuid4().hex
         future: asyncio.Future[ApprovalChoice] = asyncio.get_running_loop().create_future()
         self._pending[parent_request_id] = _PendingApproval(subagent_id, future)
-        arguments_summary = request.command or request.path or request.summary
+        arguments_summary = summarize_policy_arguments(request)
         try:
             await self.publish(
                 ApprovalRequested(

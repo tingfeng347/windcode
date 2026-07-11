@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import replace
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Self, cast
 from uuid import uuid4
 
 from platformdirs import user_state_path
@@ -19,12 +19,12 @@ from windcode.domain.events import (
     RunResponse,
     RunResult,
 )
-from windcode.domain.messages import Message, message_from_dict
+from windcode.domain.messages import Message, Role, TextBlock, message_from_dict
 from windcode.domain.subagents import SubagentRecord, SubagentResult
-from windcode.domain.tools import Tool
+from windcode.domain.tools import Tool, ToolEffect
 from windcode.instructions import load_instructions
 from windcode.observability import TraceStore
-from windcode.policy import PolicyEngine
+from windcode.policy import PolicyEngine, PolicyRequest
 from windcode.providers import ModelTarget, ModelTransport, TransportRegistry
 from windcode.runtime.control import RunBudgets, RunControl
 from windcode.runtime.event_bus import EventBus
@@ -203,6 +203,46 @@ class Windcode:
             chain = (replace(chain[0], model=requested), *chain[1:])
         return chain
 
+    @staticmethod
+    def _session_summary(prompt: str, *, limit: int = 60) -> str:
+        summary = " ".join(prompt.split())
+        if len(summary) <= limit:
+            return summary
+        return summary[: limit - 3].rstrip() + "..."
+
+    def _session_store(self, session_id: str) -> SessionStore:
+        return SessionStore.open(self.state_root / "sessions", session_id)
+
+    def session_exists(self, session_id: str) -> bool:
+        return (self.state_root / "sessions" / session_id / "meta.json").is_file()
+
+    def load_session_records(self, session_id: str) -> tuple[EventRecord, ...]:
+        store = self._session_store(session_id)
+        if store.metadata.head_record_id is None:
+            return ()
+        return ancestor_chain(store.load_records(), store.metadata.head_record_id)
+
+    def load_session_messages(self, session_id: str) -> tuple[Message, ...]:
+        return tuple(
+            message_from_dict(record.payload)
+            for record in self.load_session_records(session_id)
+            if record.record_type == "conversation_message"
+        )
+
+    def _ensure_session_summary(self, store: SessionStore) -> SessionMetadata:
+        if store.metadata.summary:
+            return store.metadata
+        for message in self.load_session_messages(store.metadata.session_id):
+            if message.role is not Role.USER:
+                continue
+            text = "".join(
+                block.text for block in message.content if isinstance(block, TextBlock)
+            ).strip()
+            if text:
+                store.set_summary(self._session_summary(text))
+                break
+        return store.metadata
+
     def start_run(self, request: RunRequest) -> RunHandle:
         if not self._entered or self.tool_registry is None:
             raise RuntimeError("start runs inside the Windcode async context")
@@ -219,6 +259,8 @@ class Windcode:
             session = SessionStore.open(sessions_root, request.session_id)
         else:
             session = SessionStore.create(sessions_root, request.session_id)
+        if not session.metadata.summary:
+            session.set_summary(self._session_summary(request.prompt))
         initial_messages: tuple[Message, ...] = ()
         if existing_session and session.metadata.head_record_id is not None:
             records = ancestor_chain(
@@ -261,6 +303,22 @@ class Windcode:
             sandbox_enabled=self.config.sandbox.enabled,
             sandbox_available=sandbox_status.available,
         )
+        for record in session.load_records():
+            if record.record_type != "session_approval":
+                continue
+            if record.payload.get("workspace") != str(workspace):
+                continue
+            tool_name = record.payload.get("tool_name")
+            raw_effects = record.payload.get("effects")
+            if not isinstance(tool_name, str) or not isinstance(raw_effects, list):
+                continue
+            try:
+                effects = frozenset(
+                    ToolEffect(str(effect)) for effect in cast(list[object], raw_effects)
+                )
+            except ValueError:
+                continue
+            policy.restore_session_approval(tool_name, effects)
         child_tools = run_registry.clone()
         instructions = load_instructions(workspace, workspace_root=workspace)
         budgets = RunBudgets(
@@ -269,6 +327,8 @@ class Windcode:
             max_runtime_seconds=self.config.budgets.max_runtime_seconds,
         )
         control = RunControl(budgets)
+        if request.compact_before_run:
+            control.request_compaction()
         factory = ChildRuntimeFactory(
             config=self.config,
             state_root=self.state_root,
@@ -298,7 +358,23 @@ class Windcode:
             tools=run_registry,
             delegation_mode=self.config.subagents.mode,
         )
-        scheduler = ToolScheduler(run_registry, policy)
+
+        def record_session_approval(request: PolicyRequest) -> None:
+            session.append(
+                "session_approval",
+                {
+                    "workspace": str(workspace),
+                    "tool_name": request.tool_name,
+                    "effects": sorted(effect.value for effect in request.effects),
+                },
+                durable=True,
+            )
+
+        scheduler = ToolScheduler(
+            run_registry,
+            policy,
+            session_approval_recorder=record_session_approval,
+        )
         loop = AgentLoop(
             session_id=session.metadata.session_id,
             run_id=run_id,
@@ -347,7 +423,8 @@ class Windcode:
         for path in sessions_root.iterdir():
             if not path.is_dir() or not (path / "meta.json").is_file():
                 continue
-            sessions.append(SessionStore.open(sessions_root, path.name).metadata)
+            store = SessionStore.open(sessions_root, path.name)
+            sessions.append(self._ensure_session_summary(store))
         return tuple(sorted(sessions, key=lambda item: item.updated_at, reverse=True))
 
     def rewind_session(self, session_id: str, record_id: str) -> EventRecord:

@@ -16,6 +16,14 @@ TOOL_LABELS = {
 }
 
 
+def format_duration(seconds: float) -> str:
+    if seconds < 0.01:
+        return "<0.01 秒"
+    if seconds < 1:
+        return f"{seconds:.2f} 秒"
+    return f"{seconds:.1f} 秒"
+
+
 class ToolBlock(Static, can_focus=True):
     def __init__(self, event: ToolStarted) -> None:
         self.call_id = event.call_id
@@ -35,6 +43,6 @@ class ToolBlock(Static, can_focus=True):
         detail = f" · 退出码 {exit_code}" if exit_code is not None else ""
         self.title = (
             f"{TOOL_LABELS.get(self.tool_name, self.tool_name)}{detail}"
-            f" ({event.result.elapsed_seconds:.1f} 秒)"
+            f" ({format_duration(event.result.elapsed_seconds)})"
         )
         self.update(f"  {marker} {self.title}")

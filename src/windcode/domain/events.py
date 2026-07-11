@@ -18,6 +18,7 @@ class RunRequest:
     session_id: str | None = None
     model: str | None = None
     permission_mode: str | None = None
+    compact_before_run: bool = False
 
 
 @dataclass(frozen=True, slots=True)

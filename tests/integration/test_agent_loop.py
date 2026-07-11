@@ -110,7 +110,7 @@ async def test_agent_loop_executes_tool_feedback_and_completes(tmp_path: Path) -
     result = await loop.run("do it", tmp_path)
     events = [event async for event in bus.subscribe()]
 
-    assert result.status == "unverified"
+    assert result.status == "completed"
     assert result.final_text == "task complete"
     assert len(transport.requests) == 2
     assert any(isinstance(event, ToolFinished) for event in events)

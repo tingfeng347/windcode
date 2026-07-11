@@ -68,6 +68,7 @@ async def test_consecutive_reads_run_concurrently_and_keep_result_order(tmp_path
     assert monotonic() - started < 0.13
     assert [item.call_id for item in results] == ["one", "two"]
     assert [item.result.output for item in results] == ["one", "two"]
+    assert all(item.result.elapsed_seconds > 0 for item in results)
 
 
 @pytest.mark.asyncio

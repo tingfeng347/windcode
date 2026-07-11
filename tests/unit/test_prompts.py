@@ -24,6 +24,8 @@ def test_prompt_orders_instructions_and_requires_actual_verification(tmp_path: P
     assert "对于问候、闲聊" in prompt
     assert "不得读取文件、执行命令、搜索或以任何方式检查工作区" in prompt
     assert "不要为了了解项目而主动勘察工作区" in prompt
+    assert "最终面向用户的回复必须使用纯文本" in prompt
+    assert "不得输出 Markdown 标记" in prompt
     assert str(tmp_path) in prompt
 
 

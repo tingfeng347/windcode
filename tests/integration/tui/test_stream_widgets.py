@@ -74,6 +74,18 @@ async def test_reasoning_deltas_update_only_one_live_spinner() -> None:
 
 
 @pytest.mark.asyncio
+async def test_approval_wait_is_excluded_from_thinking_time() -> None:
+    timestamps = iter((10.0, 12.0, 17.0, 20.0))
+    stream = MessageStream(clock=lambda: next(timestamps))
+
+    await stream.begin_run()
+    stream.pause_thinking("approval")
+    stream.resume_thinking("approval")
+
+    assert stream.thinking_seconds == 5.0
+
+
+@pytest.mark.asyncio
 async def test_message_stream_does_not_repeat_previous_turn() -> None:
     app = StreamApp()
     async with app.run_test(size=(80, 24)):
@@ -127,3 +139,4 @@ def test_tool_block_tracks_result_metadata() -> None:
         )
     )
     assert "退出码 0" in str(block.title)
+    assert "<0.01 秒" in str(block.title)

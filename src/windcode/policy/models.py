@@ -48,6 +48,16 @@ class PolicyDecision(PolicyModel):
     choices: tuple[ApprovalChoice, ...] = ()
 
 
+def summarize_policy_arguments(request: PolicyRequest, *, limit: int = 200) -> str | None:
+    value = request.command or request.path
+    if value is None:
+        return None
+    summary = " ".join(value.split())
+    if len(summary) <= limit:
+        return summary
+    return summary[: limit - 3].rstrip() + "..."
+
+
 __all__ = [
     "ApprovalChoice",
     "PermissionMode",
@@ -55,4 +65,5 @@ __all__ = [
     "PolicyDecision",
     "PolicyRequest",
     "RiskLevel",
+    "summarize_policy_arguments",
 ]

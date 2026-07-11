@@ -46,7 +46,12 @@ from windcode.domain.models import (
     Usage,
 )
 from windcode.domain.tools import ToolContext, ToolEffect
-from windcode.policy import ApprovalChoice, PolicyDecision, PolicyRequest
+from windcode.policy import (
+    ApprovalChoice,
+    PolicyDecision,
+    PolicyRequest,
+    summarize_policy_arguments,
+)
 from windcode.providers import ModelTarget
 from windcode.runtime.control import BudgetExceeded, RunControl
 from windcode.runtime.event_bus import EventBus
@@ -126,6 +131,8 @@ class AgentLoop:
                 summary=request.summary,
                 risk=decision.risk.value,
                 choices=tuple(choice.value for choice in decision.choices),
+                tool_name=request.tool_name,
+                arguments_summary=summarize_policy_arguments(request),
             ),
             durable=True,
         )

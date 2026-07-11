@@ -8,7 +8,13 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from windcode import Windcode
-from windcode.domain.events import AgentEventType, RunRequest, SubagentEvent
+from windcode.domain.events import (
+    AgentEventType,
+    ApprovalRequested,
+    ApprovalResponse,
+    RunRequest,
+    SubagentEvent,
+)
 from windcode.domain.messages import Role, TextBlock
 from windcode.domain.models import (
     ModelCompleted,
@@ -77,6 +83,21 @@ class HistoryTransport:
         pass
 
 
+class RepeatedShellTransport:
+    name = "repeated-shell"
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        if request.messages[-1].role is Role.USER:
+            yield ToolCallDelta("shell", "shell", '{"command":"printf ok"}')
+            yield ModelCompleted(StopReason.TOOL_USE)
+            return
+        yield TextDelta("done")
+        yield ModelCompleted(StopReason.STOP)
+
+    async def aclose(self) -> None:
+        pass
+
+
 class DelegatingTransport:
     name = "delegating"
 
@@ -134,6 +155,35 @@ def test_start_run_requires_async_context(tmp_path: Path) -> None:
     client = Windcode.open(state_root=tmp_path / "state")
     with pytest.raises(RuntimeError, match="async context"):
         client.start_run(RunRequest("task", tmp_path))
+
+
+@pytest.mark.asyncio
+async def test_session_shell_approval_is_restored_on_next_run(tmp_path: Path) -> None:
+    config = {"sandbox": {"enabled": False}}
+    async with Windcode.open(config, state_root=tmp_path / "state") as client:
+        client.register_transport("shell", "model", RepeatedShellTransport(), primary=True)
+
+        first = client.start_run(RunRequest("first", tmp_path, session_id="session"))
+        first_approvals = 0
+        async for event in first:
+            if isinstance(event, ApprovalRequested):
+                first_approvals += 1
+                assert event.tool_name == "shell"
+                assert event.arguments_summary == "printf ok"
+                await first.respond(ApprovalResponse(event.request_id, "allow_session"))
+        await first.result()
+
+        second = client.start_run(RunRequest("second", tmp_path, session_id="session"))
+        second_approvals = 0
+        async for event in second:
+            if isinstance(event, ApprovalRequested):
+                second_approvals += 1
+                await second.respond(ApprovalResponse(event.request_id, "allow_once"))
+        result = await second.result()
+
+    assert first_approvals == 1
+    assert second_approvals == 0
+    assert result.final_text == "done"
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import time
+from collections.abc import Callable
+from time import monotonic
 
 from rich.text import Text as RichText
 from textual.containers import Vertical, VerticalScroll
@@ -20,6 +21,7 @@ from windcode.domain.events import (
     TextDeltaEvent,
     ToolStarted,
 )
+from windcode.domain.messages import Message, Role, TextBlock
 
 SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
@@ -34,8 +36,10 @@ class MessageStream(VerticalScroll):
         id: str | None = None,
         classes: str | None = None,
         disabled: bool = False,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
         super().__init__(*children, name=name, id=id, classes=classes, disabled=disabled)
+        self._clock = clock
         self._ai_row: Vertical | None = None
         self._streaming_label: Static | None = None
         self._accumulated_text = ""
@@ -44,6 +48,11 @@ class MessageStream(VerticalScroll):
         self._spinner_timer: Timer | None = None
         self._spinner_index = 0
         self._started_at = 0.0
+        self._thinking_paused_at: float | None = None
+        self._thinking_paused_seconds = 0.0
+        self._thinking_pause_keys: set[str] = set()
+        self._thinking_active = False
+        self._finished_thinking_seconds = 0.0
         self._waiting_for_next_model = False
 
     async def _mount_if_attached(self, widget: Widget) -> None:
@@ -59,6 +68,28 @@ class MessageStream(VerticalScroll):
         if self.is_attached:
             self.call_after_refresh(self.scroll_end, animate=False)
 
+    async def add_ai_message(self, text: str) -> None:
+        content = RichText()
+        content.append("● ", style="bold color(99)")
+        content.append(text)
+        row = Vertical(Static(content, classes="message ai-message"), classes="ai-row")
+        await self._mount_if_attached(row)
+        if self.is_attached:
+            self.call_after_refresh(self.scroll_end, animate=False)
+
+    async def load_history(self, messages: tuple[Message, ...]) -> None:
+        await self.clear()
+        for message in messages:
+            text = "".join(
+                block.text for block in message.content if isinstance(block, TextBlock)
+            ).strip()
+            if not text:
+                continue
+            if message.role is Role.USER:
+                await self.add_user_message(text)
+            elif message.role is Role.ASSISTANT:
+                await self.add_ai_message(text)
+
     async def add_system_message(self, text: str, *, error: bool = False) -> None:
         prefix = "✖ " if error else "  "
         classes = "message error-message" if error else "message system-message"
@@ -73,7 +104,12 @@ class MessageStream(VerticalScroll):
         self._reasoning_text = ""
         self._waiting_for_next_model = False
         await self._new_ai_row()
-        self._started_at = time.monotonic()
+        self._started_at = self._clock()
+        self._thinking_paused_at = None
+        self._thinking_paused_seconds = 0.0
+        self._thinking_pause_keys.clear()
+        self._thinking_active = True
+        self._finished_thinking_seconds = 0.0
         self._spinner_index = 0
         self._spinner_label = Static("  ⠋ 思考中...", id="spinner-live")
         await self._mount_if_attached(self._spinner_label)
@@ -124,9 +160,36 @@ class MessageStream(VerticalScroll):
     def _tick_spinner(self) -> None:
         self._spinner_index += 1
         frame = SPINNER_FRAMES[self._spinner_index % len(SPINNER_FRAMES)]
-        elapsed = time.monotonic() - self._started_at
         if self._spinner_label is not None:
-            self._spinner_label.update(f"  {frame} 思考中...  ({elapsed:.0f}s)")
+            if self._thinking_pause_keys:
+                self._spinner_label.update("  等待审批...")
+            else:
+                self._spinner_label.update(f"  {frame} 思考中...  ({self.thinking_seconds:.0f}s)")
+
+    @property
+    def thinking_seconds(self) -> float:
+        if not self._thinking_active:
+            return self._finished_thinking_seconds
+        now = self._clock()
+        paused = self._thinking_paused_seconds
+        if self._thinking_paused_at is not None:
+            paused += now - self._thinking_paused_at
+        return max(0.0, now - self._started_at - paused)
+
+    def pause_thinking(self, key: str) -> None:
+        if not self._thinking_active or key in self._thinking_pause_keys:
+            return
+        if not self._thinking_pause_keys:
+            self._thinking_paused_at = self._clock()
+        self._thinking_pause_keys.add(key)
+
+    def resume_thinking(self, key: str) -> None:
+        if key not in self._thinking_pause_keys:
+            return
+        self._thinking_pause_keys.remove(key)
+        if not self._thinking_pause_keys and self._thinking_paused_at is not None:
+            self._thinking_paused_seconds += self._clock() - self._thinking_paused_at
+            self._thinking_paused_at = None
 
     async def finish_run(self) -> None:
         if self._streaming_label is not None and not self._accumulated_text:
@@ -138,7 +201,11 @@ class MessageStream(VerticalScroll):
         if self._spinner_label is not None:
             await self._spinner_label.remove()
             self._spinner_label = None
-        elapsed = max(0.0, time.monotonic() - self._started_at)
+        elapsed = self.thinking_seconds
+        self._finished_thinking_seconds = elapsed
+        self._thinking_active = False
+        self._thinking_paused_at = None
+        self._thinking_pause_keys.clear()
         if self._ai_row is not None and self._ai_row.is_attached:
             await self._ai_row.mount(
                 Static(

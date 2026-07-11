@@ -306,7 +306,7 @@ async def test_denied_write_keeps_file_unchanged_and_run_continues(tmp_path: Pat
         result = await handle.result()
 
     assert (tmp_path / "calc.py").read_text() == "def answer():\n    return 1\n"
-    assert result.status == "unverified"
+    assert result.status == "completed"
 
 
 @pytest.mark.asyncio

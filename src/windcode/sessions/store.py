@@ -106,6 +106,11 @@ class SessionStore:
             self.metadata = replace(self.metadata, status=status, updated_at=utc_now())
             self._write_metadata(durable=durable)
 
+    def set_summary(self, summary: str, *, durable: bool = True) -> None:
+        with self._lock:
+            self.metadata = replace(self.metadata, summary=summary)
+            self._write_metadata(durable=durable)
+
     def load_records(self) -> tuple[EventRecord, ...]:
         try:
             lines = self.events_path.read_text(encoding="utf-8").splitlines()

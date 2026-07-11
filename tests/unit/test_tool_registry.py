@@ -34,9 +34,9 @@ async def test_registers_schema_and_validates_arguments(tmp_path: Path) -> None:
     registry.register(EchoTool())
 
     assert registry.schemas()[0].parameters["required"] == ["text"]
-    assert await registry.execute("echo", context(tmp_path), {"text": "hello"}) == ToolResult(
-        "hello"
-    )
+    result = await registry.execute("echo", context(tmp_path), {"text": "hello"})
+    assert result.output == "hello"
+    assert result.elapsed_seconds > 0
     invalid = await registry.execute("echo", context(tmp_path), {"unknown": True})
     assert invalid.is_error
     assert invalid.data["error"] == "invalid_arguments"

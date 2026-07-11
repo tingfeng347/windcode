@@ -8,6 +8,7 @@ from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import BindingType
 from textual.containers import Vertical
+from textual.css.query import NoMatches
 from textual.theme import Theme
 from textual.widgets import Static
 
@@ -22,6 +23,7 @@ from windcode.domain.events import (
     UserInputRequested,
     UserResponse,
 )
+from windcode.domain.messages import TextBlock, message_from_dict
 from windcode.sdk import RunHandle, Windcode
 from windcode.tui.commands import SlashCommand, complete_commands, parse_command
 from windcode.tui.widgets import (
@@ -70,6 +72,7 @@ class WindcodeApp(App[None]):
         self.approval_widgets: dict[str, ApprovalWidget] = {}
         self.session_selector: SessionSelector | None = None
         self.subagent_group: SubagentGroup | None = None
+        self.compact_next_run = False
         self.ui_mode: Literal["welcome", "chat"] = "chat"
 
     def _display_model(self) -> str:
@@ -126,6 +129,8 @@ class WindcodeApp(App[None]):
         self.set_class(self.size.width < 60, "narrow")
         self.query_one("#chat-input", ChatInput).focus()
         self._update_status("idle")
+        if self.session_id is not None and self.client.session_exists(self.session_id):
+            await self._restore_session(self.session_id, announce=False)
 
     def on_resize(self, event: events.Resize) -> None:
         self.set_class(event.size.width < 60, "narrow")
@@ -173,6 +178,51 @@ class WindcodeApp(App[None]):
             return
         await self.query_one("#chat-area", MessageStream).add_system_message(text, error=error)
 
+    def _resolve_session_id(self, value: str) -> str:
+        session_ids = tuple(session.session_id for session in self.client.list_sessions())
+        if value in session_ids:
+            return value
+        matches = tuple(session_id for session_id in session_ids if session_id.startswith(value))
+        if len(matches) == 1:
+            return matches[0]
+        if not matches:
+            raise ValueError(f"未知会话: {value}")
+        raise ValueError(f"会话短 ID 不唯一: {value}")
+
+    def _resolve_record_id(self, value: str) -> str:
+        if self.session_id is None:
+            raise ValueError("回退前请先选择会话")
+        record_ids = tuple(
+            record.record_id for record in self.client.load_session_records(self.session_id)
+        )
+        if value in record_ids:
+            return value
+        matches = tuple(record_id for record_id in record_ids if record_id.startswith(value))
+        if len(matches) == 1:
+            return matches[0]
+        if not matches:
+            raise ValueError(f"未知记录: {value}")
+        raise ValueError(f"记录短 ID 不唯一: {value}")
+
+    async def _restore_session(self, session_id: str, *, announce: bool = True) -> None:
+        messages = self.query_one("#chat-area", MessageStream)
+        if self.handle is not None and self.handle.done:
+            self.handle = None
+        self.session_id = session_id
+        self.compact_next_run = False
+        self.subagent_group = None
+        self._set_ui_mode("chat")
+        await messages.load_history(self.client.load_session_messages(session_id))
+        if announce:
+            metadata = next(
+                session
+                for session in self.client.list_sessions()
+                if session.session_id == session_id
+            )
+            await messages.add_system_message(f"已恢复会话: {metadata.summary or session_id}")
+        self.query_one("#chat-input", ChatInput).focus()
+        self._update_status("idle")
+
     @on(ChatInput.SlashMenuUpdate)
     def update_slash_menu(self, event: ChatInput.SlashMenuUpdate) -> None:
         menu = self.query_one("#command-menu", CommandMenu)
@@ -204,48 +254,58 @@ class WindcodeApp(App[None]):
             session_id=self.session_id,
             model=self.model,
             permission_mode=self.permission_mode,
+            compact_before_run=self.compact_next_run,
         )
         self.handle = self.client.start_run(request)
+        self.compact_next_run = False
         self._update_status("running")
         self.run_worker(self._consume(self.handle), group="run", exclusive=True)
 
     async def _consume(self, handle: RunHandle) -> None:
         messages = self.query_one("#chat-area", MessageStream)
-        async for event in handle:
-            self.session_id = event.session_id
-            await messages.apply_event(event)
-            if isinstance(event, ToolStarted):
-                block = ToolBlock(event)
-                self.tool_blocks[event.call_id] = block
-                await messages.mount_in_ai_row(block)
-            elif isinstance(event, ToolProgress):
-                block = self.tool_blocks.get(event.call_id)
-                if block is not None:
-                    block.progress(event)
-            elif isinstance(event, ToolFinished):
-                block = self.tool_blocks.get(event.call_id)
-                if block is not None:
-                    block.finish(event)
-            elif isinstance(event, ApprovalRequested):
-                await messages.begin_block()
-                widget = ApprovalWidget(event)
-                self.approval_widgets[event.request_id] = widget
-                await messages.mount(widget)
-            elif isinstance(event, UserInputRequested):
-                await messages.begin_block()
-                await messages.mount(QuestionWidget(event))
-            elif isinstance(event, SubagentEvent):
-                if self.subagent_group is None or not self.subagent_group.is_attached:
+        try:
+            async for event in handle:
+                self.session_id = event.session_id
+                await messages.apply_event(event)
+                if isinstance(event, ToolStarted):
+                    block = ToolBlock(event)
+                    self.tool_blocks[event.call_id] = block
+                    await messages.mount_in_ai_row(block)
+                elif isinstance(event, ToolProgress):
+                    block = self.tool_blocks.get(event.call_id)
+                    if block is not None:
+                        block.progress(event)
+                elif isinstance(event, ToolFinished):
+                    block = self.tool_blocks.get(event.call_id)
+                    if block is not None:
+                        block.finish(event)
+                elif isinstance(event, ApprovalRequested):
+                    messages.pause_thinking(event.request_id)
                     await messages.begin_block()
-                    self.subagent_group = SubagentGroup()
-                    await messages.mount_in_ai_row(self.subagent_group)
-                await self.subagent_group.apply_event(event)
-            messages.scroll_end(animate=False)
-        result = await handle.result()
-        self._update_status(result.status)
+                    widget = ApprovalWidget(event)
+                    self.approval_widgets[event.request_id] = widget
+                    await messages.mount(widget)
+                elif isinstance(event, UserInputRequested):
+                    await messages.begin_block()
+                    await messages.mount(QuestionWidget(event))
+                elif isinstance(event, SubagentEvent):
+                    if self.subagent_group is None or not self.subagent_group.is_attached:
+                        await messages.begin_block()
+                        self.subagent_group = SubagentGroup()
+                        await messages.mount_in_ai_row(self.subagent_group)
+                    await self.subagent_group.apply_event(event)
+                messages.scroll_end(animate=False)
+            result = await handle.result()
+            self._update_status(result.status)
+        finally:
+            try:
+                self.query_one("#chat-input", ChatInput).focus()
+            except NoMatches:
+                pass
 
     @on(ApprovalWidget.Decision)
     async def approval_decision(self, event: ApprovalWidget.Decision) -> None:
+        self.query_one("#chat-area", MessageStream).resume_thinking(event.request_id)
         widget = self.approval_widgets.pop(event.request_id, None)
         if widget is not None and widget.is_attached:
             await widget.remove()
@@ -260,16 +320,10 @@ class WindcodeApp(App[None]):
     @on(SessionSelector.Selected)
     async def session_selected(self, event: SessionSelector.Selected) -> None:
         if self.handle is None or self.handle.done:
-            self.session_id = event.session_id
             if self.session_selector is not None:
                 await self.session_selector.remove()
                 self.session_selector = None
-            self.query_one("#chat-input", ChatInput).focus()
-            self._set_ui_mode("chat")
-            await self.query_one("#chat-area", MessageStream).add_system_message(
-                f"已选择会话: {self.session_id}"
-            )
-            self._update_status("idle")
+            await self._restore_session(event.session_id)
 
     async def _command(self, command: SlashCommand) -> None:
         messages = self.query_one("#chat-area", MessageStream)
@@ -281,6 +335,7 @@ class WindcodeApp(App[None]):
             if active:
                 raise ValueError("任务运行期间不能新建会话")
             self.session_id = None
+            self.compact_next_run = False
             await messages.clear()
             self.subagent_group = None
             self._set_ui_mode("welcome")
@@ -301,22 +356,36 @@ class WindcodeApp(App[None]):
                 return
             if len(command.arguments) != 1:
                 raise ValueError("用法: /resume 会话ID")
-            if command.arguments[0] not in {
-                session.session_id for session in self.client.list_sessions()
-            }:
-                raise ValueError(f"未知会话: {command.arguments[0]}")
-            self.session_id = command.arguments[0]
-            self._set_ui_mode("chat")
-            await self._show_system_message(f"已选择会话: {self.session_id}")
+            session_id = self._resolve_session_id(command.arguments[0])
+            await self._restore_session(session_id)
+        elif command.name == "history":
+            if command.arguments:
+                raise ValueError("用法: /history")
+            if self.session_id is None:
+                raise ValueError("请先选择会话")
+            lines = ["当前会话历史节点:"]
+            for record in self.client.load_session_records(self.session_id):
+                if record.record_type != "conversation_message":
+                    continue
+                message = message_from_dict(record.payload)
+                text = " ".join(
+                    block.text for block in message.content if isinstance(block, TextBlock)
+                )
+                preview = " ".join(text.split())[:48]
+                lines.append(
+                    f"{record.sequence}. {record.record_id[:12]}  {message.role.value}  {preview}"
+                )
+            await self._show_system_message("\n".join(lines))
         elif command.name == "rewind":
             if active:
                 raise ValueError("任务运行期间不能回退会话")
             if len(command.arguments) != 1:
                 raise ValueError("用法: /rewind 记录ID")
-            if self.session_id is None:
-                raise ValueError("回退前请先选择会话")
-            self.client.rewind_session(self.session_id, command.arguments[0])
-            await self._show_system_message(f"已从记录 {command.arguments[0]} 创建分支")
+            record_id = self._resolve_record_id(command.arguments[0])
+            assert self.session_id is not None
+            self.client.rewind_session(self.session_id, record_id)
+            await self._restore_session(self.session_id, announce=False)
+            await self._show_system_message(f"已回退到记录 {record_id[:12]}")
         elif command.name == "mode":
             if active:
                 raise ValueError("任务运行期间不能切换权限模式")
@@ -342,10 +411,29 @@ class WindcodeApp(App[None]):
             )
             await self._show_system_message(f"模型: {self.model}")
         elif command.name == "compact":
-            if not active or self.handle is None:
-                raise ValueError("仅能在任务运行期间压缩上下文")
-            await self.handle.compact()
-            await self._show_system_message("已请求压缩上下文")
+            if command.arguments:
+                raise ValueError("用法: /compact")
+            if active and self.handle is not None:
+                await self.handle.compact()
+                await self._show_system_message("已请求压缩上下文")
+            else:
+                if self.session_id is None:
+                    raise ValueError("压缩前请先选择会话")
+                self.compact_next_run = True
+                await self._show_system_message("将在下一轮模型请求前压缩上下文")
+        elif command.name == "clear":
+            if command.arguments:
+                raise ValueError("用法: /clear")
+            await messages.clear()
+            self.subagent_group = None
+        elif command.name == "help":
+            if command.arguments:
+                raise ValueError("用法: /help")
+            lines = ["可用命令:"]
+            for definition in complete_commands("/"):
+                hint = f" {definition.argument_hint}" if definition.argument_hint else ""
+                lines.append(f"/{definition.name}{hint}  {definition.description}")
+            await self._show_system_message("\n".join(lines))
         elif command.name == "status":
             await self._show_system_message(
                 f"会话: {self.session_id or '新会话'}  模型: {self._display_model()}  "

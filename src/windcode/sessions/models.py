@@ -24,6 +24,7 @@ class SessionMetadata:
     session_id: str
     created_at: datetime
     updated_at: datetime
+    summary: str = ""
     next_sequence: int = 1
     head_record_id: str | None = None
     status: SessionStatus = SessionStatus.ACTIVE
@@ -35,6 +36,7 @@ class SessionMetadata:
             "session_id": self.session_id,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
+            "summary": self.summary,
             "next_sequence": self.next_sequence,
             "head_record_id": self.head_record_id,
             "status": self.status.value,
@@ -47,6 +49,7 @@ class SessionMetadata:
             session_id=str(value["session_id"]),
             created_at=datetime.fromisoformat(str(value["created_at"])),
             updated_at=datetime.fromisoformat(str(value["updated_at"])),
+            summary=str(value.get("summary", "")),
             next_sequence=int(value["next_sequence"]),
             head_record_id=(
                 None if value.get("head_record_id") is None else str(value["head_record_id"])

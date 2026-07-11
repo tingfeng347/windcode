@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import replace
+from time import monotonic
 from typing import Any
 
 from pydantic import ValidationError
@@ -65,11 +67,13 @@ class ToolRegistry:
                 is_error=True,
                 data={"error": "invalid_arguments"},
             )
+        started = monotonic()
         try:
-            return await tool.execute(context, parsed)
+            result = await tool.execute(context, parsed)
         except (OSError, ValueError, UnicodeError) as exc:
-            return ToolResult(
+            result = ToolResult(
                 output=str(exc),
                 is_error=True,
                 data={"error": "execution_failed", "type": type(exc).__name__},
             )
+        return replace(result, elapsed_seconds=max(0.0, monotonic() - started))

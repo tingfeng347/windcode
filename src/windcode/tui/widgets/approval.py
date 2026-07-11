@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from rich.markup import escape
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Vertical
@@ -50,13 +51,24 @@ class ApprovalWidget(Vertical, can_focus=True):
             f"\n  [bold yellow]需要授权 · {risk}[/bold yellow]\n",
         ]
         if self.request.subagent_id is not None:
-            role = self.request.subagent_role or "unknown"
-            lines.append(f"  [bold cyan]子智能体 {self.request.subagent_id} · {role}[/bold cyan]")
-            if self.request.tool_name:
-                lines.append(f"  工具: {self.request.tool_name}")
-            if self.request.arguments_summary:
-                lines.append(f"  参数: {self.request.arguments_summary}")
-        lines.extend((f"    {self.request.summary}\n", "  [dim]是否继续执行?[/dim]\n"))
+            role = escape(self.request.subagent_role or "unknown")
+            subagent_id = escape(self.request.subagent_id)
+            lines.append(f"  [bold cyan]子智能体 {subagent_id} · {role}[/bold cyan]")
+        if self.request.tool_name:
+            tool_name = escape(self.request.tool_name)
+            arguments = (
+                None
+                if self.request.arguments_summary is None
+                else escape(self.request.arguments_summary)
+            )
+            if self.request.tool_name == "shell" and arguments:
+                lines.append(f"  [bold cyan]bash:[/bold cyan] {arguments}")
+            elif arguments:
+                lines.append(f"  [bold cyan]{tool_name}:[/bold cyan] {arguments}")
+            else:
+                lines.append(f"  工具: {tool_name}")
+        summary = escape(self.request.summary)
+        lines.extend((f"    {summary}\n", "  [dim]是否继续执行?[/dim]\n"))
         for index, choice in enumerate(self.request.choices):
             label = CHOICE_LABELS.get(choice, choice)
             if index == self.cursor:

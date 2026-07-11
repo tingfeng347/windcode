@@ -16,13 +16,16 @@ class CommandDefinition:
 
 COMMAND_CATALOG = (
     CommandDefinition("new", "新建会话"),
-    CommandDefinition("resume", "恢复已有会话", "[会话 ID]"),
-    CommandDefinition("rewind", "回退到历史记录", "<记录 ID>"),
+    CommandDefinition("resume", "恢复已有会话", "[会话 ID 或短 ID]"),
+    CommandDefinition("history", "显示当前会话历史节点"),
+    CommandDefinition("rewind", "回退到历史记录", "<记录 ID 或短 ID>"),
     CommandDefinition("mode", "切换权限模式", "<模式>"),
     CommandDefinition("model", "切换当前模型", "<模型>"),
     CommandDefinition("compact", "压缩当前上下文"),
+    CommandDefinition("clear", "清空当前消息显示"),
     CommandDefinition("status", "显示会话状态"),
     CommandDefinition("agents", "显示子智能体状态"),
+    CommandDefinition("help", "显示可用命令"),
     CommandDefinition("quit", "退出 Windcode"),
 )
 

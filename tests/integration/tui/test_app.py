@@ -2,13 +2,23 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+from rich.text import Text as RichText
 from textual.widgets import Static
 
-from windcode.config import AppConfig
+from windcode import Windcode
+from windcode.config import AppConfig, SandboxConfig
+from windcode.domain.events import RunRequest
 from windcode.domain.messages import TextBlock
-from windcode.domain.models import ModelCompleted, ModelEvent, ModelRequest, StopReason, TextDelta
+from windcode.domain.models import (
+    ModelCompleted,
+    ModelEvent,
+    ModelRequest,
+    StopReason,
+    TextDelta,
+    ToolCallDelta,
+)
 from windcode.tui import WindcodeApp
-from windcode.tui.widgets import ChatInput, CommandMenu, MessageStream, WelcomeView
+from windcode.tui.widgets import ApprovalWidget, ChatInput, CommandMenu, MessageStream, WelcomeView
 
 
 class EchoTransport:
@@ -22,6 +32,21 @@ class EchoTransport:
             if isinstance(block, TextBlock)
         )
         yield TextDelta(f"回复:{prompt}")
+        yield ModelCompleted(StopReason.STOP)
+
+    async def aclose(self) -> None:
+        pass
+
+
+class ShellTransport:
+    name = "shell"
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        if request.messages[-1].role.value == "user":
+            yield ToolCallDelta("shell", "shell", '{"command":"printf ok"}')
+            yield ModelCompleted(StopReason.TOOL_USE)
+            return
+        yield TextDelta("完成")
         yield ModelCompleted(StopReason.STOP)
 
     async def aclose(self) -> None:
@@ -140,3 +165,78 @@ async def test_resumed_tui_turn_does_not_render_previous_reply(tmp_path: Path) -
         assert "回复:第一轮" in str(replies[0].content)
         assert "回复:第二轮" in str(replies[1].content)
         assert "回复:第一轮" not in str(replies[1].content)
+
+
+@pytest.mark.asyncio
+async def test_opening_existing_session_replays_visible_conversation(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    async with Windcode.open(state_root=state) as client:
+        client.register_transport("echo", "model", EchoTransport(), primary=True)
+        await client.start_run(RunRequest("历史问题", tmp_path, session_id="session")).result()
+
+    app = WindcodeApp(AppConfig(), workspace=tmp_path, state_root=state, session_id="session")
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+
+        users = [message for message in app.query(".user-message") if isinstance(message, Static)]
+        replies = [message for message in app.query(".ai-message") if isinstance(message, Static)]
+        assert len(users) == 1
+        assert len(replies) == 1
+        assert "历史问题" in str(users[0].content)
+        assert "回复:历史问题" in str(replies[0].content)
+
+
+@pytest.mark.asyncio
+async def test_idle_compact_and_history_commands_are_usable(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    async with Windcode.open(state_root=state) as client:
+        client.register_transport("echo", "model", EchoTransport(), primary=True)
+        await client.start_run(RunRequest("历史问题", tmp_path, session_id="session")).result()
+
+    app = WindcodeApp(AppConfig(), workspace=tmp_path, state_root=state, session_id="session")
+    async with app.run_test(size=(100, 30)) as pilot:
+        prompt = app.query_one("#chat-input", ChatInput)
+        prompt.focus()
+        prompt.insert("/compact")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.compact_next_run
+
+        prompt.insert("/history")
+        await pilot.press("enter")
+        await pilot.pause()
+        system_messages = [
+            message for message in app.query(".system-message") if isinstance(message, Static)
+        ]
+        assert any("当前会话历史节点" in str(message.content) for message in system_messages)
+
+
+@pytest.mark.asyncio
+async def test_input_regains_focus_after_approved_agent_run(tmp_path: Path) -> None:
+    app = WindcodeApp(
+        AppConfig(sandbox=SandboxConfig(enabled=False)),
+        workspace=tmp_path,
+        state_root=tmp_path / "state",
+    )
+    async with app.run_test(size=(80, 24)) as pilot:
+        app.client.register_transport("shell", "model", ShellTransport(), primary=True)
+        prompt = app.query_one("#chat-input", ChatInput)
+        prompt.insert("执行命令")
+        await pilot.press("enter")
+
+        for _ in range(200):
+            if list(app.query(ApprovalWidget)):
+                break
+            await pilot.pause(0.01)
+        else:
+            pytest.fail("approval widget was not shown")
+
+        approval = app.query_one(ApprovalWidget)
+        approval_content = str(approval.query_one("#approval-content", Static).content)
+        assert "bash: printf ok" in RichText.from_markup(approval_content).plain
+        await pilot.press("down", "enter")
+        while app.handle is None or not app.handle.done:
+            await pilot.pause(0.01)
+        await pilot.pause()
+
+        assert prompt.has_focus

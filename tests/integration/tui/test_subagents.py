@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from rich.text import Text as RichText
 from textual.app import App, ComposeResult
 from textual.widgets import Static
 
@@ -137,10 +138,10 @@ async def test_subagent_approval_renders_source_tool_arguments_and_risk() -> Non
     async with app.run_test() as pilot:
         await pilot.pause()
         content = str(app.query_one("#approval-content", Static).content)
-        assert "高风险" in content
-        assert "child-1 · worker" in content
-        assert "工具: shell" in content
-        assert "参数: uv run pytest -q" in content
+        plain = RichText.from_markup(content).plain
+        assert "高风险" in plain
+        assert "child-1 · worker" in plain
+        assert "bash: uv run pytest -q" in plain
 
 
 class SnapshotHandle:
