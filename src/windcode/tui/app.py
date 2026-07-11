@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import ClassVar, Literal
 
@@ -12,7 +13,8 @@ from textual.css.query import NoMatches
 from textual.theme import Theme
 from textual.widgets import Static
 
-from windcode.config import AppConfig, PermissionMode
+from windcode.auth import CredentialStore, CredentialStoreError
+from windcode.config import AppConfig, PermissionMode, ProviderConfig
 from windcode.domain.events import (
     ApprovalRequested,
     ApprovalResponse,
@@ -31,6 +33,8 @@ from windcode.tui.widgets import (
     ChatInput,
     CommandMenu,
     MessageStream,
+    ModelManager,
+    ProviderManager,
     QuestionWidget,
     SessionSelector,
     StatusBar,
@@ -59,25 +63,35 @@ class WindcodeApp(App[None]):
         session_id: str | None = None,
         permission_mode: str | None = None,
         state_root: Path | None = None,
+        config_file: Path | None = None,
+        credential_store: CredentialStore | None = None,
     ) -> None:
         super().__init__()
         self.config = config
         self.workspace = workspace
+        self.config_file = (
+            (config_file or self.workspace / ".windcode" / "config.toml").expanduser().resolve()
+        )
         self.model = model
         self.session_id = session_id
         self.permission_mode = permission_mode or config.permission.mode.value
-        self.client = Windcode.open(config, state_root=state_root)
+        self.client = Windcode.open(
+            config, state_root=state_root, credential_store=credential_store
+        )
         self.handle: RunHandle | None = None
         self.tool_blocks: dict[str, ToolBlock] = {}
         self.approval_widgets: dict[str, ApprovalWidget] = {}
         self.session_selector: SessionSelector | None = None
+        self.model_manager: ModelManager | None = None
+        self.provider_manager: ProviderManager | None = None
         self.subagent_group: SubagentGroup | None = None
         self.compact_next_run = False
         self.ui_mode: Literal["welcome", "chat"] = "chat"
 
     def _display_model(self) -> str:
         if self.model:
-            return self.model
+            provider = self.config.providers.get(self.model)
+            return f"{self.model}/{provider.model}" if provider is not None else self.model
         if self.config.primary_provider:
             provider = self.config.providers.get(self.config.primary_provider)
             if provider is not None:
@@ -223,6 +237,100 @@ class WindcodeApp(App[None]):
         self.query_one("#chat-input", ChatInput).focus()
         self._update_status("idle")
 
+    def _model_config(
+        self,
+        providers: dict[str, ProviderConfig],
+        *,
+        primary: str | None,
+        fallback: tuple[str, ...],
+    ) -> AppConfig:
+        data = self.config.model_dump(mode="python")
+        data.update(
+            providers=providers,
+            primary_provider=primary,
+            fallback_chain=fallback,
+        )
+        return AppConfig.model_validate(data)
+
+    async def _apply_model_config(self, config: AppConfig) -> bool:
+        try:
+            await self.client.reconfigure_models(config, config_file=self.config_file)
+        except (OSError, RuntimeError, ValueError) as exc:
+            if self.provider_manager is not None:
+                self.provider_manager.show_error(str(exc))
+            elif self.model_manager is not None:
+                self.model_manager.show_error(str(exc))
+            else:
+                await self._show_system_message(str(exc), error=True)
+            return False
+        self.config = config
+        return True
+
+    def _connected_providers(self) -> dict[str, bool]:
+        connected: dict[str, bool] = {}
+        for alias, provider in self.config.providers.items():
+            available = bool(provider.api_key_env and os.environ.get(provider.api_key_env))
+            if not available and provider.credential_id:
+                try:
+                    available = bool(self.client.credential_store.get(provider.credential_id))
+                except CredentialStoreError:
+                    available = False
+            connected[alias] = available
+        return connected
+
+    async def _open_model_manager(self, *, selected: str | None = None) -> None:
+        if self.session_selector is not None:
+            await self.session_selector.remove()
+            self.session_selector = None
+        if self.model_manager is not None:
+            await self.model_manager.dismiss()
+        self.model_manager = ModelManager(
+            self.config.providers,
+            selected=selected or self.model,
+            primary=self.config.primary_provider,
+            connected=self._connected_providers(),
+        )
+        await self.push_screen(self.model_manager)
+
+    async def _close_model_manager(self) -> None:
+        if self.model_manager is not None:
+            await self.model_manager.dismiss()
+            self.model_manager = None
+        self.query_one("#chat-input", ChatInput).focus()
+
+    async def _open_provider_manager(
+        self,
+        *,
+        selected: str | None = None,
+        preset_id: str | None = None,
+    ) -> None:
+        await self._close_model_manager()
+        if self.provider_manager is not None:
+            await self.provider_manager.dismiss()
+        self.provider_manager = ProviderManager(
+            self.config.providers,
+            selected=selected or self.model,
+            primary=self.config.primary_provider,
+            connected=self._connected_providers(),
+            preset_id=preset_id,
+        )
+        await self.push_screen(self.provider_manager)
+
+    async def _close_provider_manager(self) -> None:
+        if self.provider_manager is not None:
+            await self.provider_manager.dismiss()
+            self.provider_manager = None
+        self.query_one("#chat-input", ChatInput).focus()
+
+    async def _select_model(self, alias: str) -> None:
+        if alias not in self.client.transport_registry.aliases:
+            raise ValueError(f"未配置模型: {alias}")
+        self.model = alias
+        self.query_one("#title-bar", Static).update(self._make_banner())
+        self._update_status("idle")
+        await self._close_model_manager()
+        await self._show_system_message(f"模型: {self._display_model()}")
+
     @on(ChatInput.SlashMenuUpdate)
     def update_slash_menu(self, event: ChatInput.SlashMenuUpdate) -> None:
         menu = self.query_one("#command-menu", CommandMenu)
@@ -325,6 +433,108 @@ class WindcodeApp(App[None]):
                 self.session_selector = None
             await self._restore_session(event.session_id)
 
+    @on(ModelManager.Use)
+    async def model_use(self, event: ModelManager.Use) -> None:
+        await self._select_model(event.alias)
+
+    @on(ModelManager.Manage)
+    async def model_manage(self) -> None:
+        await self._open_provider_manager()
+
+    @on(ModelManager.Connect)
+    async def model_connect(self, event: ModelManager.Connect) -> None:
+        await self._open_provider_manager(
+            selected=event.alias,
+            preset_id=None if event.alias is not None else event.provider_id,
+        )
+
+    @on(ProviderManager.Save)
+    async def provider_save(self, event: ProviderManager.Save) -> None:
+        previous_secret: str | None = None
+        if event.secret is not None and event.provider.credential_id is not None:
+            try:
+                previous_secret = self.client.credential_store.get(event.provider.credential_id)
+                self.client.credential_store.set(event.provider.credential_id, event.secret)
+            except CredentialStoreError as exc:
+                if self.provider_manager is not None:
+                    self.provider_manager.show_error(str(exc))
+                return
+        providers = dict(self.config.providers)
+        providers[event.alias] = event.provider
+        primary = self.config.primary_provider or event.alias
+        config = self._model_config(
+            providers,
+            primary=primary,
+            fallback=self.config.fallback_chain,
+        )
+        if await self._apply_model_config(config):
+            self.model = event.alias
+            self.query_one("#title-bar", Static).update(self._make_banner())
+            self._update_status("idle")
+            await self._open_provider_manager(selected=event.alias)
+        elif event.secret is not None and event.provider.credential_id is not None:
+            if previous_secret is None:
+                self.client.credential_store.delete(event.provider.credential_id)
+            else:
+                self.client.credential_store.set(event.provider.credential_id, previous_secret)
+
+    @on(ProviderManager.Delete)
+    async def provider_delete(self, event: ProviderManager.Delete) -> None:
+        provider = self.config.providers.get(event.alias)
+        providers = dict(self.config.providers)
+        providers.pop(event.alias, None)
+        primary = self.config.primary_provider
+        if primary == event.alias:
+            primary = next(iter(providers), None)
+        fallback = tuple(
+            alias
+            for alias in self.config.fallback_chain
+            if alias != event.alias and alias != primary and alias in providers
+        )
+        config = self._model_config(providers, primary=primary, fallback=fallback)
+        if await self._apply_model_config(config):
+            if self.model == event.alias:
+                self.model = primary
+            self.query_one("#title-bar", Static).update(self._make_banner())
+            self._update_status("idle")
+            if provider is not None and provider.credential_id is not None:
+                try:
+                    self.client.credential_store.delete(provider.credential_id)
+                except CredentialStoreError as exc:
+                    await self._show_system_message(str(exc), error=True)
+            await self._open_provider_manager(selected=self.model)
+
+    @on(ProviderManager.SetDefault)
+    async def provider_set_default(self, event: ProviderManager.SetDefault) -> None:
+        ordered = (
+            self.config.primary_provider,
+            *self.config.fallback_chain,
+        )
+        fallback = tuple(
+            alias
+            for alias in ordered
+            if alias is not None and alias != event.alias and alias in self.config.providers
+        )
+        config = self._model_config(
+            dict(self.config.providers),
+            primary=event.alias,
+            fallback=fallback,
+        )
+        if await self._apply_model_config(config):
+            self.model = event.alias
+            self.query_one("#title-bar", Static).update(self._make_banner())
+            self._update_status("idle")
+            await self._open_provider_manager(selected=event.alias)
+
+    @on(ModelManager.Closed)
+    async def model_manager_closed(self) -> None:
+        await self._close_model_manager()
+
+    @on(ProviderManager.Closed)
+    async def provider_manager_closed(self) -> None:
+        await self._close_provider_manager()
+        await self._open_model_manager()
+
     async def _command(self, command: SlashCommand) -> None:
         messages = self.query_one("#chat-area", MessageStream)
         active = self.handle is not None and not self.handle.done
@@ -399,17 +609,12 @@ class WindcodeApp(App[None]):
         elif command.name == "model":
             if active:
                 raise ValueError("任务运行期间不能切换模型")
+            if not command.arguments:
+                await self._open_model_manager()
+                return
             if len(command.arguments) != 1:
-                raise ValueError("用法: /model 模型名称")
-            self.model = command.arguments[0]
-            self.query_one("#title-bar", Static).update(self._make_banner())
-            self.query_one("#welcome-view", WelcomeView).set_context(
-                model=self._display_model(),
-                permission=self.permission_mode,
-                sandbox=self.config.sandbox.enabled,
-                workspace=self.workspace,
-            )
-            await self._show_system_message(f"模型: {self.model}")
+                raise ValueError("用法: /model [配置别名]")
+            await self._select_model(command.arguments[0])
         elif command.name == "compact":
             if command.arguments:
                 raise ValueError("用法: /compact")

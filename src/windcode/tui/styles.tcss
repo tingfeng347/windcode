@@ -136,7 +136,7 @@ Screen {
     dock: bottom;
     width: 100%;
     height: auto;
-    max-height: 18;
+    max-height: 24;
     padding: 0 2;
     background: #151719;
     border-left: thick #5fa8e8;
@@ -211,6 +211,132 @@ Screen {
     width: 100%;
     height: 3;
     background: #20262b;
+}
+
+ModelManager,
+ProviderManager {
+    align: center middle;
+    background: #151719 80%;
+}
+
+#model-dialog,
+#provider-dialog {
+    width: 76;
+    max-width: 92%;
+    height: auto;
+    padding: 1 2;
+    background: #20262b;
+    border: round #4a555d;
+}
+
+#provider-dialog {
+    width: 92;
+    max-height: 94%;
+}
+
+#model-manager-title,
+#provider-manager-title {
+    width: 100%;
+    height: 2;
+    color: #e4e9ed;
+    text-style: bold;
+}
+
+#model-search,
+#provider-preset,
+#provider-editor Input,
+#provider-editor Select {
+    height: 3;
+    border: none;
+    background: #1b2024;
+}
+
+#model-list {
+    width: 100%;
+    height: 12;
+    margin-top: 1;
+    background: #1b2024;
+    border: none;
+}
+
+#model-provider-tabs {
+    width: 100%;
+    height: 2;
+    padding: 1 1 0 1;
+    color: #88939b;
+    overflow-x: auto;
+    scrollbar-size-horizontal: 0;
+}
+
+#provider-list {
+    width: 100%;
+    height: 10;
+    background: #1b2024;
+    border: none;
+}
+
+#model-picker-status,
+#provider-details,
+#provider-editor-error {
+    width: 100%;
+    height: 2;
+    padding: 0 1;
+    color: #88939b;
+}
+
+#provider-editor-error {
+    color: #e36d6d;
+}
+
+.dialog-actions {
+    width: 100%;
+    height: 3;
+    layout: grid;
+    grid-size: 3 1;
+    grid-gutter: 0 1;
+}
+
+.dialog-actions Button {
+    width: 1fr;
+    min-width: 0;
+}
+
+#provider-actions {
+    width: 100%;
+    height: 6;
+    layout: grid;
+    grid-size: 3 2;
+    grid-gutter: 0 1;
+}
+
+#provider-actions Button {
+    width: 1fr;
+    min-width: 0;
+}
+
+#provider-editor {
+    width: 100%;
+    height: auto;
+    max-height: 1fr;
+    overflow-y: auto;
+    scrollbar-size-vertical: 1;
+}
+
+.provider-field {
+    width: 100%;
+    height: 3;
+}
+
+.provider-field-label {
+    width: 26;
+    height: 3;
+    padding: 0 1;
+    color: #aab3ba;
+}
+
+.provider-field Input,
+.provider-field Select {
+    width: 1fr;
 }
 
 .interaction {
@@ -302,6 +428,28 @@ Screen {
     offset-x: 0;
     margin-bottom: 0;
     padding: 0;
+}
+
+.narrow #model-dialog,
+.narrow #provider-dialog {
+    width: 100%;
+    max-width: 100%;
+    padding: 1;
+}
+
+.narrow #provider-actions {
+    height: 9;
+    grid-size: 2 3;
+}
+
+.narrow .provider-field-label {
+    width: 15;
+    padding-left: 0;
+}
+
+.narrow .provider-field Input,
+.narrow .provider-field Select {
+    width: 1fr;
 }
 
 .narrow #chat-area {

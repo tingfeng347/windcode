@@ -70,11 +70,34 @@ def load_config(
         layers.append(("explicit overrides", dict(overrides)))
 
     merged: dict[str, Any] = {}
+    disabled_aliases: set[str] = set()
     last_source: Path | str = "built-in defaults"
     for source, layer in layers:
         if layer:
+            raw_disabled = layer.get("disabled_providers", [])
+            raw_enabled = layer.get("enabled_providers", [])
+            if not isinstance(raw_disabled, list) or not isinstance(raw_enabled, list):
+                raise ConfigError(source, "provider enable/disable lists must be arrays")
+            disabled_aliases.update(str(alias) for alias in cast(list[object], raw_disabled))
+            disabled_aliases.difference_update(
+                str(alias) for alias in cast(list[object], raw_enabled)
+            )
             merged = _deep_merge(merged, layer)
             last_source = source
+    merged.pop("disabled_providers", None)
+    merged.pop("enabled_providers", None)
+    if disabled_aliases and isinstance(merged.get("providers"), dict):
+        providers = cast(dict[str, Any], merged["providers"])
+        for alias in disabled_aliases:
+            providers.pop(alias, None)
+        if merged.get("primary_provider") in disabled_aliases:
+            merged.pop("primary_provider", None)
+        fallback = merged.get("fallback_chain")
+        if isinstance(fallback, list):
+            fallback_values = cast(list[object], fallback)
+            merged["fallback_chain"] = [
+                alias for alias in fallback_values if str(alias) not in disabled_aliases
+            ]
     try:
         return AppConfig.model_validate(merged)
     except ValidationError as exc:

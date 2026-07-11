@@ -20,7 +20,7 @@ COMMAND_CATALOG = (
     CommandDefinition("history", "显示当前会话历史节点"),
     CommandDefinition("rewind", "回退到历史记录", "<记录 ID 或短 ID>"),
     CommandDefinition("mode", "切换权限模式", "<模式>"),
-    CommandDefinition("model", "切换当前模型", "<模型>"),
+    CommandDefinition("model", "配置或切换当前模型", "[配置别名]"),
     CommandDefinition("compact", "压缩当前上下文"),
     CommandDefinition("clear", "清空当前消息显示"),
     CommandDefinition("status", "显示会话状态"),

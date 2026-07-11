@@ -10,7 +10,8 @@ from uuid import uuid4
 
 from platformdirs import user_state_path
 
-from windcode.config import AppConfig, PermissionMode
+from windcode.auth import CredentialStore, FileCredentialStore
+from windcode.config import AppConfig, PermissionMode, save_model_config
 from windcode.context import TokenEstimator
 from windcode.domain.events import (
     AgentEventType,
@@ -130,9 +131,11 @@ class Windcode:
         config: AppConfig,
         *,
         state_root: Path | None = None,
+        credential_store: CredentialStore | None = None,
     ) -> None:
         self.config = config
         self.state_root = (state_root or user_state_path("windcode")).expanduser().resolve()
+        self.credential_store = credential_store or FileCredentialStore()
         self.transport_registry = TransportRegistry()
         self.tool_registry: ToolRegistry | None = None
         self._default_chain: list[str] = []
@@ -145,9 +148,10 @@ class Windcode:
         config: AppConfig | Mapping[str, Any] | None = None,
         *,
         state_root: Path | None = None,
+        credential_store: CredentialStore | None = None,
     ) -> Self:
         parsed = config if isinstance(config, AppConfig) else AppConfig.model_validate(config or {})
-        return cls(parsed, state_root=state_root)
+        return cls(parsed, state_root=state_root, credential_store=credential_store)
 
     async def __aenter__(self) -> Self:
         if self._entered:
@@ -155,11 +159,16 @@ class Windcode:
         self._entered = True
         self.state_root.mkdir(parents=True, exist_ok=True)
         if self.config.providers:
-            self.transport_registry = TransportRegistry.from_config(self.config)
+            self.transport_registry = TransportRegistry.from_config(
+                self.config,
+                credential_store=self.credential_store,
+                allow_missing=True,
+            )
             if self.config.primary_provider is not None:
                 self._default_chain = [
-                    self.config.primary_provider,
-                    *self.config.fallback_chain,
+                    alias
+                    for alias in (self.config.primary_provider, *self.config.fallback_chain)
+                    if alias in self.transport_registry.aliases
                 ]
         self.tool_registry = create_builtin_registry(
             shell_timeout=self.config.budgets.shell_timeout_seconds,
@@ -192,6 +201,37 @@ class Windcode:
         self.transport_registry.register(alias, model, transport, replace=replace_existing)
         if primary or not self._default_chain:
             self._default_chain = [alias]
+
+    async def reconfigure_models(self, config: AppConfig, *, config_file: Path) -> None:
+        if any(not handle.done for handle in self._handles):
+            raise RuntimeError("cannot configure models while a run is active")
+        registry = (
+            TransportRegistry.from_config(
+                config,
+                credential_store=self.credential_store,
+                allow_missing=True,
+            )
+            if config.providers
+            else TransportRegistry()
+        )
+        try:
+            save_model_config(config_file, self.config, config)
+        except Exception:
+            await registry.aclose()
+            raise
+
+        previous_registry = self.transport_registry
+        self.transport_registry = registry
+        self.config = config
+        configured_chain = (
+            (config.primary_provider, *config.fallback_chain)
+            if config.primary_provider is not None
+            else ()
+        )
+        self._default_chain = [
+            alias for alias in configured_chain if alias in self.transport_registry.aliases
+        ]
+        await previous_registry.aclose()
 
     def _model_chain(self, requested: str | None) -> tuple[ModelTarget, ...]:
         if requested is not None and requested in self.transport_registry.aliases:

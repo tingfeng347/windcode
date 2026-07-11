@@ -85,6 +85,7 @@ def run(argv: Sequence[str] | None = None) -> int:
         permission_mode=(
             options.permission_mode.value if options.permission_mode is not None else None
         ),
+        config_file=options.config_file,
     )
     app.run()
     return 0

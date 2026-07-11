@@ -19,8 +19,18 @@ class ProviderProtocol(StrEnum):
 class ProviderConfig(StrictModel):
     protocol: ProviderProtocol
     model: str = Field(min_length=1)
-    api_key_env: str = Field(min_length=1, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    provider_id: str | None = Field(default=None, min_length=1, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    api_key_env: str | None = Field(default=None, min_length=1, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    credential_id: str | None = Field(
+        default=None, min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    )
     base_url: str | None = None
+
+    @model_validator(mode="after")
+    def validate_credentials(self) -> Self:
+        if self.api_key_env is None and self.credential_id is None:
+            raise ValueError("provider requires api_key_env or credential_id")
+        return self
 
 
 class BudgetConfig(StrictModel):

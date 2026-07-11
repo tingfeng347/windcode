@@ -60,6 +60,21 @@ def test_plaintext_api_key_is_not_a_provider_field() -> None:
         )
 
 
+def test_provider_accepts_persisted_credential_without_environment_variable() -> None:
+    configured = ProviderConfig(
+        protocol=ProviderProtocol.OPENAI_RESPONSES,
+        model="model",
+        credential_id="openai",
+    )
+
+    assert configured.api_key_env is None
+
+
+def test_provider_requires_a_credential_source() -> None:
+    with pytest.raises(ValidationError, match="api_key_env or credential_id"):
+        ProviderConfig(protocol=ProviderProtocol.OPENAI_RESPONSES, model="model")
+
+
 def test_subagent_defaults_and_valid_override() -> None:
     defaults = AppConfig().subagents
     assert defaults.mode is DelegationMode.EXPLICIT

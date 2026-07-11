@@ -4,6 +4,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from windcode.auth import CredentialStore
 from windcode.config.models import AppConfig, ProviderConfig, ProviderProtocol
 from windcode.providers.anthropic import AnthropicTransport
 from windcode.providers.base import ModelTransport
@@ -42,14 +43,25 @@ class TransportRegistry:
         config: AppConfig,
         *,
         environ: Mapping[str, str] | None = None,
+        credential_store: CredentialStore | None = None,
+        allow_missing: bool = False,
     ) -> TransportRegistry:
         registry = cls()
         environment = os.environ if environ is None else environ
         for alias, provider in config.providers.items():
-            api_key = environment.get(provider.api_key_env)
+            api_key = environment.get(provider.api_key_env) if provider.api_key_env else None
+            if not api_key and provider.credential_id and credential_store is not None:
+                api_key = credential_store.get(provider.credential_id)
             if not api_key:
+                if allow_missing:
+                    continue
+                sources: list[str] = []
+                if provider.api_key_env:
+                    sources.append(f"环境变量 {provider.api_key_env}")
+                if provider.credential_id:
+                    sources.append(f"已保存凭据 {provider.credential_id}")
                 raise ProviderConfigurationError(
-                    f"provider {alias!r} requires environment variable {provider.api_key_env}"
+                    f"provider {alias!r} 缺少 API Key, 请设置{' 或更新'.join(sources)}"
                 )
             registry.register(alias, provider.model, create_transport(provider, api_key))
         return registry
