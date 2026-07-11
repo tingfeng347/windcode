@@ -1,0 +1,290 @@
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator, Mapping
+from dataclasses import replace
+from pathlib import Path
+from types import TracebackType
+from typing import Any, Self
+from uuid import uuid4
+
+from platformdirs import user_state_path
+
+from windcode.config import AppConfig, PermissionMode
+from windcode.context import TokenEstimator
+from windcode.domain.events import AgentEventType, RunRequest, RunResponse, RunResult
+from windcode.domain.messages import Message, message_from_dict
+from windcode.domain.tools import Tool
+from windcode.instructions import load_instructions
+from windcode.observability import TraceStore
+from windcode.policy import PolicyEngine
+from windcode.providers import ModelTarget, ModelTransport, TransportRegistry
+from windcode.runtime.control import RunBudgets, RunControl
+from windcode.runtime.event_bus import EventBus
+from windcode.runtime.loop import AgentLoop
+from windcode.runtime.prompts import build_system_prompt
+from windcode.runtime.scheduler import ToolScheduler
+from windcode.sandbox import BubblewrapSandbox, detect_bubblewrap
+from windcode.sessions import (
+    ArtifactStore,
+    EventRecord,
+    SessionMetadata,
+    SessionStore,
+    ancestor_chain,
+    create_branch,
+)
+from windcode.tools import ToolRegistry, create_builtin_registry
+from windcode.tools.shell import ShellTool
+
+
+class RunHandle:
+    def __init__(
+        self,
+        task: asyncio.Task[RunResult],
+        event_bus: EventBus,
+        control: RunControl,
+        *,
+        after_sequence: int = 0,
+    ) -> None:
+        self._task = task
+        self._event_bus = event_bus
+        self._control = control
+        self._after_sequence = after_sequence
+        self._result: RunResult | None = None
+        self._result_lock = asyncio.Lock()
+
+    def __aiter__(self) -> AsyncIterator[AgentEventType]:
+        return self._event_bus.subscribe(after_sequence=self._after_sequence)
+
+    async def respond(self, response: RunResponse) -> None:
+        self._control.respond(response)
+
+    async def cancel(self) -> None:
+        self._control.cancel()
+        if not self._task.done():
+            self._task.cancel()
+        await self.result()
+
+    async def result(self) -> RunResult:
+        if self._result is not None:
+            return self._result
+        async with self._result_lock:
+            if self._result is None:
+                self._result = await self._task
+            return self._result
+
+    async def compact(self) -> None:
+        if self.done:
+            raise RuntimeError("cannot compact a completed run")
+        self._control.request_compaction()
+
+    @property
+    def done(self) -> bool:
+        return self._task.done()
+
+
+class Windcode:
+    """Public asynchronous SDK client and runtime owner."""
+
+    def __init__(
+        self,
+        config: AppConfig,
+        *,
+        state_root: Path | None = None,
+    ) -> None:
+        self.config = config
+        self.state_root = (state_root or user_state_path("windcode")).expanduser().resolve()
+        self.transport_registry = TransportRegistry()
+        self.tool_registry: ToolRegistry | None = None
+        self._default_chain: list[str] = []
+        self._handles: set[RunHandle] = set()
+        self._entered = False
+
+    @classmethod
+    def open(
+        cls,
+        config: AppConfig | Mapping[str, Any] | None = None,
+        *,
+        state_root: Path | None = None,
+    ) -> Self:
+        parsed = config if isinstance(config, AppConfig) else AppConfig.model_validate(config or {})
+        return cls(parsed, state_root=state_root)
+
+    async def __aenter__(self) -> Self:
+        if self._entered:
+            raise RuntimeError("Windcode client is already open")
+        self._entered = True
+        self.state_root.mkdir(parents=True, exist_ok=True)
+        if self.config.providers:
+            self.transport_registry = TransportRegistry.from_config(self.config)
+            if self.config.primary_provider is not None:
+                self._default_chain = [
+                    self.config.primary_provider,
+                    *self.config.fallback_chain,
+                ]
+        self.tool_registry = create_builtin_registry(
+            shell_timeout=self.config.budgets.shell_timeout_seconds,
+        )
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        del exc_type, exc, traceback
+        await self.aclose()
+
+    def register_tool(self, tool: Tool, *, replace_existing: bool = False) -> None:
+        if self.tool_registry is None:
+            raise RuntimeError("register tools inside the Windcode async context")
+        self.tool_registry.register(tool, replace=replace_existing)
+
+    def register_transport(
+        self,
+        alias: str,
+        model: str,
+        transport: ModelTransport,
+        *,
+        replace_existing: bool = False,
+        primary: bool = False,
+    ) -> None:
+        self.transport_registry.register(alias, model, transport, replace=replace_existing)
+        if primary or not self._default_chain:
+            self._default_chain = [alias]
+
+    def _model_chain(self, requested: str | None) -> tuple[ModelTarget, ...]:
+        if requested is not None and requested in self.transport_registry.aliases:
+            return (self.transport_registry.get(requested),)
+        if not self._default_chain:
+            raise RuntimeError("no model transport is configured")
+        chain = tuple(self.transport_registry.get(alias) for alias in self._default_chain)
+        if requested is not None:
+            chain = (replace(chain[0], model=requested), *chain[1:])
+        return chain
+
+    def start_run(self, request: RunRequest) -> RunHandle:
+        if not self._entered or self.tool_registry is None:
+            raise RuntimeError("start runs inside the Windcode async context")
+        workspace = request.workspace.expanduser().resolve()
+        if not workspace.is_dir():
+            raise ValueError(f"workspace is not a directory: {workspace}")
+        sessions_root = self.state_root / "sessions"
+        existing_session = (
+            request.session_id is not None
+            and (sessions_root / request.session_id / "meta.json").exists()
+        )
+        if existing_session:
+            assert request.session_id is not None
+            session = SessionStore.open(sessions_root, request.session_id)
+        else:
+            session = SessionStore.create(sessions_root, request.session_id)
+        initial_messages: tuple[Message, ...] = ()
+        if existing_session and session.metadata.head_record_id is not None:
+            records = ancestor_chain(
+                session.load_records(),
+                session.metadata.head_record_id,
+            )
+            initial_messages = tuple(
+                message_from_dict(record.payload)
+                for record in records
+                if record.record_type == "conversation_message"
+            )
+        run_id = uuid4().hex
+        trace = TraceStore(
+            run_id,
+            root=self.state_root / "traces",
+            include_tool_arguments=self.config.trace.include_tool_arguments,
+        )
+        bus = EventBus(session, trace)
+        mode = (
+            PermissionMode(request.permission_mode)
+            if request.permission_mode is not None
+            else self.config.permission.mode
+        )
+        sandbox_status = detect_bubblewrap()
+        sandbox = (
+            BubblewrapSandbox(workspace, sandbox_status)
+            if self.config.sandbox.enabled and sandbox_status.available
+            else None
+        )
+        self.tool_registry.register(
+            ShellTool(
+                sandbox=sandbox,
+                default_timeout=self.config.budgets.shell_timeout_seconds,
+            ),
+            replace=True,
+        )
+        policy = PolicyEngine(
+            mode,
+            sandbox_enabled=self.config.sandbox.enabled,
+            sandbox_available=sandbox_status.available,
+        )
+        scheduler = ToolScheduler(self.tool_registry, policy)
+        instructions = load_instructions(workspace, workspace_root=workspace)
+        system_prompt = build_system_prompt(
+            workspace=workspace,
+            permission_mode=mode,
+            instructions=instructions,
+            tools=self.tool_registry,
+        )
+        budgets = RunBudgets(
+            max_model_steps=self.config.budgets.max_model_steps,
+            max_tool_calls=self.config.budgets.max_tool_calls,
+            max_runtime_seconds=self.config.budgets.max_runtime_seconds,
+        )
+        control = RunControl(budgets)
+        loop = AgentLoop(
+            session_id=session.metadata.session_id,
+            run_id=run_id,
+            model_chain=self._model_chain(request.model),
+            scheduler=scheduler,
+            control=control,
+            event_bus=bus,
+            system_prompt=system_prompt,
+            token_estimator=TokenEstimator(
+                self.config.context.window_tokens,
+                compaction_threshold=self.config.context.compaction_threshold,
+            ),
+            artifact_store=ArtifactStore(session.session_dir),
+            preserve_recent_turns=self.config.context.preserve_recent_turns,
+            max_tool_result_chars=self.config.context.max_tool_result_chars,
+        )
+        after_sequence = session.metadata.next_sequence - 1
+        task = asyncio.create_task(loop.run(request.prompt, workspace, initial_messages))
+        handle = RunHandle(task, bus, control, after_sequence=after_sequence)
+        self._handles.add(handle)
+        task.add_done_callback(lambda _task: self._handles.discard(handle))
+        return handle
+
+    def list_sessions(self) -> tuple[SessionMetadata, ...]:
+        sessions_root = self.state_root / "sessions"
+        if not sessions_root.exists():
+            return ()
+        sessions: list[SessionMetadata] = []
+        for path in sessions_root.iterdir():
+            if not path.is_dir() or not (path / "meta.json").is_file():
+                continue
+            sessions.append(SessionStore.open(sessions_root, path.name).metadata)
+        return tuple(sorted(sessions, key=lambda item: item.updated_at, reverse=True))
+
+    def rewind_session(self, session_id: str, record_id: str) -> EventRecord:
+        store = SessionStore.open(self.state_root / "sessions", session_id)
+        return create_branch(
+            store,
+            record_id,
+            "branch_point",
+            {"source_record_id": record_id},
+        )
+
+    async def aclose(self) -> None:
+        if not self._entered:
+            return
+        handles = tuple(self._handles)
+        await asyncio.gather(*(handle.cancel() for handle in handles))
+        await self.transport_registry.aclose()
+        self._entered = False
+
+
+__all__ = ["RunHandle", "Windcode"]

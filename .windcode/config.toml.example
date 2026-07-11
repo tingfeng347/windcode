@@ -1,0 +1,35 @@
+primary_provider = "primary"
+fallback_chain = ["backup"]
+
+[providers.primary]
+protocol = "openai_responses"
+model = "gpt-5.2-codex"
+api_key_env = "OPENAI_API_KEY"
+
+[providers.backup]
+protocol = "anthropic_messages"
+model = "claude-sonnet-4-5"
+api_key_env = "ANTHROPIC_API_KEY"
+
+[budgets]
+max_model_steps = 40
+max_tool_calls = 100
+max_runtime_seconds = 1800
+shell_timeout_seconds = 120
+
+[permission]
+mode = "default"
+
+[sandbox]
+enabled = true
+network_enabled = false
+
+[context]
+window_tokens = 128000
+compaction_threshold = 0.8
+preserve_recent_turns = 8
+max_tool_result_chars = 20000
+
+[trace]
+enabled = true
+include_tool_arguments = false

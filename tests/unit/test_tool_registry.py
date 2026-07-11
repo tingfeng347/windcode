@@ -1,0 +1,49 @@
+from pathlib import Path
+from typing import cast
+
+import pytest
+from pydantic import BaseModel, ConfigDict
+
+from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
+from windcode.tools import ToolRegistry
+
+
+class EchoInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str
+
+
+class EchoTool:
+    name = "echo"
+    description = "Echo text."
+    input_model = EchoInput
+    effects = frozenset({ToolEffect.READ})
+
+    async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
+        del context
+        return ToolResult(cast(EchoInput, arguments).text)
+
+
+def context(tmp_path: Path) -> ToolContext:
+    return ToolContext(tmp_path, "run", lambda: False)
+
+
+@pytest.mark.asyncio
+async def test_registers_schema_and_validates_arguments(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+
+    assert registry.schemas()[0].parameters["required"] == ["text"]
+    assert await registry.execute("echo", context(tmp_path), {"text": "hello"}) == ToolResult(
+        "hello"
+    )
+    invalid = await registry.execute("echo", context(tmp_path), {"unknown": True})
+    assert invalid.is_error
+    assert invalid.data["error"] == "invalid_arguments"
+
+
+def test_rejects_duplicate_names() -> None:
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register(EchoTool())
