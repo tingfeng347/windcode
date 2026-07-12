@@ -26,7 +26,10 @@ def is_stable_user_fact(text: str) -> bool:
 
 def has_explicit_memory_intent(text: str) -> bool:
     normalized = text.casefold()
-    return any(marker in normalized for marker in ("记住", "以后都", "remember"))
+    return any(
+        marker in normalized
+        for marker in ("记住", "以后都", "写入长期记忆", "加入长期记忆", "remember")
+    )
 
 
 def is_project_fact(text: str) -> bool:

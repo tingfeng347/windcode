@@ -63,6 +63,7 @@ class WindcodeApp(App[None]):
     BINDINGS: ClassVar[list[BindingType]] = [
         ("ctrl+c", "cancel_or_quit", "取消"),
         ("ctrl+q", "quit", "退出"),
+        ("ctrl+y", "copy_last_response", "复制回复"),
         Binding("shift+tab", "cycle_permission_mode", "切换权限模式", priority=True),
         Binding("backtab", "cycle_permission_mode", "切换权限模式", priority=True),
     ]
@@ -215,6 +216,20 @@ class WindcodeApp(App[None]):
         current = PermissionMode(self.permission_mode)
         self.permission_mode = modes[(modes.index(current) + 1) % len(modes)].value
         self._update_status("idle")
+
+    async def action_copy_last_response(self) -> None:
+        text = self.query_one("#chat-area", MessageStream).last_ai_text
+        if not text:
+            await self._show_system_message("没有可复制的内容", error=True)
+            return
+        try:
+            await self.copy_to_clipboard(text)
+            preview = text.replace("\n", " ")[:60]
+            await self._show_system_message(f"已复制到剪贴板: {preview}{'...' if len(text) > 60 else ''}")
+        except Exception:
+            await self._show_system_message(
+                "复制失败; 终端可能不支持 OSC 52 剪贴板, 试试 Shift+鼠标选择", error=True
+            )
 
     def _set_ui_mode(self, mode: Literal["welcome", "chat"]) -> None:
         self.ui_mode = mode

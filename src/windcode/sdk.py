@@ -703,9 +703,16 @@ class Windcode:
         run_memory = (
             MemoryService(self.state_root, workspace) if self.config.memory.enabled else None
         )
+        tool_memory_id: str | None = None
         if run_memory is not None:
 
             async def observe_memory_tool(action: str, details: dict[str, Any]) -> None:
+                nonlocal tool_memory_id
+                memory_id = details.get("memory_id")
+                if action in {"activated", "candidate_created", "already_exists"} and isinstance(
+                    memory_id, str
+                ):
+                    tool_memory_id = memory_id
                 await bus.publish(
                     MemoryEvent(
                         event_id=uuid4().hex,
@@ -713,6 +720,9 @@ class Windcode:
                         run_id=run_id,
                         turn=0,
                         action=action,
+                        memory_id=memory_id if isinstance(memory_id, str) else None,
+                        memory_kind=str(details.get("kind", "")) or None,
+                        scope=str(details.get("scope", "")) or None,
                         status=str(details.get("status", "")),
                         details=details,
                     ),
@@ -724,6 +734,19 @@ class Windcode:
                 run_memory,
                 observe_memory_tool,
                 max_chars=self.config.memory.recall_max_chars,
+                user_prompt=request.prompt,
+                source=MemorySource(session.metadata.session_id, run_id),
+                enabled_kinds=frozenset(
+                    kind
+                    for kind, enabled in {
+                        MemoryKind.USER_PROFILE: self.config.memory.user_profile_enabled,
+                        MemoryKind.PROJECT_KNOWLEDGE: self.config.memory.project_knowledge_enabled,
+                        MemoryKind.EXPERIENCE: self.config.memory.experience_enabled,
+                        MemoryKind.SOP: self.config.memory.sop_enabled,
+                        MemoryKind.REFERENCE: self.config.memory.reference_enabled,
+                    }.items()
+                    if enabled
+                ),
             )
         memory_context = ""
         if run_memory is not None:
@@ -855,8 +878,12 @@ class Windcode:
                 MemoryKind.REFERENCE: self.config.memory.reference_enabled,
             }
             explicit_experience_id: str | None = None
+            if tool_memory_id is not None:
+                tool_memory = run_memory.store.get(tool_memory_id)
+                if tool_memory.kind is MemoryKind.EXPERIENCE:
+                    explicit_experience_id = tool_memory_id
             intent_kind = classify_memory_intent(request.prompt)
-            if intent_kind is not None and enabled_kinds[intent_kind]:
+            if tool_memory_id is None and intent_kind is not None and enabled_kinds[intent_kind]:
                 project_fact = is_project_fact(request.prompt)
                 scope = (
                     MemoryScope.USER

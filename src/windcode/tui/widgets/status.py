@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from rich.text import Text as RichText
 from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Static
+
+from windcode.tui.permission_display import permission_label, permission_style
 
 
 class StatusBar(Horizontal):
@@ -20,12 +23,6 @@ class StatusBar(Horizontal):
         state: str,
         delegation: str | None = None,
     ) -> None:
-        permissions = {
-            "plan": "计划",
-            "default": "默认",
-            "accept_edits": "自动编辑",
-            "full_access": "完全授权",
-        }
         states = {
             "idle": "空闲",
             "running": "运行中",
@@ -34,9 +31,11 @@ class StatusBar(Horizontal):
             "failed": "失败",
             "cancelled": "已取消",
         }
-        self.query_one("#mode-label", Static).update(
-            f"  {states.get(state, state)} · {permissions.get(permission, permission)}"
-        )
+        mode_content = RichText()
+        mode_content.append(f"  {states.get(state, state)}", style="#5fa8e8")
+        mode_content.append(" · ", style="#88939b")
+        mode_content.append(permission_label(permission), style=permission_style(permission))
+        self.query_one("#mode-label", Static).update(mode_content)
         delegation_label = {"explicit": "显式", "proactive": "主动"}.get(
             delegation or "", delegation or ""
         )

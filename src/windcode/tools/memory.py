@@ -13,8 +13,13 @@ from windcode.memory import (
     MemoryRecord,
     MemoryScope,
     MemoryService,
+    MemorySource,
     MemoryStatus,
+    classify_memory_intent,
+    explicitly_always_project_fact,
+    has_explicit_memory_intent,
 )
+from windcode.memory.security import SensitiveMemoryError, validate_memory_text
 from windcode.tools.registry import ToolRegistry
 
 MemoryToolObserver = Callable[[str, dict[str, Any]], Awaitable[None]]
@@ -45,6 +50,14 @@ class MemoryGetInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     memory_id: str = Field(min_length=1, max_length=64)
+
+
+class MemoryWriteInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1, max_length=4_000)
+    kind: MemoryKind | None = None
+    scope: MemoryScope | None = None
 
 
 def _record_data(record: MemoryRecord, *, include_body: bool) -> dict[str, Any]:
@@ -217,16 +230,152 @@ class MemoryGetTool(_MemoryTool):
         return ToolResult(json.dumps(data, ensure_ascii=False), data=data)
 
 
+class MemoryWriteTool(_MemoryTool):
+    name = "memory_write"
+    description = (
+        "Write a long-term memory only when the current user explicitly asks to remember it. "
+        "User facts, project knowledge, and references become active; unverified experiences "
+        "and SOPs remain candidates. Never claim it was saved before this tool succeeds."
+    )
+    input_model = MemoryWriteInput
+    effects = frozenset({ToolEffect.OUTSIDE_WORKSPACE})
+
+    def __init__(
+        self,
+        service: MemoryService,
+        observer: MemoryToolObserver,
+        *,
+        max_chars: int,
+        user_prompt: str,
+        source: MemorySource,
+        enabled_kinds: frozenset[MemoryKind] | None = None,
+    ) -> None:
+        super().__init__(service, observer, max_chars=max_chars)
+        self.user_prompt = user_prompt
+        self.source = source
+        self.enabled_kinds = frozenset(MemoryKind) if enabled_kinds is None else enabled_kinds
+
+    @staticmethod
+    def _compact(text: str, limit: int) -> str:
+        compact = " ".join(text.split()).strip()
+        return compact if len(compact) <= limit else compact[: limit - 3].rstrip() + "..."
+
+    async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
+        del context
+        parsed = cast(MemoryWriteInput, arguments)
+        if not has_explicit_memory_intent(self.user_prompt):
+            return ToolResult(
+                "the current user did not explicitly request long-term memory storage",
+                is_error=True,
+                data={"error": "explicit_memory_intent_required"},
+            )
+        kind = parsed.kind or classify_memory_intent(self.user_prompt)
+        if kind is None:
+            return ToolResult(
+                "memory kind could not be determined",
+                is_error=True,
+                data={"error": "memory_kind_required"},
+            )
+        if kind not in self.enabled_kinds:
+            return ToolResult(
+                f"memory kind is disabled: {kind.value}",
+                is_error=True,
+                data={"error": "memory_kind_disabled", "kind": kind.value},
+            )
+        project_fact = kind is not MemoryKind.USER_PROFILE and (
+            kind is not MemoryKind.REFERENCE or parsed.scope is MemoryScope.PROJECT
+        )
+        scope = parsed.scope or (MemoryScope.PROJECT if project_fact else MemoryScope.USER)
+        if kind is MemoryKind.USER_PROFILE and scope is not MemoryScope.USER:
+            return ToolResult(
+                "user profile memories must use user scope",
+                is_error=True,
+                data={"error": "invalid_memory_scope"},
+            )
+        content = parsed.content.strip()
+        try:
+            validate_memory_text(content, self.user_prompt)
+        except SensitiveMemoryError as exc:
+            return ToolResult(str(exc), is_error=True, data={"error": "sensitive_memory_rejected"})
+        normalized = " ".join(content.casefold().split())
+        existing = next(
+            (
+                record
+                for record in self.service.store.list(project_id=self.service.project_id)
+                if record.kind is kind
+                and record.scope is scope
+                and " ".join(record.body.casefold().split()) == normalized
+            ),
+            None,
+        )
+        if existing is not None:
+            data = {
+                "memory_id": existing.memory_id,
+                "status": existing.status.value,
+                "kind": existing.kind.value,
+                "scope": existing.scope.value,
+                "result": "already_exists",
+            }
+            await self._observe("already_exists", data)
+            return ToolResult(json.dumps(data, ensure_ascii=False), data=data)
+        activation = None
+        if kind is MemoryKind.PROJECT_KNOWLEDGE:
+            activation = (
+                MemoryActivation.ALWAYS
+                if explicitly_always_project_fact(self.user_prompt)
+                else MemoryActivation.MANUAL
+            )
+        candidate = self.service.create_candidate(
+            kind=kind,
+            scope=scope,
+            title=self._compact(content, 80),
+            summary=self._compact(content, 240),
+            body=content,
+            source=self.source,
+            evidence=(
+                () if kind in {MemoryKind.EXPERIENCE, MemoryKind.SOP} else (self.user_prompt,)
+            ),
+            confidence=0.8,
+            activation=activation,
+        )
+        if kind in {MemoryKind.EXPERIENCE, MemoryKind.SOP}:
+            record = candidate
+            action = "candidate_created"
+        else:
+            record = self.service.store.transition(candidate.memory_id, MemoryStatus.ACTIVE)
+            action = "activated"
+        data = {
+            "memory_id": record.memory_id,
+            "status": record.status.value,
+            "kind": record.kind.value,
+            "scope": record.scope.value,
+            "result": "stored",
+        }
+        await self._observe(action, data)
+        return ToolResult(json.dumps(data, ensure_ascii=False), data=data)
+
+
 def register_memory_tools(
     registry: ToolRegistry,
     service: MemoryService,
     observer: MemoryToolObserver,
     *,
     max_chars: int,
+    user_prompt: str,
+    source: MemorySource,
+    enabled_kinds: frozenset[MemoryKind] | None = None,
 ) -> None:
     for tool in (
         MemorySearchTool(service, observer, max_chars=max_chars),
         MemoryListTool(service, observer, max_chars=max_chars),
         MemoryGetTool(service, observer, max_chars=max_chars),
+        MemoryWriteTool(
+            service,
+            observer,
+            max_chars=max_chars,
+            user_prompt=user_prompt,
+            source=source,
+            enabled_kinds=enabled_kinds,
+        ),
     ):
         registry.register(tool)

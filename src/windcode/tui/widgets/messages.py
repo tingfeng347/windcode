@@ -54,6 +54,7 @@ class MessageStream(VerticalScroll):
         self._thinking_active = False
         self._finished_thinking_seconds = 0.0
         self._waiting_for_next_model = False
+        self._last_ai_text = ""
 
     async def _mount_if_attached(self, widget: Widget) -> None:
         if self.is_attached:
@@ -171,6 +172,7 @@ class MessageStream(VerticalScroll):
             return
         if self._streaming_label is not None and self._streaming_label.is_attached:
             await self._streaming_label.remove()
+        self._last_ai_text = self._accumulated_text
         if self._ai_row.is_attached:
             await self._ai_row.mount(
                 Horizontal(
@@ -215,6 +217,10 @@ class MessageStream(VerticalScroll):
         if self._thinking_paused_at is not None:
             paused += now - self._thinking_paused_at
         return max(0.0, now - self._started_at - paused)
+
+    @property
+    def last_ai_text(self) -> str:
+        return self._last_ai_text
 
     def pause_thinking(self, key: str) -> None:
         if not self._thinking_active or key in self._thinking_pause_keys:

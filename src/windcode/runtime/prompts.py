@@ -89,6 +89,10 @@ def build_system_prompt(
     if memory_enabled:
         memory_policy = (
             "\n\n## 长期记忆主动查询\n"
+            "当用户明确要求记住、写入长期记忆或表达等价意图时, 必须调用 "
+            "memory_write。只有工具返回 stored 或 already_exists 后才能声称已经记住; "
+            "工具失败、未调用或仅计划保存时不得声称写入成功。不得擅自保存普通对话、"
+            "临时状态、推测或工具输出。"
             "当用户明确要求查看、列出、搜索、核对或回忆长期记忆时, 必须调用 memory_list、"
             "memory_search 或 memory_get, 并基于工具实际结果回答。宽泛的‘看看长期记忆’调用 "  # noqa: RUF001
             "memory_list; 带主题的请求调用 memory_search; 查看单条详情调用 memory_get。"
@@ -114,6 +118,7 @@ def build_system_prompt(
         "明确的编码任务一旦开始, 持续执行到任务完成、取消、预算耗尽或不可恢复错误.\n"
         "所有工具错误都应作为结果处理; 不要虚构文件内容、命令结果或测试通过状态.\n"
         "完成时必须基于实际工具记录汇总文件变化、验证命令、退出码和失败项.\n\n"
+        "不要输出任何的emoji、表情符号或非 ASCII 字符"
         f"工作区: {workspace.resolve()}\n"
         f"权限模式: {permission_mode.value}. 模型不得自行扩大权限或切换模式.\n\n"
         f"## 可用工具\n{tool_lines or '- 无'}\n\n"

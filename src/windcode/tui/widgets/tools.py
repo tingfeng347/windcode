@@ -17,6 +17,7 @@ TOOL_LABELS = {
     "memory_search": "检索长期记忆",
     "memory_list": "列出长期记忆",
     "memory_get": "读取长期记忆",
+    "memory_write": "写入长期记忆",
 }
 
 

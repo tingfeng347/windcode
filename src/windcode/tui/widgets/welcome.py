@@ -9,6 +9,8 @@ from textual.events import Resize
 from textual.timer import Timer
 from textual.widgets import Static
 
+from windcode.tui.permission_display import permission_label, permission_style
+
 WIDE_LOGO = r"""
              _           _
 __      _____(_)_ __   __| | ___ ___   ___  ___
@@ -136,16 +138,10 @@ class WelcomeView(Vertical):
         return output
 
     def _context_content(self) -> RichText:
-        permissions = {
-            "plan": "计划",
-            "default": "默认",
-            "accept_edits": "自动编辑",
-            "full_access": "完全授权",
-        }
         context = RichText(justify="center")
         context.append(self._model, style="bold color(252)")
         context.append("  ·  ", style="color(240)")
-        context.append(permissions.get(self._permission, self._permission), style="color(179)")
+        context.append(permission_label(self._permission), style=permission_style(self._permission))
         context.append("  ·  ", style="color(240)")
         context.append(f"沙箱{'开启' if self._sandbox else '关闭'}", style="color(246)")
         context.append("\n")
