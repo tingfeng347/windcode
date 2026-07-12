@@ -30,6 +30,11 @@ class ChatInput(TextArea):
             super().__init__()
             self.prefix = prefix
 
+    class SkillMenuUpdate(Message):
+        def __init__(self, prefix: str | None) -> None:
+            super().__init__()
+            self.prefix = prefix
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.cursor_blink = False
@@ -85,8 +90,11 @@ class ChatInput(TextArea):
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         event.stop()
         value = self.text
-        if value.startswith("/") and " " not in value and "\n" not in value:
+        single_token = " " not in value and "\n" not in value
+        if value.startswith("/") and single_token:
             self.post_message(self.SlashMenuUpdate(value))
+        elif value.startswith("$") and single_token:
+            self.post_message(self.SkillMenuUpdate(value))
         else:
             self.post_message(self.SlashMenuUpdate(None))
 

@@ -14,6 +14,20 @@ class CommandDefinition:
         return f"/{self.name}"
 
 
+@dataclass(frozen=True, slots=True)
+class SkillDefinition:
+    name: str
+    description: str
+    argument_hint: str = ""
+
+    @property
+    def value(self) -> str:
+        return f"${self.name}"
+
+
+CompletionDefinition = CommandDefinition | SkillDefinition
+
+
 COMMAND_CATALOG = (
     CommandDefinition("new", "新建会话"),
     CommandDefinition("resume", "恢复已有会话", "[会话 ID 或短 ID]"),
@@ -55,6 +69,15 @@ def complete_commands(
     name_prefix = prefix[1:].casefold()
     catalog = (*COMMAND_CATALOG, *extra)
     return tuple(command for command in catalog if command.name.startswith(name_prefix))
+
+
+def complete_skills(
+    prefix: str, skills: tuple[SkillDefinition, ...]
+) -> tuple[SkillDefinition, ...]:
+    if prefix != prefix.strip() or not prefix.startswith("$") or " " in prefix or "\n" in prefix:
+        return ()
+    name_prefix = prefix[1:].casefold()
+    return tuple(skill for skill in skills if skill.name.casefold().startswith(name_prefix))
 
 
 def parse_command(value: str, extra_names: frozenset[str] = frozenset()) -> SlashCommand:

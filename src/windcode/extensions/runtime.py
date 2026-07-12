@@ -33,7 +33,7 @@ from windcode.extensions.mcp.runtime import McpRuntime
 from windcode.extensions.mcp.tools import McpCapabilityService
 from windcode.extensions.models import CapabilityKind, ExtensionSnapshot
 from windcode.extensions.skills.loader import SkillLoader
-from windcode.extensions.skills.tools import SkillCatalog
+from windcode.extensions.skills.tools import SkillActivationResult, SkillCatalog, SkillRuntime
 from windcode.policy.models import PolicyDecision, PolicyRequest
 from windcode.runtime.scheduler import PolicyConstraints, ScheduledCall
 from windcode.sessions.artifacts import ArtifactStore
@@ -65,7 +65,7 @@ class RunExtensions:
     snapshot: ExtensionSnapshot
     session_id: str
     run_id: str
-    skills: SkillCatalog
+    skills: SkillRuntime
     mcp: McpRuntime
     mcp_capabilities: McpCapabilityService
     hooks: HookDispatcher
@@ -146,7 +146,7 @@ class RunExtensions:
             snapshot,
             session_id,
             run_id,
-            SkillCatalog(snapshot, SkillLoader(max_content_bytes=max_content_bytes)),
+            SkillRuntime(SkillCatalog(snapshot, SkillLoader(max_content_bytes=max_content_bytes))),
             runtime,
             McpCapabilityService(
                 runtime,
@@ -318,15 +318,15 @@ class RunExtensions:
             )
         )
 
-    async def activate_skill(self, selector: str) -> None:
-        content, message = self.skills.load(selector)
-        self.hooks.executor.context_messages.append(message)
+    async def activate_skill(self, selector: str) -> SkillActivationResult:
+        result = self.skills.activate(selector)
         await self._emit(
             "skill_loaded",
-            extension_id=content.name,
-            source_id=content.source_id,
-            status="loaded",
+            extension_id=result.name,
+            source_id=result.source_id,
+            status="loaded" if result.loaded else "already_loaded",
         )
+        return result
 
     async def activate_prompt(self, selector: str) -> None:
         await self.mcp_capabilities.activate_prompt(selector)
@@ -354,6 +354,7 @@ class RunExtensions:
 
     def drain_context(self) -> tuple[SourcedContextMessage, ...]:
         return (
+            *self.skills.drain_context(),
             *self.hooks.executor.drain_context(),
             *self.mcp_capabilities.drain_context(),
         )

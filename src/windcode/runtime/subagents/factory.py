@@ -10,6 +10,15 @@ from windcode.config import AppConfig, PermissionMode
 from windcode.context import TokenEstimator
 from windcode.domain.subagents import SubagentRecord, SubagentTaskKind
 from windcode.domain.tools import ToolContext
+from windcode.extensions import ExtensionSnapshot
+from windcode.extensions.events import extension_event
+from windcode.extensions.skills.loader import SkillLoader
+from windcode.extensions.skills.tools import (
+    SkillActivationResult,
+    SkillCatalog,
+    SkillRuntime,
+    register_skill_tools,
+)
 from windcode.instructions import load_instructions
 from windcode.observability import TraceStore
 from windcode.policy import ApprovalChoice, PolicyDecision, PolicyEngine, PolicyRequest
@@ -144,11 +153,13 @@ class ChildRuntimeFactory:
         state_root: Path,
         parent_tools: ToolRegistry,
         model_chain: Callable[[str | None], tuple[ModelTarget, ...]],
+        extension_snapshot: ExtensionSnapshot | None = None,
     ) -> None:
         self.config = config
         self.state_root = state_root
         self.parent_tools = parent_tools
         self.model_chain = model_chain
+        self.extension_snapshot = extension_snapshot or ExtensionSnapshot(0, "empty")
 
     def create(
         self,
@@ -214,6 +225,33 @@ class ChildRuntimeFactory:
                 max_total_mb=self.config.trace.max_total_mb,
             ),
         )
+        skill_runtime = SkillRuntime(
+            SkillCatalog(
+                self.extension_snapshot,
+                SkillLoader(max_content_bytes=self.config.extensions.max_content_bytes),
+            )
+        )
+
+        async def activate_skill(selector: str) -> SkillActivationResult:
+            result = skill_runtime.activate(selector)
+            await event_bus.publish(
+                extension_event(
+                    event_id=uuid4().hex,
+                    session_id=child_session_id,
+                    run_id=child_run_id,
+                    turn=0,
+                    action="skill_loaded",
+                    snapshot_generation=self.extension_snapshot.generation,
+                    extension_id=result.name,
+                    source_id=result.source_id,
+                    status="loaded" if result.loaded else "already_loaded",
+                ),
+                durable=True,
+            )
+            return result
+
+        if {"search_skills", "load_skill"} <= names:
+            register_skill_tools(registry, skill_runtime, activate_skill, replace=True)
         scheduler = ChildToolScheduler(
             registry,
             PolicyEngine(
@@ -235,6 +273,7 @@ class ChildRuntimeFactory:
             instructions=instructions,
             tools=registry,
             is_subagent=True,
+            skills=(skill_runtime.search() if "load_skill" in registry.names() else ()),
             mcp_direct_servers=tuple(
                 name.split("__", 1)[0] for name in registry.names() if "__" in name
             ),
@@ -260,6 +299,7 @@ class ChildRuntimeFactory:
             artifact_store=ArtifactStore(session.session_dir),
             preserve_recent_turns=self.config.context.preserve_recent_turns,
             max_tool_result_chars=self.config.context.max_tool_result_chars,
+            sourced_context_provider=skill_runtime.drain_context,
         )
         return ChildRuntime(
             child_record,

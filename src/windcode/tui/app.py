@@ -31,8 +31,10 @@ from windcode.sdk import RunHandle, Windcode
 from windcode.tui.commands import (
     COMMANDS,
     CommandDefinition,
+    SkillDefinition,
     SlashCommand,
     complete_commands,
+    complete_skills,
     parse_command,
 )
 from windcode.tui.widgets import (
@@ -213,13 +215,6 @@ class WindcodeApp(App[None]):
         current = PermissionMode(self.permission_mode)
         self.permission_mode = modes[(modes.index(current) + 1) % len(modes)].value
         self._update_status("idle")
-        labels = {
-            PermissionMode.PLAN.value: "计划",
-            PermissionMode.DEFAULT.value: "默认",
-            PermissionMode.ACCEPT_EDITS.value: "自动编辑",
-            PermissionMode.FULL_ACCESS.value: "完全授权",
-        }
-        await self._show_system_message(f"权限模式: {labels[self.permission_mode]}")
 
     def _set_ui_mode(self, mode: Literal["welcome", "chat"]) -> None:
         self.ui_mode = mode
@@ -404,6 +399,15 @@ class WindcodeApp(App[None]):
             if event.prefix is not None
             else ()
         )
+        menu.show_commands(matches) if matches else menu.hide()
+
+    @on(ChatInput.SkillMenuUpdate)
+    def update_skill_menu(self, event: ChatInput.SkillMenuUpdate) -> None:
+        menu = self.query_one("#command-menu", CommandMenu)
+        skills = tuple(
+            SkillDefinition(item.name, item.description) for item in self.client.search_skills()
+        )
+        matches = complete_skills(event.prefix, skills) if event.prefix is not None else ()
         menu.show_commands(matches) if matches else menu.hide()
 
     def _extension_command_definitions(self) -> tuple[CommandDefinition, ...]:
@@ -740,7 +744,6 @@ class WindcodeApp(App[None]):
             except ValueError as exc:
                 raise ValueError(f"未知权限模式: {command.arguments[0]}") from exc
             self._update_status("idle")
-            await self._show_system_message(f"权限模式: {self.permission_mode}")
         elif command.name == "model":
             if active:
                 raise ValueError("任务运行期间不能切换模型")

@@ -3,11 +3,11 @@ from __future__ import annotations
 from rich.markup import escape
 from textual.widgets import Static
 
-from windcode.tui.commands import CommandDefinition
+from windcode.tui.commands import CompletionDefinition
 
 
 class CommandMenu(Static):
-    """Keyboard-driven slash command candidates shown above the prompt."""
+    """Keyboard-driven command and Skill candidates shown above the prompt."""
 
     visible_items = 8
 
@@ -20,7 +20,7 @@ class CommandMenu(Static):
         disabled: bool = False,
     ) -> None:
         super().__init__("", name=name, id=id, classes=classes, disabled=disabled)
-        self._items: tuple[CommandDefinition, ...] = ()
+        self._items: tuple[CompletionDefinition, ...] = ()
         self._cursor = 0
         self.display = False
 
@@ -29,14 +29,14 @@ class CommandMenu(Static):
         return bool(self.display and self._items)
 
     @property
-    def items(self) -> tuple[CommandDefinition, ...]:
+    def items(self) -> tuple[CompletionDefinition, ...]:
         return self._items
 
     @property
     def cursor(self) -> int:
         return self._cursor
 
-    def show_commands(self, items: tuple[CommandDefinition, ...]) -> None:
+    def show_commands(self, items: tuple[CompletionDefinition, ...]) -> None:
         if not items:
             self.hide()
             return

@@ -4,7 +4,7 @@ from collections.abc import Callable
 from time import monotonic
 
 from rich.text import Text as RichText
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Markdown, Static
@@ -69,10 +69,13 @@ class MessageStream(VerticalScroll):
             self.call_after_refresh(self.scroll_end, animate=False)
 
     async def add_ai_message(self, text: str) -> None:
-        prefix = Static(RichText("● ", style="bold color(99)"), classes="message ai-prefix")
-        row = Vertical(
-            prefix,
+        segment = Horizontal(
+            Static(RichText("●", style="bold color(99)"), classes="ai-prefix"),
             Markdown(text, classes="message ai-message"),
+            classes="ai-segment",
+        )
+        row = Vertical(
+            segment,
             classes="ai-row",
         )
         await self._mount_if_attached(row)
@@ -170,8 +173,11 @@ class MessageStream(VerticalScroll):
             await self._streaming_label.remove()
         if self._ai_row.is_attached:
             await self._ai_row.mount(
-                Static(RichText("● ", style="bold color(99)"), classes="message ai-prefix"),
-                Markdown(self._accumulated_text, classes="message ai-message"),
+                Horizontal(
+                    Static(RichText("●", style="bold color(99)"), classes="ai-prefix"),
+                    Markdown(self._accumulated_text, classes="message ai-message"),
+                    classes="ai-segment",
+                )
             )
         self._streaming_label = None
         self._accumulated_text = ""

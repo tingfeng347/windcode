@@ -4,9 +4,19 @@ from dataclasses import dataclass
 
 from windcode.domain.subagents import SubagentRole, SubagentTaskKind
 
-_READ_TOOLS = frozenset({"read_file", "glob", "grep", "shell"})
+_READ_TOOLS = frozenset({"read_file", "glob", "grep", "shell", "search_skills", "load_skill"})
 _WRITE_TOOLS = frozenset(
-    {"read_file", "write_file", "edit_file", "apply_patch", "glob", "grep", "shell"}
+    {
+        "read_file",
+        "write_file",
+        "edit_file",
+        "apply_patch",
+        "glob",
+        "grep",
+        "shell",
+        "search_skills",
+        "load_skill",
+    }
 )
 
 

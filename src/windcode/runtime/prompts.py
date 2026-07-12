@@ -34,7 +34,13 @@ def build_system_prompt(
         skill_lines = "\n".join(
             f"- ${item.name}: {item.description} [source: {item.source_id}]" for item in skills
         )
-        extension_sections += f"\n\n## Agent Skills\n{skill_lines}"
+        extension_sections += (
+            f"\n\n## Agent Skills\n{skill_lines}\n"
+            "需要某个明确匹配的 Skill 时直接调用 load_skill, 不确定时最多调用一次 "
+            "search_skills 后选择准确名称加载。不得尝试加载列表之外、未启用或未信任的 Skill; "
+            "同一 Skill 不得重复加载。用户以 $name 显式选择的 Skill 已由运行时加载, "
+            "无需再次调用 load_skill。"
+        )
     if mcp_direct_servers:
         server_lines = "\n".join(f"- {server_id}" for server_id in sorted(mcp_direct_servers))
         extension_sections += (

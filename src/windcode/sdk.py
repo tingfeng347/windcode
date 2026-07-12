@@ -47,6 +47,12 @@ from windcode.extensions.models import (
 from windcode.extensions.plugins.installer import InstallResult
 from windcode.extensions.runtime import RunExtensions
 from windcode.extensions.service import ExtensionService
+from windcode.extensions.skills.loader import SkillLoader
+from windcode.extensions.skills.tools import (
+    SkillCatalog,
+    SkillSearchResult,
+    register_skill_tools,
+)
 from windcode.extensions.state import ExtensionStateStore, ManagementAuditRecord
 from windcode.instructions import load_instructions
 from windcode.memory import (
@@ -369,6 +375,14 @@ class Windcode:
     ) -> tuple[CommandRoute, ...]:
         return self._extensions().command_routes(reserved=reserved)
 
+    def search_skills(self, query: str = "") -> tuple[SkillSearchResult, ...]:
+        """Return enabled, trusted, unshadowed Skills from the current snapshot."""
+        catalog = SkillCatalog(
+            self.extension_snapshot,
+            SkillLoader(max_content_bytes=self.config.extensions.max_content_bytes),
+        )
+        return catalog.search(query)
+
     def extension_audit(self) -> tuple[ManagementAuditRecord, ...]:
         return self._extensions().audit_records
 
@@ -645,6 +659,7 @@ class Windcode:
             else None
         )
         run_registry = self.tool_registry.clone()
+        register_skill_tools(run_registry, run_extensions.skills, run_extensions.activate_skill)
         register_mcp_status_tool(
             run_registry,
             extension_snapshot.capabilities,
@@ -732,6 +747,7 @@ class Windcode:
             state_root=self.state_root,
             parent_tools=child_tools,
             model_chain=lambda model: self._model_chain(model or request.model),
+            extension_snapshot=extension_snapshot,
         )
         coordinator = SubagentCoordinator(
             parent_session_id=session.metadata.session_id,

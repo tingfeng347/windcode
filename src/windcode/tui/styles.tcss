@@ -97,10 +97,21 @@ Screen {
     padding: 0 2;
 }
 
-.ai-prefix {
-    height: 1;
-    color: #876fff;
+.ai-segment {
+    width: 100%;
+    height: auto;
     padding: 0 2;
+}
+
+.ai-segment .ai-prefix {
+    width: 2;
+    height: auto;
+    color: #876fff;
+}
+
+.ai-segment .ai-message {
+    width: 1fr;
+    padding: 0;
 }
 
 .ai-message MarkdownFence {

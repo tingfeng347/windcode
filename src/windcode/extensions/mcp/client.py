@@ -148,6 +148,7 @@ class McpClient:
                         streamable_http_client(
                             self.definition.url,
                             http_client=http_client,
+                            terminate_on_close=False,
                         )
                     )
                     read_stream, write_stream, _ = streams
