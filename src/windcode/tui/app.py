@@ -122,6 +122,13 @@ class WindcodeApp(App[None]):
                 return provider.model
         return "按配置"
 
+    def _model_setup_message(self) -> str | None:
+        if self.client.transport_registry.aliases:
+            return None
+        if self.config.providers:
+            return "模型 Provider 尚未连接, 请检查 API Key 或重新配置 Provider"
+        return "尚未配置模型 Provider, 请先连接模型后再开始任务"
+
     def _make_banner(self) -> RichText:
         banner = RichText()
         banner.append("▣ ", style="bold color(75)")
@@ -172,6 +179,8 @@ class WindcodeApp(App[None]):
         self.set_class(self.size.width < 60, "narrow")
         self.query_one("#chat-input", ChatInput).focus()
         self._update_status("loading MCP" if self.client.required_mcp_loading else "idle")
+        if setup_message := self._model_setup_message():
+            self.query_one("#welcome-view", WelcomeView).show_notice(setup_message)
         if self.client.required_mcp_loading:
             self.query_one("#welcome-view", WelcomeView).start_mcp_loading()
             self.run_worker(self._load_required_mcp(), group="mcp-startup", exclusive=True)
@@ -188,7 +197,7 @@ class WindcodeApp(App[None]):
             return
         self.query_one("#welcome-view", WelcomeView).stop_mcp_loading()
         self._update_status("idle")
-        await self._show_system_message("MCP 服务已加载")
+        await self._show_system_message(self._model_setup_message() or "MCP 服务已加载")
 
     def on_resize(self, event: events.Resize) -> None:
         self.set_class(event.size.width < 60, "narrow")
@@ -230,7 +239,7 @@ class WindcodeApp(App[None]):
             await self._show_system_message("没有可复制的内容", error=True)
             return
         try:
-            await self.copy_to_clipboard(text)
+            self.copy_to_clipboard(text)
             preview = text.replace("\n", " ")[:60]
             await self._show_system_message(
                 f"已复制到剪贴板: {preview}{'...' if len(text) > 60 else ''}"
@@ -458,6 +467,10 @@ class WindcodeApp(App[None]):
         await self._start_prompt(value)
 
     async def _start_prompt(self, value: str) -> None:
+        if setup_message := self._model_setup_message():
+            await self._show_system_message(setup_message, error=True)
+            await self._open_provider_manager()
+            return
         if self.handle is not None and not self.handle.done:
             self.prompt_queue.append(value)
             self._update_status(f"运行中 · 队列 {len(self.prompt_queue)}")
@@ -1006,7 +1019,7 @@ class WindcodeApp(App[None]):
         # If the user has selected text, copy it first instead of canceling.
         selected = self.screen.get_selected_text()
         if selected:
-            await self.copy_to_clipboard(selected)
+            self.copy_to_clipboard(selected)
             self.screen.clear_selection()
             return
         if self.handle is not None and not self.handle.done:
