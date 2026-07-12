@@ -14,6 +14,9 @@ TOOL_LABELS = {
     "grep": "搜索文本",
     "shell": "执行命令",
     "ask_user": "询问用户",
+    "memory_search": "检索长期记忆",
+    "memory_list": "列出长期记忆",
+    "memory_get": "读取长期记忆",
 }
 
 

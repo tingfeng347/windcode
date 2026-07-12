@@ -55,10 +55,11 @@ from windcode.memory import (
     MemoryService,
     MemorySource,
     MemoryStatus,
-    has_explicit_memory_intent,
+    assess_experience,
+    classify_memory_intent,
     is_project_fact,
-    is_stable_user_fact,
     refine_memory,
+    should_assess_experience,
 )
 from windcode.observability import DynamicRedactor, TraceStore
 from windcode.policy import PolicyEngine, PolicyRequest
@@ -82,7 +83,12 @@ from windcode.sessions import (
     ancestor_chain,
     create_branch,
 )
-from windcode.tools import ToolRegistry, add_subagent_tools, create_builtin_registry
+from windcode.tools import (
+    ToolRegistry,
+    add_subagent_tools,
+    create_builtin_registry,
+    register_memory_tools,
+)
 from windcode.tools.shell import ShellTool
 from windcode.worktrees import WorktreeManager
 
@@ -597,6 +603,28 @@ class Windcode:
         run_memory = (
             MemoryService(self.state_root, workspace) if self.config.memory.enabled else None
         )
+        if run_memory is not None:
+
+            async def observe_memory_tool(action: str, details: dict[str, Any]) -> None:
+                await bus.publish(
+                    MemoryEvent(
+                        event_id=uuid4().hex,
+                        session_id=session.metadata.session_id,
+                        run_id=run_id,
+                        turn=0,
+                        action=action,
+                        status=str(details.get("status", "")),
+                        details=details,
+                    ),
+                    durable=True,
+                )
+
+            register_memory_tools(
+                run_registry,
+                run_memory,
+                observe_memory_tool,
+                max_chars=self.config.memory.recall_max_chars,
+            )
         memory_context = ""
         if run_memory is not None:
             memory_context = run_memory.recall(
@@ -661,6 +689,7 @@ class Windcode:
                 mcp_direct_servers=direct_servers,
                 mcp_search_servers=search_servers,
                 mcp_unavailable_servers=unavailable_mcp_servers,
+                memory_enabled=run_memory is not None,
             )
             if memory_context:
                 prompt += f"\n\n{memory_context}"
@@ -718,64 +747,128 @@ class Windcode:
                 or run_memory is None
             ):
                 return
-            if has_explicit_memory_intent(request.prompt) or is_stable_user_fact(request.prompt):
+            enabled_kinds = {
+                MemoryKind.USER_PROFILE: self.config.memory.user_profile_enabled,
+                MemoryKind.PROJECT_KNOWLEDGE: self.config.memory.project_knowledge_enabled,
+                MemoryKind.EXPERIENCE: self.config.memory.experience_enabled,
+                MemoryKind.REFERENCE: self.config.memory.reference_enabled,
+            }
+            explicit_experience_id: str | None = None
+            intent_kind = classify_memory_intent(request.prompt)
+            if intent_kind is not None and enabled_kinds[intent_kind]:
                 project_fact = is_project_fact(request.prompt)
-                kind = MemoryKind.PROJECT_KNOWLEDGE if project_fact else MemoryKind.USER_PROFILE
+                scope = (
+                    MemoryScope.USER
+                    if intent_kind is MemoryKind.USER_PROFILE
+                    or (intent_kind is MemoryKind.REFERENCE and not project_fact)
+                    else MemoryScope.PROJECT
+                )
                 refined = await refine_memory(
                     model_chain[0],
                     text=request.prompt,
-                    kind=kind,
+                    kind=intent_kind,
                     max_output_tokens=self.config.memory.extraction_max_output_tokens,
                 )
                 candidate = run_memory.create_candidate(
-                    kind=kind,
-                    scope=MemoryScope.PROJECT if project_fact else MemoryScope.USER,
+                    kind=intent_kind,
+                    scope=scope,
                     title=refined.title,
                     summary=refined.summary,
                     body=refined.body,
                     source=MemorySource(session.metadata.session_id, run_id),
                     tags=refined.tags,
-                    evidence=(f"用户原话: {request.prompt}",),
+                    evidence=(
+                        ()
+                        if intent_kind is MemoryKind.EXPERIENCE
+                        else (f"用户原话: {request.prompt}",)
+                    ),
                     confidence=0.8,
                 )
-                activated = run_memory.store.transition(candidate.memory_id, MemoryStatus.ACTIVE)
+                if intent_kind is MemoryKind.EXPERIENCE:
+                    explicit_experience_id = candidate.memory_id
+                    saved = candidate
+                    action = "candidate_created"
+                    policy = "explicit_unverified_experience"
+                else:
+                    saved = run_memory.store.transition(candidate.memory_id, MemoryStatus.ACTIVE)
+                    action = "activated"
+                    policy = "explicit_or_stable_fact"
                 await bus.publish(
                     MemoryEvent(
                         event_id=uuid4().hex,
                         session_id=session.metadata.session_id,
                         run_id=run_id,
                         turn=0,
-                        action="activated",
-                        memory_id=activated.memory_id,
-                        memory_kind=activated.kind.value,
-                        scope=activated.scope.value,
-                        status=activated.status.value,
-                        details={"policy": "stable_fact_auto_commit"},
+                        action=action,
+                        memory_id=saved.memory_id,
+                        memory_kind=saved.kind.value,
+                        scope=saved.scope.value,
+                        status=saved.status.value,
+                        details={"policy": policy},
                     ),
                     durable=True,
                 )
-            if self.config.memory.experience_enabled and result.verification:
-                experience_text = (result.final_text or request.prompt)[
-                    : self.config.memory.extraction_max_chars
-                ]
-                refined = await refine_memory(
+            if self.config.memory.experience_enabled and should_assess_experience(
+                status=result.status,
+                changed_files=result.changed_files,
+                verification=result.verification,
+            ):
+                experience_text = (
+                    f"用户请求:\n{request.prompt}\n\n"
+                    f"变更文件:\n{chr(10).join(result.changed_files)}\n\n"
+                    f"任务结果:\n{result.final_text}"
+                )[: self.config.memory.extraction_max_chars]
+                assessment = await assess_experience(
                     model_chain[0],
                     text=experience_text,
-                    kind=MemoryKind.EXPERIENCE,
                     evidence=result.verification,
                     max_output_tokens=self.config.memory.extraction_max_output_tokens,
                 )
-                experience = run_memory.create_candidate(
-                    kind=MemoryKind.EXPERIENCE,
-                    scope=MemoryScope.PROJECT,
-                    title=refined.title,
-                    summary=refined.summary,
-                    body=refined.body,
-                    source=MemorySource(session.metadata.session_id, run_id),
-                    tags=refined.tags,
-                    evidence=result.verification,
-                    confidence=0.7,
+                if not assessment.should_store or assessment.memory is None:
+                    return
+                refined = assessment.memory
+                duplicates = tuple(
+                    record
+                    for record in run_memory.store.list(
+                        status=MemoryStatus.ACTIVE,
+                        project_id=run_memory.project_id,
+                    )
+                    if record.kind is MemoryKind.EXPERIENCE
+                    and (
+                        record.title.casefold() == refined.title.casefold()
+                        or record.summary.casefold() == refined.summary.casefold()
+                    )
                 )
+                if duplicates:
+                    existing = duplicates[0]
+                    if explicit_experience_id is not None:
+                        run_memory.store.delete(explicit_experience_id)
+                    evidence = tuple(dict.fromkeys((*existing.evidence, *result.verification)))
+                    run_memory.store.update(existing.memory_id, evidence=evidence)
+                    run_memory.store.record_outcome(existing.memory_id, success=True)
+                    return
+                if explicit_experience_id is not None:
+                    experience = run_memory.store.update(
+                        explicit_experience_id,
+                        title=refined.title,
+                        summary=refined.summary,
+                        body=refined.body,
+                        tags=refined.tags,
+                        evidence=result.verification,
+                        confidence=0.8,
+                    )
+                else:
+                    experience = run_memory.create_candidate(
+                        kind=MemoryKind.EXPERIENCE,
+                        scope=MemoryScope.PROJECT,
+                        title=refined.title,
+                        summary=refined.summary,
+                        body=refined.body,
+                        source=MemorySource(session.metadata.session_id, run_id),
+                        tags=refined.tags,
+                        evidence=result.verification,
+                        confidence=0.7,
+                    )
                 verified = run_memory.store.transition(experience.memory_id, MemoryStatus.ACTIVE)
                 await bus.publish(
                     MemoryEvent(

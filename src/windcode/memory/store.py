@@ -151,8 +151,12 @@ class MemoryStore:
             raise ValueError("memory title, summary, and body are required")
         if record.scope is MemoryScope.PROJECT and not record.project_id:
             raise ValueError("project-scoped memory requires project_id")
-        if record.kind is MemoryKind.EXPERIENCE and not record.evidence:
-            raise ValueError("experience memory requires verification evidence")
+        if (
+            record.kind is MemoryKind.EXPERIENCE
+            and record.status is MemoryStatus.ACTIVE
+            and not record.evidence
+        ):
+            raise ValueError("active experience memory requires verification evidence")
         validate_memory_text(record.title, record.summary, record.body, *record.evidence)
         path = self._write(record)
         with self._connect() as connection:
@@ -199,6 +203,8 @@ class MemoryStore:
         project_id: str | None = None,
         limit: int = 5,
         statuses: tuple[MemoryStatus, ...] = (MemoryStatus.ACTIVE,),
+        kind: MemoryKind | None = None,
+        scope: MemoryScope | None = None,
     ) -> tuple[MemorySearchResult, ...]:
         if not query.strip() or limit <= 0:
             return ()
@@ -208,18 +214,26 @@ class MemoryStore:
         fts_query = " OR ".join(f'"{token.replace(chr(34), chr(34) * 2)}"' for token in tokens)
         status_values = tuple(status.value for status in statuses)
         placeholders = ",".join("?" for _ in status_values)
+        filters = [
+            f"m.status IN ({placeholders})",
+            "(m.scope = 'user' OR m.project_id = ?)",
+        ]
+        filter_values: list[str | int] = [*status_values, project_id or ""]
+        if kind is not None:
+            filters.append("m.kind = ?")
+            filter_values.append(kind.value)
+        if scope is not None:
+            filters.append("m.scope = ?")
+            filter_values.append(scope.value)
         sql = f"""
             SELECT m.memory_id, bm25(memories_fts) AS rank, m.confidence
             FROM memories_fts JOIN memories m USING(memory_id)
-            WHERE memories_fts MATCH ? AND m.status IN ({placeholders})
-              AND (m.scope = 'user' OR m.project_id = ?)
+            WHERE memories_fts MATCH ? AND {" AND ".join(filters)}
             ORDER BY rank ASC, m.confidence DESC, m.updated_at DESC LIMIT ?
         """
         try:
             with self._connect() as connection:
-                rows = connection.execute(
-                    sql, (fts_query, *status_values, project_id or "", limit)
-                ).fetchall()
+                rows = connection.execute(sql, (fts_query, *filter_values, limit)).fetchall()
         except sqlite3.OperationalError:
             rows = ()
         indexed = tuple(
@@ -234,7 +248,12 @@ class MemoryStore:
         query_terms = self._lexical_terms(query)
         supplemental: list[MemorySearchResult] = []
         for record in self.list(project_id=project_id):
-            if record.memory_id in selected or record.status not in statuses:
+            if (
+                record.memory_id in selected
+                or record.status not in statuses
+                or (kind is not None and record.kind is not kind)
+                or (scope is not None and record.scope is not scope)
+            ):
                 continue
             content_terms = self._lexical_terms(
                 " ".join((record.title, record.summary, record.body, *record.tags))

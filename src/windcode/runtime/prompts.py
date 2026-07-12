@@ -23,6 +23,7 @@ def build_system_prompt(
     mcp_direct_servers: tuple[str, ...] = (),
     mcp_search_servers: tuple[str, ...] = (),
     mcp_unavailable_servers: tuple[tuple[str, str], ...] = (),
+    memory_enabled: bool = False,
 ) -> str:
     tool_lines = "\n".join(f"- {schema.name}: {schema.description}" for schema in tools.schemas())
     instruction_sections = "\n\n".join(
@@ -80,6 +81,22 @@ def build_system_prompt(
             "创建后调用 wait_subagents 一次等待结果; 禁止循环调用 list_subagents。"
             "子智能体可按运行网络策略和权限审批访问外部网络。"
         )
+    if memory_enabled:
+        memory_policy = (
+            "\n\n## 长期记忆主动查询\n"
+            "当用户明确要求查看、列出、搜索、核对或回忆长期记忆时, 必须调用 memory_list、"
+            "memory_search 或 memory_get, 并基于工具实际结果回答。宽泛的‘看看长期记忆’调用 "  # noqa: RUF001
+            "memory_list; 带主题的请求调用 memory_search; 查看单条详情调用 memory_get。"
+            "不得使用 glob、grep、read_file、shell 或其他工作区工具代替长期记忆查询。"
+            "自动注入的记忆只用于当前任务上下文, 不能冒充主动查询结果。"
+            "搜索无结果时直接说明没有匹配记忆, 不得转而扫描仓库。"
+        )
+    else:
+        memory_policy = (
+            "\n\n## 长期记忆主动查询\n"
+            "本次运行未启用长期记忆工具。用户要求查看长期记忆时应准确说明长期记忆已禁用或"
+            "不可用, 不得搜索工作区文件来代替记忆查询。"
+        )
     return (
         "你是 Windcode, 在终端中帮助用户完成软件工程任务的本地编码 Agent.\n"
         "最终面向用户的回复必须使用纯文本, 不得输出 Markdown 标记, 包括标题标记、"
@@ -98,5 +115,6 @@ def build_system_prompt(
         f"## 项目指令 (按根目录到当前目录排列, 后者优先)\n"
         f"{instruction_sections or '无项目指令'}"
         f"{extension_sections}"
+        f"{memory_policy}"
         f"{delegation}"
     )

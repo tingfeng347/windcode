@@ -18,6 +18,13 @@ class RefinedMemory:
     tags: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ExperienceAssessment:
+    should_store: bool
+    reason: str = ""
+    memory: RefinedMemory | None = None
+
+
 def _fallback(text: str, kind: MemoryKind) -> RefinedMemory:
     compact = " ".join(text.split()).strip()
     title = compact if len(compact) <= 40 else compact[:37].rstrip() + "..."
@@ -83,3 +90,51 @@ async def refine_memory(
     except Exception:
         return fallback
     return _decode("".join(parts), fallback)
+
+
+async def assess_experience(
+    target: ModelTarget,
+    *,
+    text: str,
+    evidence: tuple[str, ...],
+    max_output_tokens: int = 600,
+) -> ExperienceAssessment:
+    """Accept only reusable problem-solving knowledge; malformed output means no memory."""
+    evidence_text = "\n".join(f"- {item}" for item in evidence)
+    prompt = (
+        "判断本次任务是否形成值得长期保存的可复用工程经验。只返回 JSON, 不要 Markdown。\n"
+        "普通检查通过、测试通过、查看文件、重复既有流程都不属于经验。\n"
+        "只有同时具备明确问题、实际解决方法、成功验证和可再次识别的适用条件时, "
+        "should_store 才能为 true。\n"
+        '{"should_store":false,"reason":"原因","problem":"问题",'
+        '"solution":"解决方法","applicability":"适用条件","title":"标题",'
+        '"summary":"摘要","body":"问题、方法、验证与适用范围","tags":["标签"]}\n'
+        f"验证证据:\n{evidence_text}\n任务结果:\n{text}"
+    )
+    request = ModelRequest(
+        model=target.model,
+        messages=(Message(Role.USER, (TextBlock(prompt),)),),
+        system_prompt="你是保守的工程经验筛选器。拿不准时必须拒绝保存。",
+        max_output_tokens=max_output_tokens,
+    )
+    parts: list[str] = []
+    try:
+        async for event in target.transport.stream(request):
+            if isinstance(event, TextDelta):
+                parts.append(event.text)
+        raw = json.loads("".join(parts).strip())
+    except Exception:
+        return ExperienceAssessment(False, "模型评估失败")
+    if not isinstance(raw, dict):
+        return ExperienceAssessment(False, "模型评估格式无效")
+    value = cast(dict[str, Any], raw)
+    reason = str(value.get("reason", "")).strip()
+    required = tuple(
+        str(value.get(key, "")).strip()
+        for key in ("problem", "solution", "applicability", "title", "summary", "body")
+    )
+    if value.get("should_store") is not True or not all(required):
+        return ExperienceAssessment(False, reason or "缺少可复用的问题解决信息")
+    fallback = _fallback(text, MemoryKind.EXPERIENCE)
+    memory = _decode(json.dumps(value, ensure_ascii=False), fallback)
+    return ExperienceAssessment(True, reason, memory)

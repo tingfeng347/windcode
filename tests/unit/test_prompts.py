@@ -102,3 +102,25 @@ def test_prompt_reports_configured_but_unavailable_mcp_servers(tmp_path: Path) -
     assert "project-server: workspace is untrusted" in prompt
     assert "不得声称 Windcode 没有 MCP 集成" in prompt
     assert "list_mcp_servers" in prompt
+
+
+def test_prompt_routes_explicit_memory_queries_to_memory_tools(tmp_path: Path) -> None:
+    enabled = build_system_prompt(
+        workspace=tmp_path,
+        permission_mode=PermissionMode.DEFAULT,
+        instructions=(),
+        tools=create_builtin_registry(),
+        memory_enabled=True,
+    )
+    assert "必须调用 memory_list" in enabled
+    assert "不得使用 glob、grep、read_file、shell" in enabled
+    assert "自动注入的记忆只用于当前任务上下文" in enabled
+
+    disabled = build_system_prompt(
+        workspace=tmp_path,
+        permission_mode=PermissionMode.DEFAULT,
+        instructions=(),
+        tools=create_builtin_registry(),
+    )
+    assert "长期记忆已禁用或不可用" in disabled
+    assert "不得搜索工作区文件" in disabled
