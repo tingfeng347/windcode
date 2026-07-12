@@ -12,6 +12,7 @@ from windcode.config.models import (
     ProviderConfig,
     ProviderProtocol,
     SandboxConfig,
+    StorageConfig,
     SubagentConfig,
     TraceConfig,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "ProviderConfig",
     "ProviderProtocol",
     "SandboxConfig",
+    "StorageConfig",
     "SubagentConfig",
     "TraceConfig",
     "load_config",

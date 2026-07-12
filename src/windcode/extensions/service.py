@@ -218,12 +218,17 @@ class ExtensionService:
                     server_id,
                     CapabilityKind.MCP_SERVER,
                     source,
+                    enabled=definition.enabled,
                     trusted=not project_source or project_trusted,
                     required=definition.required,
                     activation=(
-                        ActivationState.AVAILABLE
-                        if not project_source or project_trusted
-                        else ActivationState.UNTRUSTED
+                        ActivationState.INACTIVE
+                        if not definition.enabled
+                        else (
+                            ActivationState.AVAILABLE
+                            if not project_source or project_trusted
+                            else ActivationState.UNTRUSTED
+                        )
                     ),
                     permissions=PermissionRequirement(
                         network=definition.transport == "streamable_http",
@@ -378,15 +383,16 @@ class ExtensionService:
                 McpStdioConfig | McpHttpConfig,
                 TypeAdapter(McpServerConfig).validate_python(raw),
             )
+            server_enabled = enabled and server.enabled
             records.append(
                 CapabilityRecord(
                     stable_id,
                     component.component_id,
                     CapabilityKind.MCP_SERVER,
                     component_source,
-                    enabled=enabled,
+                    enabled=server_enabled,
                     required=manifest.required or server.required,
-                    activation=activation,
+                    activation=(activation if server_enabled else ActivationState.INACTIVE),
                     permissions=PermissionRequirement(
                         network=server.transport == "streamable_http",
                         process=server.transport == "stdio",

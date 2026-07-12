@@ -46,11 +46,10 @@ def build_system_prompt(
         server_lines = "\n".join(f"- {server_id}" for server_id in sorted(mcp_search_servers))
         extension_sections += (
             f"\n\n## MCP 服务器 (按需启用)\n{server_lines}\n"
-            "这些服务器的工具默认不可直接调用, 需先启用: "
-            "1) 调用 search_mcp_tools, query 传关键词(或空串列出全部)找到目标工具的 id; "
-            "2) 再次调用 search_mcp_tools, query 传 select:<id> 启用它, "
-            "返回值中的 call_name 即可调用的工具名; "
-            "3) 用该 call_name 直接调用工具并传入其参数。启用后的工具在本次运行内保持可用。"
+            "先检查上方可用工具; 已存在目标 MCP 工具时必须直接调用, 不得重复搜索。"
+            "目标尚不可用时调用一次 search_mcp_tools 并传关键词; 唯一匹配会自动启用并返回 "
+            "call_name, 随后直接调用它。只有返回多个匹配时, 才再调用一次 "
+            "search_mcp_tools(query='select:<id>') 选择目标。已启用工具会在后续运行中复用。"
         )
     if mcp_unavailable_servers:
         server_lines = "\n".join(

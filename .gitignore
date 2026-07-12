@@ -13,5 +13,7 @@ wheels/
 tests/
 
 .windcode/config.toml
+.windcode/state/
+
 
 spec/

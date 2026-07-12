@@ -37,3 +37,20 @@ def test_explicit_missing_file_is_an_error(tmp_path: Path) -> None:
     missing = tmp_path / "missing.toml"
     with pytest.raises(ConfigError, match="does not exist"):
         load_config(tmp_path, explicit_file=missing)
+
+
+def test_project_state_root_loads_from_storage_config(tmp_path: Path) -> None:
+    project = tmp_path / "config.toml"
+    project.write_text('[storage]\nproject_state_root = ".windcode/state"\n', encoding="utf-8")
+    config = load_config(tmp_path, project_file=project)
+    assert config.storage.project_state_root == ".windcode/state"
+    assert config.storage.user_storage_root is None
+
+
+def test_user_storage_root_can_be_configured(tmp_path: Path) -> None:
+    project = tmp_path / "config.toml"
+    project.write_text(
+        '[storage]\nuser_storage_root = "~/.local/state/windcode/state"\n', encoding="utf-8"
+    )
+    config = load_config(tmp_path, project_file=project)
+    assert config.storage.user_storage_root == "~/.local/state/windcode/state"

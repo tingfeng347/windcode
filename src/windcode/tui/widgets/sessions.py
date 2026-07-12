@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual import on
+from textual.binding import Binding
 from textual.message import Message
 from textual.widgets import Select
 from textual.widgets._select import SelectOverlay
@@ -9,10 +12,15 @@ from windcode.sessions import SessionMetadata
 
 
 class SessionSelector(Select[str]):
+    BINDINGS: ClassVar[list[Binding]] = [Binding("escape", "cancel", "返回", priority=True)]
+
     class Selected(Message):
         def __init__(self, session_id: str) -> None:
             super().__init__()
             self.session_id = session_id
+
+    class Cancelled(Message):
+        pass
 
     def __init__(self, sessions: tuple[SessionMetadata, ...]) -> None:
         statuses = {
@@ -41,8 +49,11 @@ class SessionSelector(Select[str]):
             allow_blank=not options,
             value=options[0][1] if options else Select.NULL,
             id="sessions",
-            disabled=not options,
         )
+
+    def action_cancel(self) -> None:
+        self.expanded = False
+        self.post_message(self.Cancelled())
 
     @on(SelectOverlay.UpdateSelection)
     def _update_selection(self, event: SelectOverlay.UpdateSelection) -> None:

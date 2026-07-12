@@ -7,7 +7,14 @@ from typing import Any, cast
 from pydantic import BaseModel, ConfigDict, Field
 
 from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
-from windcode.memory import MemoryKind, MemoryRecord, MemoryScope, MemoryService, MemoryStatus
+from windcode.memory import (
+    MemoryActivation,
+    MemoryKind,
+    MemoryRecord,
+    MemoryScope,
+    MemoryService,
+    MemoryStatus,
+)
 from windcode.tools.registry import ToolRegistry
 
 MemoryToolObserver = Callable[[str, dict[str, Any]], Awaitable[None]]
@@ -21,6 +28,7 @@ class MemorySearchInput(BaseModel):
     kind: MemoryKind | None = None
     scope: MemoryScope | None = None
     status: MemoryStatus = MemoryStatus.ACTIVE
+    activation: MemoryActivation | None = None
 
 
 class MemoryListInput(BaseModel):
@@ -30,6 +38,7 @@ class MemoryListInput(BaseModel):
     kind: MemoryKind | None = None
     scope: MemoryScope | None = None
     status: MemoryStatus = MemoryStatus.ACTIVE
+    activation: MemoryActivation | None = None
 
 
 class MemoryGetInput(BaseModel):
@@ -44,6 +53,8 @@ def _record_data(record: MemoryRecord, *, include_body: bool) -> dict[str, Any]:
         "kind": record.kind.value,
         "scope": record.scope.value,
         "status": record.status.value,
+        "activation": record.activation.value,
+        "priority": record.priority,
         "title": record.title,
         "summary": record.summary,
         "tags": list(record.tags),
@@ -61,8 +72,13 @@ def _matches(
     *,
     kind: MemoryKind | None,
     scope: MemoryScope | None,
+    activation: MemoryActivation | None,
 ) -> bool:
-    return (kind is None or record.kind is kind) and (scope is None or record.scope is scope)
+    return (
+        (kind is None or record.kind is kind)
+        and (scope is None or record.scope is scope)
+        and (activation is None or record.activation is activation)
+    )
 
 
 def _bounded(items: list[dict[str, Any]], max_chars: int) -> tuple[list[dict[str, Any]], bool]:
@@ -118,6 +134,7 @@ class MemorySearchTool(_MemoryTool):
             statuses=(parsed.status,),
             kind=parsed.kind,
             scope=parsed.scope,
+            activation=parsed.activation,
         )
         records = [result.record for result in candidates][: parsed.limit]
         raw_items = [_record_data(record, include_body=True) for record in records]
@@ -156,7 +173,7 @@ class MemoryListTool(_MemoryTool):
                 status=parsed.status,
                 project_id=self.service.project_id,
             )
-            if _matches(record, kind=parsed.kind, scope=parsed.scope)
+            if _matches(record, kind=parsed.kind, scope=parsed.scope, activation=parsed.activation)
         ][: parsed.limit]
         raw_items = [_record_data(record, include_body=False) for record in records]
         items, truncated = _bounded(raw_items, self.max_chars)

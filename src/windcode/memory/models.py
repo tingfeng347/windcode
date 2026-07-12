@@ -15,7 +15,32 @@ class MemoryKind(StrEnum):
     USER_PROFILE = "user_profile"
     PROJECT_KNOWLEDGE = "project_knowledge"
     EXPERIENCE = "experience"
+    SOP = "sop"
     REFERENCE = "reference"
+
+
+class MemoryActivation(StrEnum):
+    ALWAYS = "always"
+    SEARCH = "search"
+    MANUAL = "manual"
+
+
+def default_memory_activation(kind: MemoryKind) -> MemoryActivation:
+    if kind is MemoryKind.USER_PROFILE:
+        return MemoryActivation.ALWAYS
+    if kind in {MemoryKind.EXPERIENCE, MemoryKind.SOP, MemoryKind.PROJECT_KNOWLEDGE}:
+        return MemoryActivation.SEARCH
+    return MemoryActivation.MANUAL
+
+
+def default_memory_priority(kind: MemoryKind) -> int:
+    return {
+        MemoryKind.USER_PROFILE: 80,
+        MemoryKind.PROJECT_KNOWLEDGE: 50,
+        MemoryKind.EXPERIENCE: 50,
+        MemoryKind.SOP: 70,
+        MemoryKind.REFERENCE: 40,
+    }[kind]
 
 
 class MemoryScope(StrEnum):
@@ -61,6 +86,8 @@ class MemoryRecord:
     title: str
     summary: str
     body: str
+    activation: MemoryActivation
+    priority: int
     project_id: str | None = None
     tags: tuple[str, ...] = ()
     source: MemorySource | None = None
@@ -90,6 +117,8 @@ class MemoryRecord:
         source: MemorySource | None = None,
         evidence: tuple[str, ...] = (),
         confidence: float = 0.5,
+        activation: MemoryActivation | None = None,
+        priority: int | None = None,
     ) -> MemoryRecord:
         return cls(
             memory_id=uuid4().hex,
@@ -98,6 +127,8 @@ class MemoryRecord:
             title=title.strip(),
             summary=summary.strip(),
             body=body.strip(),
+            activation=activation or default_memory_activation(kind),
+            priority=default_memory_priority(kind) if priority is None else priority,
             project_id=project_id,
             tags=tags,
             source=source,
@@ -117,6 +148,8 @@ class MemoryRecord:
             "title": self.title,
             "summary": self.summary,
             "body": self.body,
+            "activation": self.activation.value,
+            "priority": self.priority,
             "tags": list(self.tags),
             "source": None if self.source is None else self.source.to_dict(),
             "evidence": list(self.evidence),
@@ -137,14 +170,19 @@ class MemoryRecord:
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> MemoryRecord:
         source = value.get("source")
+        kind = MemoryKind(str(value["kind"]))
         return cls(
             memory_id=str(value["memory_id"]),
-            kind=MemoryKind(str(value["kind"])),
+            kind=kind,
             scope=MemoryScope(str(value["scope"])),
             project_id=None if value.get("project_id") is None else str(value["project_id"]),
             title=str(value["title"]),
             summary=str(value["summary"]),
             body=str(value["body"]),
+            activation=MemoryActivation(
+                str(value.get("activation", default_memory_activation(kind).value))
+            ),
+            priority=int(value.get("priority", default_memory_priority(kind))),
             tags=tuple(str(item) for item in value.get("tags", ())),
             source=(
                 MemorySource.from_dict(cast(dict[str, Any], source))

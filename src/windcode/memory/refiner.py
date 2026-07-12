@@ -23,6 +23,36 @@ class ExperienceAssessment:
     should_store: bool
     reason: str = ""
     memory: RefinedMemory | None = None
+    sop: RefinedMemory | None = None
+
+
+async def assess_core_project_fact(
+    target: ModelTarget, *, text: str, max_output_tokens: int = 128
+) -> bool:
+    """Return true only for a stable fact needed across most project tasks."""
+    prompt = (
+        "判断以下项目事实是否为跨绝大多数任务都必须知道的稳定核心约束。"
+        '只返回 JSON: {"core":true|false,"reason":"原因"}。'
+        "普通资料、局部实现、临时状态或拿不准时必须为 false。\n"
+        f"项目事实:\n{text}"
+    )
+    request = ModelRequest(
+        model=target.model,
+        messages=(Message(Role.USER, (TextBlock(prompt),)),),
+        system_prompt="你是保守的项目核心事实分类器。只输出严格 JSON。",
+        max_output_tokens=max_output_tokens,
+    )
+    parts: list[str] = []
+    try:
+        async for event in target.transport.stream(request):
+            if isinstance(event, TextDelta):
+                parts.append(event.text)
+        raw = json.loads("".join(parts).strip())
+    except Exception:
+        return False
+    if not isinstance(raw, dict):
+        return False
+    return cast(dict[str, Any], raw).get("core") is True
 
 
 def _fallback(text: str, kind: MemoryKind) -> RefinedMemory:
@@ -109,6 +139,9 @@ async def assess_experience(
         '{"should_store":false,"reason":"原因","problem":"问题",'
         '"solution":"解决方法","applicability":"适用条件","title":"标题",'
         '"summary":"摘要","body":"问题、方法、验证与适用范围","tags":["标签"]}\n'
+        "如同时形成了可重复执行的标准流程, 可增加 sop 对象, 且必须包含 title、summary、"
+        "body、tags、steps(非空数组)、applicability 和 verification_evidence(非空数组); "
+        "否则不要输出 sop。\n"
         f"验证证据:\n{evidence_text}\n任务结果:\n{text}"
     )
     request = ModelRequest(
@@ -137,4 +170,20 @@ async def assess_experience(
         return ExperienceAssessment(False, reason or "缺少可复用的问题解决信息")
     fallback = _fallback(text, MemoryKind.EXPERIENCE)
     memory = _decode(json.dumps(value, ensure_ascii=False), fallback)
-    return ExperienceAssessment(True, reason, memory)
+    sop: RefinedMemory | None = None
+    raw_sop = value.get("sop")
+    if isinstance(raw_sop, dict):
+        sop_value = cast(dict[str, Any], raw_sop)
+        steps = sop_value.get("steps")
+        verification = sop_value.get("verification_evidence")
+        if (
+            isinstance(steps, list)
+            and bool(cast(list[object], steps))
+            and isinstance(verification, list)
+            and bool(cast(list[object], verification))
+            and str(sop_value.get("applicability", "")).strip()
+        ):
+            sop = _decode(
+                json.dumps(sop_value, ensure_ascii=False), _fallback(text, MemoryKind.SOP)
+            )
+    return ExperienceAssessment(True, reason, memory, sop)

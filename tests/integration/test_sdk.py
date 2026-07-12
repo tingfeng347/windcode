@@ -264,7 +264,9 @@ async def test_concurrent_root_runs_have_isolated_subagent_coordinators(tmp_path
                 "subagent_started",
                 "subagent_completed",
             ]
-            sequences = [event.sequence for event in child_events]
+            sequences = [
+                event.sequence for event in child_events if event.kind != "subagent_progress"
+            ]
             assert all(sequence is not None for sequence in sequences)
             assert sequences == sorted(set(sequences), key=lambda value: value or 0)
         with pytest.raises(RuntimeError, match="after the parent run"):
@@ -274,3 +276,30 @@ async def test_concurrent_root_runs_have_isolated_subagent_coordinators(tmp_path
 def test_public_subagent_types_are_importable() -> None:
     assert SubagentRecord.__name__ == "SubagentRecord"
     assert SubagentStatus.QUEUED.value == "queued"
+
+
+def test_state_root_migration_copies_every_file_and_preserves_source(tmp_path: Path) -> None:
+    source = tmp_path / "user-state"
+    target = tmp_path / "workspace" / ".windcode" / "state"
+    (source / "sessions" / "one").mkdir(parents=True)
+    (source / "sessions" / "one" / "meta.json").write_text("{}", encoding="utf-8")
+    (source / "traces").mkdir()
+    (source / "traces" / "run.jsonl").write_text('{"event":"done"}\n', encoding="utf-8")
+
+    Windcode._migrate_state_root(source, target)
+
+    assert Windcode._state_manifest(target) == Windcode._state_manifest(source)
+    assert (source / "sessions" / "one" / "meta.json").is_file()
+    assert (target / "sessions" / "one" / "meta.json").is_file()
+
+
+def test_state_root_migration_supports_target_nested_below_legacy_root(tmp_path: Path) -> None:
+    source = tmp_path / "windcode"
+    target = source / "state"
+    (source / "sessions").mkdir(parents=True)
+    (source / "sessions" / "meta.json").write_text("{}", encoding="utf-8")
+
+    Windcode._migrate_state_root(source, target)
+
+    assert (target / "sessions" / "meta.json").is_file()
+    assert (source / "sessions" / "meta.json").is_file()

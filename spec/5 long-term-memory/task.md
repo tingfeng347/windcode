@@ -10,3 +10,12 @@
 - [x] 覆盖单元、契约、集成、安全与端到端场景并执行质量门禁。
 - [x] 明确运行前按需召回与运行后选择性写入链路，禁止全量记忆上下文注入。
 - [x] 增加自然语言主动查询的只读工具、项目隔离、事件观测和 TUI 工具标签。
+- [x] 新增 `sop`、`MemoryActivation`、priority 默认值及旧 Markdown/SQLite 确定性迁移。
+- [x] 拆分 baseline/search/build 上下文，常驻画像与核心事实，动态检索经验与 SOP，并排除 manual。
+- [x] 增加项目核心事实保守判定、显式 SOP 候选、经验晋升 SOP 候选和 SOP 去重更新。
+- [x] 增加 SDK、`/memory activation`、主动工具 activation 过滤及 TUI 三段式选择。
+- [x] 更新分层上下文、迁移、管理接口与主动查询链路文档并执行回归门禁。
+- [x] 增加 `[storage].project_state_root`、完整用户状态复制校验、原子安装和默认目录回退。
+- [x] 统一 `project_state_root/user_storage_root`，记忆固定使用所选状态根的 `memory/` 子目录。
+- [x] 将高频进度事件改为 live transient，停止在 session 和默认 trace 中重复持久化。
+- [x] transient 默认不写 trace，并实现 trace 总开关、诊断 opt-in、14 天/100MB 保留策略。

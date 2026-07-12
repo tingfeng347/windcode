@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 
 class StrictModel(BaseModel):
@@ -96,6 +96,14 @@ class ContextConfig(StrictModel):
 class TraceConfig(StrictModel):
     enabled: bool = True
     include_tool_arguments: bool = False
+    include_transient_events: bool = False
+    retention_days: int = Field(default=14, ge=1, le=3_650)
+    max_total_mb: int = Field(default=100, ge=1, le=100_000)
+
+
+class StorageConfig(StrictModel):
+    project_state_root: str | None = None
+    user_storage_root: str | None = None
 
 
 class MemoryConfig(StrictModel):
@@ -103,6 +111,8 @@ class MemoryConfig(StrictModel):
     extraction_enabled: bool = True
     recall_limit: int = Field(default=5, ge=1, le=20)
     recall_max_chars: int = Field(default=12_000, ge=1_000, le=100_000)
+    baseline_max_records: int = Field(default=30, ge=1, le=200)
+    baseline_max_chars: int = Field(default=6_000, ge=1_000, le=100_000)
     extraction_max_chars: int = Field(default=20_000, ge=1_000, le=200_000)
     extraction_max_output_tokens: int = Field(default=600, ge=128, le=4_096)
     candidate_retention_days: int = Field(default=90, ge=1, le=3_650)
@@ -110,6 +120,7 @@ class MemoryConfig(StrictModel):
     user_profile_enabled: bool = True
     project_knowledge_enabled: bool = True
     experience_enabled: bool = True
+    sop_enabled: bool = True
     reference_enabled: bool = True
 
 
@@ -128,6 +139,7 @@ SecretReference = Annotated[
 
 class McpStdioConfig(StrictModel):
     transport: Literal["stdio"] = "stdio"
+    enabled: bool = Field(default=True, validation_alias=AliasChoices("enable", "enabled"))
     command: str = Field(min_length=1)
     args: tuple[str, ...] = ()
     cwd: str | None = Field(default=None, min_length=1)
@@ -137,6 +149,7 @@ class McpStdioConfig(StrictModel):
 
 class McpHttpConfig(StrictModel):
     transport: Literal["streamable_http"]
+    enabled: bool = Field(default=True, validation_alias=AliasChoices("enable", "enabled"))
     url: str = Field(min_length=1, pattern=r"^https?://")
     headers: dict[str, SecretReference] = Field(default_factory=dict[str, SecretReference])
     required: bool = False
@@ -169,6 +182,7 @@ class AppConfig(StrictModel):
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     context: ContextConfig = Field(default_factory=ContextConfig)
     trace: TraceConfig = Field(default_factory=TraceConfig)
+    storage: StorageConfig = Field(default_factory=StorageConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     subagents: SubagentConfig = Field(default_factory=SubagentConfig)
     extensions: ExtensionConfig = Field(default_factory=ExtensionConfig)

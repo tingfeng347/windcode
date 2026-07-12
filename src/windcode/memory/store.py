@@ -12,6 +12,7 @@ from uuid import uuid4
 import yaml
 
 from windcode.memory.models import (
+    MemoryActivation,
     MemoryKind,
     MemoryRecord,
     MemoryScope,
@@ -21,7 +22,7 @@ from windcode.memory.models import (
 )
 from windcode.memory.security import validate_memory_text
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 
 
@@ -49,6 +50,15 @@ class MemoryStore:
 
     def _initialize(self) -> None:
         try:
+            with self._connect() as connection:
+                version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if version not in (0, SCHEMA_VERSION):
+                self.index_path.unlink(missing_ok=True)
+                for suffix in ("-wal", "-shm"):
+                    Path(f"{self.index_path}{suffix}").unlink(missing_ok=True)
+                self._create_schema()
+                self.rebuild()
+                return
             self._create_schema()
         except sqlite3.DatabaseError:
             corrupt = self.index_path.with_suffix(f".corrupt-{uuid4().hex}")
@@ -65,7 +75,8 @@ class MemoryStore:
                 CREATE TABLE IF NOT EXISTS memories (
                     memory_id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE,
                     kind TEXT NOT NULL, scope TEXT NOT NULL, project_id TEXT,
-                    status TEXT NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL,
+                    status TEXT NOT NULL, activation TEXT NOT NULL, priority INTEGER NOT NULL,
+                    title TEXT NOT NULL, summary TEXT NOT NULL,
                     confidence REAL NOT NULL, version INTEGER NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -73,7 +84,7 @@ class MemoryStore:
                     memory_id UNINDEXED, title, summary, body, tags, evidence,
                     tokenize='unicode61'
                 );
-                PRAGMA user_version=1;
+                PRAGMA user_version=2;
                 """
             )
 
@@ -118,8 +129,9 @@ class MemoryStore:
         connection.execute("DELETE FROM memories_fts WHERE memory_id = ?", (record.memory_id,))
         connection.execute(
             """INSERT OR REPLACE INTO memories
-               (memory_id,path,kind,scope,project_id,status,title,summary,confidence,version,updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+               (memory_id,path,kind,scope,project_id,status,activation,priority,title,summary,
+                confidence,version,updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 record.memory_id,
                 str(path.relative_to(self.root)),
@@ -127,6 +139,8 @@ class MemoryStore:
                 record.scope.value,
                 record.project_id,
                 record.status.value,
+                record.activation.value,
+                record.priority,
                 record.title,
                 record.summary,
                 record.confidence,
@@ -151,6 +165,8 @@ class MemoryStore:
             raise ValueError("memory title, summary, and body are required")
         if record.scope is MemoryScope.PROJECT and not record.project_id:
             raise ValueError("project-scoped memory requires project_id")
+        if not 0 <= record.priority <= 100:
+            raise ValueError("memory priority must be between 0 and 100")
         if (
             record.kind is MemoryKind.EXPERIENCE
             and record.status is MemoryStatus.ACTIVE
@@ -180,6 +196,7 @@ class MemoryStore:
         *,
         status: MemoryStatus | None = None,
         project_id: str | None = None,
+        activation: MemoryActivation | None = None,
     ) -> tuple[MemoryRecord, ...]:
         clauses: list[str] = []
         values: list[str] = []
@@ -189,6 +206,9 @@ class MemoryStore:
         if project_id is not None:
             clauses.append("(scope = 'user' OR project_id = ?)")
             values.append(project_id)
+        if activation is not None:
+            clauses.append("activation = ?")
+            values.append(activation.value)
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         with self._connect() as connection:
             rows = connection.execute(
@@ -205,6 +225,7 @@ class MemoryStore:
         statuses: tuple[MemoryStatus, ...] = (MemoryStatus.ACTIVE,),
         kind: MemoryKind | None = None,
         scope: MemoryScope | None = None,
+        activation: MemoryActivation | None = None,
     ) -> tuple[MemorySearchResult, ...]:
         if not query.strip() or limit <= 0:
             return ()
@@ -225,6 +246,9 @@ class MemoryStore:
         if scope is not None:
             filters.append("m.scope = ?")
             filter_values.append(scope.value)
+        if activation is not None:
+            filters.append("m.activation = ?")
+            filter_values.append(activation.value)
         sql = f"""
             SELECT m.memory_id, bm25(memories_fts) AS rank, m.confidence
             FROM memories_fts JOIN memories m USING(memory_id)
@@ -253,6 +277,7 @@ class MemoryStore:
                 or record.status not in statuses
                 or (kind is not None and record.kind is not kind)
                 or (scope is not None and record.scope is not scope)
+                or (activation is not None and record.activation is not activation)
             ):
                 continue
             content_terms = self._lexical_terms(
@@ -280,7 +305,16 @@ class MemoryStore:
 
     def update(self, memory_id: str, **changes: Any) -> MemoryRecord:
         current = self.get(memory_id)
-        allowed = {"title", "summary", "body", "tags", "evidence", "confidence"}
+        allowed = {
+            "title",
+            "summary",
+            "body",
+            "tags",
+            "evidence",
+            "confidence",
+            "activation",
+            "priority",
+        }
         if unknown := set(changes) - allowed:
             raise ValueError(f"unsupported memory fields: {', '.join(sorted(unknown))}")
         updated = replace(current, **changes, version=current.version + 1, updated_at=utc_now())

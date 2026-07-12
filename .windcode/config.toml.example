@@ -33,12 +33,22 @@ max_tool_result_chars = 20000
 [trace]
 enabled = true
 include_tool_arguments = false
+include_transient_events = false
+retention_days = 14
+max_total_mb = 100
+
+[storage]
+# When set, the complete user state is copied here on first use and this root is preferred.
+project_state_root = ".windcode/state"
+user_storage_root = "~/.local/state/windcode/state"
 
 [memory]
 enabled = true
 extraction_enabled = true
 recall_limit = 5
 recall_max_chars = 12000
+baseline_max_records = 30
+baseline_max_chars = 6000
 extraction_max_chars = 20000
 extraction_max_output_tokens = 600
 candidate_retention_days = 90
@@ -46,7 +56,16 @@ stale_after_days = 30
 user_profile_enabled = true
 project_knowledge_enabled = true
 experience_enabled = true
+sop_enabled = true
 reference_enabled = true
 
 [extensions]
 enabled = true
+
+# Each MCP server defaults to enable = true. Set it to false to keep the
+# configuration visible without connecting to or searching that server.
+# [extensions.mcp_servers.example]
+# transport = "streamable_http"
+# url = "https://example.test/mcp"
+# enable = false
+# required = false

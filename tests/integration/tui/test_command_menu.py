@@ -75,12 +75,12 @@ async def test_navigation_keeps_highlight_in_visible_window(tmp_path: Path) -> N
     async with app.run_test() as pilot:
         menu = app.query_one(CommandMenu)
         menu.show_commands(COMMAND_CATALOG)
-        for _ in range(7):
+        for _ in range(8):
             menu.move_down()
         await pilot.pause()
 
-        assert menu.cursor == 7
-        assert f"> {COMMAND_CATALOG[7].value}" in str(menu.render())
+        assert menu.cursor == 8
+        assert f"> {COMMAND_CATALOG[8].value}" in str(menu.render())
         assert COMMAND_CATALOG[0].value not in str(menu.render())
 
 

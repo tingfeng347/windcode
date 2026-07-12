@@ -207,7 +207,11 @@ class ChildRuntimeFactory:
             TraceStore(
                 child_run_id,
                 root=self.state_root / "traces",
+                enabled=self.config.trace.enabled,
                 include_tool_arguments=self.config.trace.include_tool_arguments,
+                include_transient_events=self.config.trace.include_transient_events,
+                retention_days=self.config.trace.retention_days,
+                max_total_mb=self.config.trace.max_total_mb,
             ),
         )
         scheduler = ChildToolScheduler(

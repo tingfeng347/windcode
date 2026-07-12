@@ -87,6 +87,8 @@ def test_prompt_describes_select_flow_only_for_search_servers(tmp_path: Path) ->
 
     assert "按需启用" in prompt
     assert "select:<id>" in prompt
+    assert "唯一匹配会自动启用" in prompt
+    assert "不得重复搜索" in prompt
     assert "lazy-server" in prompt
 
 

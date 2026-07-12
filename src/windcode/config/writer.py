@@ -61,7 +61,7 @@ def save_memory_config(path: Path, config: AppConfig) -> None:
     """Persist non-secret memory policy without rewriting unrelated configuration."""
     path = path.expanduser().resolve()
     data = _read_config(path)
-    data["memory"] = config.memory.model_dump(mode="json")
+    data["memory"] = config.memory.model_dump(mode="json", exclude_none=True)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(f"{path.suffix}.tmp-{uuid4().hex}")
     try:

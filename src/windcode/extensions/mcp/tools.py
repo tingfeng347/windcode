@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from typing import cast
@@ -102,6 +103,7 @@ class McpCapabilityService:
         self.content_limit = content_limit
         self._catalogs: dict[str, McpCatalog] = {}
         self._tool_catalogs = tool_catalogs if tool_catalogs is not None else {}
+        self._tool_catalog_locks: dict[str, asyncio.Lock] = {}
         self._instructions_emitted: set[str] = set()
         self._pending_context: list[SourcedContextMessage] = []
 
@@ -184,28 +186,33 @@ class McpCapabilityService:
         cached = self._tool_catalogs.get(server_id)
         if cached is not None:
             return cached
-        client = await self.runtime.activate(server_id)
-        initialize = client.initialize_result
-        if initialize is None:
-            raise RuntimeError("MCP Server did not initialize")
-        tool_values: list[Tool] = []
-        cursor: str | None = None
-        while True:
-            page = await client.list_tools(cursor)
-            tool_values.extend(page.tools)
-            cursor = page.nextCursor
-            if cursor is None:
-                break
-        catalog = build_catalog(
-            server_id,
-            initialize,
-            ListToolsResult(tools=tool_values),
-            ListResourcesResult(resources=[]),
-            ListPromptsResult(prompts=[]),
-        )
-        self._tool_catalogs[server_id] = catalog.tools
-        self._emit_instructions(server_id, catalog.instructions)
-        return catalog.tools
+        lock = self._tool_catalog_locks.setdefault(server_id, asyncio.Lock())
+        async with lock:
+            cached = self._tool_catalogs.get(server_id)
+            if cached is not None:
+                return cached
+            client = await self.runtime.activate(server_id)
+            initialize = client.initialize_result
+            if initialize is None:
+                raise RuntimeError("MCP Server did not initialize")
+            tool_values: list[Tool] = []
+            cursor: str | None = None
+            while True:
+                page = await client.list_tools(cursor)
+                tool_values.extend(page.tools)
+                cursor = page.nextCursor
+                if cursor is None:
+                    break
+            catalog = build_catalog(
+                server_id,
+                initialize,
+                ListToolsResult(tools=tool_values),
+                ListResourcesResult(resources=[]),
+                ListPromptsResult(prompts=[]),
+            )
+            self._tool_catalogs[server_id] = catalog.tools
+            self._emit_instructions(server_id, catalog.instructions)
+            return catalog.tools
 
     async def search_tools(self, query: str = "") -> tuple[McpToolDefinition, ...]:
         tool_lists = [await self.tool_catalog(server_id) for server_id in self.runtime.server_ids]
@@ -231,6 +238,22 @@ class McpCapabilityService:
             artifact_store=self.artifact_store,
             output_limit=self.content_limit,
         )
+
+    async def register_selected_tools(
+        self, registry: ToolRegistry, stable_ids: set[str]
+    ) -> tuple[str, ...]:
+        registered: list[str] = []
+        stale: list[str] = []
+        for stable_id in sorted(stable_ids):
+            try:
+                adapter = await self.adapter(stable_id)
+            except KeyError:
+                stale.append(stable_id)
+                continue
+            registry.register(adapter, replace=True)
+            registered.append(adapter.name)
+        stable_ids.difference_update(stale)
+        return tuple(registered)
 
     async def register_direct_tools(
         self, registry: ToolRegistry, *, direct_tool_limit: int
@@ -325,28 +348,42 @@ class SearchMcpToolsInput(_StrictInput):
 
 
 class ListMcpServersInput(_StrictInput):
-    pass
+    include_disabled: bool = False
 
 
 class ListMcpServersTool:
     name = "list_mcp_servers"
     description = (
-        "List configured MCP servers and their availability for this run. Use this before "
-        "answering questions about MCP support or configured MCP tools."
+        "List enabled MCP servers available to this configuration. Disabled servers are omitted "
+        "by default and must not be counted as current MCP servers. Set `include_disabled` to "
+        "true only when the user explicitly asks to inspect disabled MCP configuration."
     )
     input_model = ListMcpServersInput
     effects = frozenset[ToolEffect]()
 
-    def __init__(self, records: tuple[CapabilityRecord, ...]) -> None:
+    def __init__(
+        self,
+        records: tuple[CapabilityRecord, ...],
+        tool_catalogs: dict[str, tuple[McpToolDefinition, ...]],
+        selected_tools: set[str],
+    ) -> None:
         self.records = tuple(
             record for record in records if record.kind is CapabilityKind.MCP_SERVER
         )
+        self.tool_catalogs = tool_catalogs
+        self.selected_tools = selected_tools
 
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
-        del context, arguments
+        del context
+        parsed = cast(ListMcpServersInput, arguments)
+        visible_records = tuple(
+            record for record in self.records if parsed.include_disabled or record.enabled
+        )
         return ToolResult(
             json.dumps(
                 {
+                    "server_count": len(visible_records),
+                    "includes_disabled": parsed.include_disabled,
                     "servers": [
                         {
                             "id": record.public_name,
@@ -356,9 +393,17 @@ class ListMcpServersTool:
                             "activation": record.activation.value,
                             "scope": record.source.scope.value,
                             "available_this_run": record.enabled and record.trusted,
+                            "tool_catalog_cached": record.public_name in self.tool_catalogs,
+                            "cached_tool_count": len(
+                                self.tool_catalogs.get(record.public_name, ())
+                            ),
+                            "selected_tool_count": sum(
+                                tool_id.startswith(f"mcp:{record.public_name}/tool/")
+                                for tool_id in self.selected_tools
+                            ),
                         }
-                        for record in self.records
-                    ]
+                        for record in visible_records
+                    ],
                 },
                 sort_keys=True,
             )
@@ -379,32 +424,42 @@ class GetMcpPromptInput(_StrictInput):
 class SearchMcpToolsTool:
     name = "search_mcp_tools"
     description = (
-        "Discover and enable MCP tools. MCP tools are not callable until you "
-        "enable them, in three steps: (1) call this tool with a keyword `query` "
-        "(or empty `query` to list everything) to find the tool `id` you want; "
-        "(2) call this tool again with `query` set to `select:<id>` to enable it; "
-        "the response returns `call_name`; (3) call the tool by that `call_name` "
-        "directly with its own arguments. Enabled tools stay callable for the "
-        "rest of the run."
+        "Discover and enable an MCP tool that is not already available. Search with a specific "
+        "keyword: one match is enabled immediately and returns its `call_name`; multiple matches "
+        "require one follow-up query using `select:<id>`. Call the returned tool directly and do "
+        "not repeat discovery. Enabled tools remain available in later runs."
     )
     input_model = SearchMcpToolsInput
     effects = frozenset({ToolEffect.PROCESS, ToolEffect.NETWORK})
 
-    def __init__(self, service: McpCapabilityService, registry: ToolRegistry) -> None:
+    def __init__(
+        self,
+        service: McpCapabilityService,
+        registry: ToolRegistry,
+        selected_tools: set[str],
+    ) -> None:
         self.service = service
         self.registry = registry
+        self.selected_tools = selected_tools
+
+    async def _select(self, stable_id: str) -> tuple[McpToolAdapter, bool]:
+        already_selected = stable_id in self.selected_tools
+        adapter = await self.service.adapter(stable_id)
+        self.registry.register(adapter, replace=True)
+        self.selected_tools.add(stable_id)
+        return adapter, already_selected
 
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
         del context
         parsed = cast(SearchMcpToolsInput, arguments)
         if parsed.query.startswith("select:"):
             stable_id = parsed.query.removeprefix("select:")
-            adapter = await self.service.adapter(stable_id)
-            self.registry.register(adapter, replace=True)
+            adapter, already_selected = await self._select(stable_id)
             return ToolResult(
                 json.dumps(
                     {
                         "selected": stable_id,
+                        "already_selected": already_selected,
                         "call_name": adapter.name,
                         "source": adapter.definition.server_id,
                         "next_step": (
@@ -415,6 +470,24 @@ class SearchMcpToolsTool:
                 )
             )
         tools = await self.service.search_tools(parsed.query)
+        if len(tools) == 1:
+            tool = tools[0]
+            adapter, already_selected = await self._select(tool.stable_id)
+            return ToolResult(
+                json.dumps(
+                    {
+                        "selected": tool.stable_id,
+                        "already_selected": already_selected,
+                        "call_name": adapter.name,
+                        "source": tool.server_id,
+                        "next_step": (
+                            f"call the tool named {adapter.name} directly; do not call "
+                            "search_mcp_tools again"
+                        ),
+                    },
+                    sort_keys=True,
+                )
+            )
         return ToolResult(
             json.dumps(
                 {
@@ -428,9 +501,8 @@ class SearchMcpToolsTool:
                         for tool in tools
                     ],
                     "hint": (
-                        "These tools are not callable yet. To enable one, call "
-                        "search_mcp_tools again with query='select:<id>', then call the "
-                        "returned call_name."
+                        "Multiple tools matched. Enable the intended one with "
+                        "query='select:<id>' exactly once, then call the returned call_name."
                     ),
                 },
                 sort_keys=True,
@@ -478,14 +550,21 @@ class GetMcpPromptTool:
         )
 
 
-def register_mcp_management_tools(registry: ToolRegistry, service: McpCapabilityService) -> None:
+def register_mcp_management_tools(
+    registry: ToolRegistry, service: McpCapabilityService, selected_tools: set[str]
+) -> None:
     for tool in (
-        SearchMcpToolsTool(service, registry),
+        SearchMcpToolsTool(service, registry, selected_tools),
         ReadMcpResourceTool(service),
         GetMcpPromptTool(service),
     ):
         registry.register(tool)
 
 
-def register_mcp_status_tool(registry: ToolRegistry, records: tuple[CapabilityRecord, ...]) -> None:
-    registry.register(ListMcpServersTool(records))
+def register_mcp_status_tool(
+    registry: ToolRegistry,
+    records: tuple[CapabilityRecord, ...],
+    tool_catalogs: dict[str, tuple[McpToolDefinition, ...]],
+    selected_tools: set[str],
+) -> None:
+    registry.register(ListMcpServersTool(records, tool_catalogs, selected_tools))

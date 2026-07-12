@@ -9,7 +9,7 @@ from windcode.tui.commands import CommandDefinition
 class CommandMenu(Static):
     """Keyboard-driven slash command candidates shown above the prompt."""
 
-    visible_items = 4
+    visible_items = 8
 
     def __init__(
         self,

@@ -8,6 +8,10 @@ from windcode.domain.events import AgentEventType, event_from_dict, event_to_dic
 from windcode.observability import TraceStore
 from windcode.sessions import SessionStore
 
+_TRANSIENT_EVENT_KINDS = frozenset(
+    {"text_delta", "reasoning_status", "tool_progress", "subagent_progress"}
+)
+
 
 class EventBus:
     def __init__(self, session_store: SessionStore, trace_store: TraceStore) -> None:
@@ -19,6 +23,10 @@ class EventBus:
     async def publish(self, event: AgentEventType, *, durable: bool = False) -> AgentEventType:
         if self._closed:
             raise RuntimeError("event bus is closed")
+        if event.kind in _TRANSIENT_EVENT_KINDS:
+            self.trace_store.write(event, durable=durable)
+            await self._queue.put(event)
+            return event
         record = self.session_store.append("agent_event", event_to_dict(event), durable=durable)
         persisted = replace(event, sequence=record.sequence)
         self.trace_store.write(persisted, durable=durable)
@@ -35,7 +43,7 @@ class EventBus:
         return tuple(replayed)
 
     async def subscribe(self, *, after_sequence: int = 0) -> AsyncIterator[AgentEventType]:
-        replayed = self._replay(after_sequence)
+        replayed = () if not self._queue.empty() else self._replay(after_sequence)
         highest = after_sequence
         for event in replayed:
             highest = max(highest, event.sequence or 0)
@@ -44,9 +52,12 @@ class EventBus:
             event = await self._queue.get()
             if event is None:
                 return
-            if (event.sequence or 0) <= highest:
+            if event.sequence is None:
+                yield event
                 continue
-            highest = event.sequence or highest
+            if event.sequence <= highest:
+                continue
+            highest = event.sequence
             yield event
 
     async def close(self) -> None:

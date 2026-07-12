@@ -514,6 +514,13 @@ class WindcodeApp(App[None]):
                 self.session_selector = None
             await self._restore_session(event.session_id)
 
+    @on(SessionSelector.Cancelled)
+    async def session_cancelled(self) -> None:
+        if self.session_selector is not None:
+            await self.session_selector.remove()
+            self.session_selector = None
+        self.query_one("#chat-input", ChatInput).focus()
+
     @on(ModelManager.Use)
     async def model_use(self, event: ModelManager.Use) -> None:
         await self._select_model(event.alias)
@@ -631,6 +638,12 @@ class WindcodeApp(App[None]):
     @on(MemoryManager.Forget)
     async def memory_forget(self, event: MemoryManager.Forget) -> None:
         self.client.delete_memory(event.memory_id)
+        if self.memory_manager is not None:
+            self.memory_manager.refresh_records(self.client.list_memories())
+
+    @on(MemoryManager.ActivationChanged)
+    async def memory_activation_changed(self, event: MemoryManager.ActivationChanged) -> None:
+        self.client.set_memory_activation(event.memory_id, event.activation)
         if self.memory_manager is not None:
             self.memory_manager.refresh_records(self.client.list_memories())
 
@@ -828,7 +841,24 @@ class WindcodeApp(App[None]):
                 item = matches[0]
                 await self._show_system_message(
                     f"{item.title}\n类型: {item.kind.value}; 范围: {item.scope.value}; "
-                    f"状态: {item.status.value}\n摘要: {item.summary}\n\n{item.body}"
+                    f"状态: {item.status.value}; 激活: {item.activation.value}; "
+                    f"优先级: {item.priority}\n摘要: {item.summary}\n\n{item.body}"
+                )
+            elif action == "activation":
+                if len(arguments) != 2:
+                    raise ValueError("用法: /memory activation ID <always|search|manual>")
+                matches = tuple(
+                    item
+                    for item in self.client.list_memories()
+                    if item.memory_id.startswith(arguments[0])
+                )
+                if len(matches) != 1:
+                    raise ValueError("记忆 ID 不存在或前缀不唯一")
+                if matches[0].status is not MemoryStatus.ACTIVE:
+                    raise ValueError("候选或非生效记忆必须先确认, 才能设置自动激活策略")
+                updated = self.client.set_memory_activation(matches[0].memory_id, arguments[1])
+                await self._show_system_message(
+                    f"记忆激活策略已更新: {updated.title} -> {updated.activation.value}"
                 )
             elif action in {"confirm", "reject", "forget"}:
                 if len(arguments) != 1:
@@ -855,7 +885,8 @@ class WindcodeApp(App[None]):
                 await self._show_system_message(f"记忆索引已重建: {count} 条")
             else:
                 raise ValueError(
-                    "用法: /memory [status|candidates|search|show|confirm|reject|forget|rebuild]"
+                    "用法: /memory [status|candidates|search|show|activation|confirm|reject|"
+                    "forget|rebuild]"
                 )
         elif command.name == "extensions":
             action = command.arguments[0] if command.arguments else "list"
