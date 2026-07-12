@@ -1,15 +1,16 @@
-primary_provider = "primary"
-fallback_chain = ["backup"]
+fallback_chain = []
+enabled_providers = [
+    "deepseek",
+]
+primary_provider = "deepseek"
 
-[providers.primary]
-protocol = "openai_responses"
-model = "gpt-5.2-codex"
-api_key_env = "OPENAI_API_KEY"
-
-[providers.backup]
-protocol = "anthropic_messages"
-model = "claude-sonnet-4-5"
-api_key_env = "ANTHROPIC_API_KEY"
+[providers.deepseek]
+protocol = "openai_compatible"
+model = "deepseek-v4-flash"
+provider_id = "deepseek"
+api_key_env = "DEEPSEEK_API_KEY"
+credential_id = "deepseek"
+base_url = "https://api.deepseek.com/v1"
 
 [budgets]
 max_model_steps = 40
@@ -22,7 +23,7 @@ mode = "default"
 
 [sandbox]
 enabled = true
-network_enabled = false
+network_enabled = true
 
 [context]
 window_tokens = 128000
@@ -34,11 +35,25 @@ max_tool_result_chars = 20000
 enabled = true
 include_tool_arguments = false
 include_transient_events = false
-retention_days = 14
+retention_days = 7
 max_total_mb = 100
 
+
+[extensions]
+enabled = true
+
+[extensions.mcp_servers.tavily-mcp]
+transport = "streamable_http"
+enable = false
+url = 
+
+[extensions.mcp_servers.gaodemap-mcp]
+transport = "streamable_http"
+enable = true
+url = 
+required = true
+
 [storage]
-# When set, the complete user state is copied here on first use and this root is preferred.
 project_state_root = ".windcode/state"
 user_storage_root = "~/.local/state/windcode/state"
 
@@ -58,14 +73,3 @@ project_knowledge_enabled = true
 experience_enabled = true
 sop_enabled = true
 reference_enabled = true
-
-[extensions]
-enabled = true
-
-# Each MCP server defaults to enable = true. Set it to false to keep the
-# configuration visible without connecting to or searching that server.
-# [extensions.mcp_servers.example]
-# transport = "streamable_http"
-# url = "https://example.test/mcp"
-# enable = false
-# required = false
