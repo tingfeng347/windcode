@@ -917,21 +917,20 @@ class Windcode:
                     source=MemorySource(session.metadata.session_id, run_id),
                     tags=refined.tags,
                     evidence=(
-                        ()
-                        if intent_kind is MemoryKind.EXPERIENCE
-                        else (f"用户原话: {request.prompt}",)
+                        () if intent_kind is MemoryKind.SOP else (f"用户原话: {request.prompt}",)
                     ),
                     confidence=0.8,
                     activation=activation,
                     priority=priority,
                 )
-                if intent_kind in {MemoryKind.EXPERIENCE, MemoryKind.SOP}:
-                    explicit_experience_id = candidate.memory_id
+                if intent_kind is MemoryKind.SOP:
                     saved = candidate
                     action = "candidate_created"
-                    policy = "explicit_unverified_operational_memory"
+                    policy = "explicit_sop_candidate"
                 else:
                     saved = run_memory.store.transition(candidate.memory_id, MemoryStatus.ACTIVE)
+                    if intent_kind is MemoryKind.EXPERIENCE:
+                        explicit_experience_id = saved.memory_id
                     action = "activated"
                     policy = "explicit_or_stable_fact"
                 await bus.publish(

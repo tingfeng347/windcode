@@ -28,7 +28,12 @@ class MemoryActivation(StrEnum):
 def default_memory_activation(kind: MemoryKind) -> MemoryActivation:
     if kind is MemoryKind.USER_PROFILE:
         return MemoryActivation.ALWAYS
-    if kind in {MemoryKind.EXPERIENCE, MemoryKind.SOP, MemoryKind.PROJECT_KNOWLEDGE}:
+    if kind in {
+        MemoryKind.EXPERIENCE,
+        MemoryKind.SOP,
+        MemoryKind.PROJECT_KNOWLEDGE,
+        MemoryKind.REFERENCE,
+    }:
         return MemoryActivation.SEARCH
     return MemoryActivation.MANUAL
 

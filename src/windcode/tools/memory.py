@@ -32,7 +32,7 @@ class MemorySearchInput(BaseModel):
     limit: int = Field(default=5, ge=1, le=20)
     kind: MemoryKind | None = None
     scope: MemoryScope | None = None
-    status: MemoryStatus = MemoryStatus.ACTIVE
+    status: MemoryStatus | None = None
     activation: MemoryActivation | None = None
 
 
@@ -42,7 +42,7 @@ class MemoryListInput(BaseModel):
     limit: int = Field(default=20, ge=1, le=100)
     kind: MemoryKind | None = None
     scope: MemoryScope | None = None
-    status: MemoryStatus = MemoryStatus.ACTIVE
+    status: MemoryStatus | None = None
     activation: MemoryActivation | None = None
 
 
@@ -94,6 +94,14 @@ def _matches(
     )
 
 
+def _query_statuses(status: MemoryStatus | None) -> tuple[MemoryStatus, ...]:
+    return (MemoryStatus.ACTIVE, MemoryStatus.CANDIDATE) if status is None else (status,)
+
+
+def _status_label(status: MemoryStatus | None) -> str:
+    return "active,candidate" if status is None else status.value
+
+
 def _bounded(items: list[dict[str, Any]], max_chars: int) -> tuple[list[dict[str, Any]], bool]:
     selected: list[dict[str, Any]] = []
     size = 2
@@ -133,7 +141,8 @@ class MemorySearchTool(_MemoryTool):
     name = "memory_search"
     description = (
         "Search visible long-term memories when the user explicitly asks what is remembered "
-        "or requests memory lookup. Use this instead of searching workspace files."
+        "or requests memory lookup. By default include active and candidate records and report "
+        "their status accurately. Use this instead of searching workspace files."
     )
     input_model = MemorySearchInput
 
@@ -144,7 +153,7 @@ class MemorySearchTool(_MemoryTool):
             parsed.query,
             project_id=self.service.project_id,
             limit=min(100, max(parsed.limit * 4, 20)),
-            statuses=(parsed.status,),
+            statuses=_query_statuses(parsed.status),
             kind=parsed.kind,
             scope=parsed.scope,
             activation=parsed.activation,
@@ -163,7 +172,7 @@ class MemorySearchTool(_MemoryTool):
             {
                 "query": parsed.query,
                 "count": len(items),
-                "status": parsed.status.value,
+                "status": _status_label(parsed.status),
             },
         )
         return ToolResult(json.dumps(data, ensure_ascii=False), data=data)
@@ -173,6 +182,7 @@ class MemoryListTool(_MemoryTool):
     name = "memory_list"
     description = (
         "List visible long-term memories for broad requests such as 'show what you remember'. "
+        "By default include active and candidate records and report their status accurately. "
         "Use filters instead of searching workspace files."
     )
     input_model = MemoryListInput
@@ -180,20 +190,26 @@ class MemoryListTool(_MemoryTool):
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
         del context
         parsed = cast(MemoryListInput, arguments)
+        statuses = _query_statuses(parsed.status)
         records = [
             record
             for record in self.service.store.list(
-                status=parsed.status,
                 project_id=self.service.project_id,
             )
-            if _matches(record, kind=parsed.kind, scope=parsed.scope, activation=parsed.activation)
+            if record.status in statuses
+            and _matches(
+                record,
+                kind=parsed.kind,
+                scope=parsed.scope,
+                activation=parsed.activation,
+            )
         ][: parsed.limit]
         raw_items = [_record_data(record, include_body=False) for record in records]
         items, truncated = _bounded(raw_items, self.max_chars)
         data = {"count": len(items), "truncated": truncated, "memories": items}
         await self._observe(
             "listed",
-            {"count": len(items), "status": parsed.status.value},
+            {"count": len(items), "status": _status_label(parsed.status)},
         )
         return ToolResult(json.dumps(data, ensure_ascii=False), data=data)
 
@@ -234,8 +250,8 @@ class MemoryWriteTool(_MemoryTool):
     name = "memory_write"
     description = (
         "Write a long-term memory only when the current user explicitly asks to remember it. "
-        "User facts, project knowledge, and references become active; unverified experiences "
-        "and SOPs remain candidates. Never claim it was saved before this tool succeeds."
+        "User facts, project knowledge, experiences, and references become active; only SOPs "
+        "remain candidates. Never claim it was saved before this tool succeeds."
     )
     input_model = MemoryWriteInput
     effects = frozenset({ToolEffect.OUTSIDE_WORKSPACE})
@@ -269,7 +285,12 @@ class MemoryWriteTool(_MemoryTool):
                 is_error=True,
                 data={"error": "explicit_memory_intent_required"},
             )
-        kind = parsed.kind or classify_memory_intent(self.user_prompt)
+        classified_kind = classify_memory_intent(self.user_prompt)
+        kind = (
+            MemoryKind.EXPERIENCE
+            if classified_kind is MemoryKind.EXPERIENCE
+            else parsed.kind or classified_kind
+        )
         if kind is None:
             return ToolResult(
                 "memory kind could not be determined",
@@ -332,13 +353,11 @@ class MemoryWriteTool(_MemoryTool):
             summary=self._compact(content, 240),
             body=content,
             source=self.source,
-            evidence=(
-                () if kind in {MemoryKind.EXPERIENCE, MemoryKind.SOP} else (self.user_prompt,)
-            ),
+            evidence=(() if kind is MemoryKind.SOP else (self.user_prompt,)),
             confidence=0.8,
             activation=activation,
         )
-        if kind in {MemoryKind.EXPERIENCE, MemoryKind.SOP}:
+        if kind is MemoryKind.SOP:
             record = candidate
             action = "candidate_created"
         else:

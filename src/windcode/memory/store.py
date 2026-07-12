@@ -167,12 +167,6 @@ class MemoryStore:
             raise ValueError("project-scoped memory requires project_id")
         if not 0 <= record.priority <= 100:
             raise ValueError("memory priority must be between 0 and 100")
-        if (
-            record.kind is MemoryKind.EXPERIENCE
-            and record.status is MemoryStatus.ACTIVE
-            and not record.evidence
-        ):
-            raise ValueError("active experience memory requires verification evidence")
         validate_memory_text(record.title, record.summary, record.body, *record.evidence)
         path = self._write(record)
         with self._connect() as connection:

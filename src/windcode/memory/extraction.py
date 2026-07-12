@@ -11,7 +11,7 @@ _USER_FACT_PATTERNS = (
     re.compile(r"(?i)(?:^|[,.\s])my\s+(?:preference|workflow|habit).+\s+is\s+.+"),
 )
 _QUESTION_MARKERS = ("?", "？", "什么", "吗", "么", "why", "what", "how")  # noqa: RUF001
-_EXPERIENCE_MARKERS = ("一条经验", "这个经验", "这次经验", "经验:", "lesson")
+_EXPERIENCE_MARKERS = ("经验", "lesson")
 _REFERENCE_MARKERS = ("参考资料", "这份资料", "以下资料", "reference")
 _SOP_MARKERS = ("sop", "标准操作流程", "操作规程", "执行流程", "工作流程")
 _ALWAYS_PROJECT_MARKERS = ("每次都要记住", "始终适用", "永远适用", "always applies")
@@ -28,7 +28,15 @@ def has_explicit_memory_intent(text: str) -> bool:
     normalized = text.casefold()
     return any(
         marker in normalized
-        for marker in ("记住", "以后都", "写入长期记忆", "加入长期记忆", "remember")
+        for marker in (
+            "记住",
+            "记下来",
+            "记录下来",
+            "以后都",
+            "写入长期记忆",
+            "加入长期记忆",
+            "remember",
+        )
     )
 
 
@@ -44,10 +52,10 @@ def classify_memory_intent(text: str) -> MemoryKind | None:
     """Classify explicit memory requests before applying stable-fact heuristics."""
     normalized = " ".join(text.strip().split()).casefold()
     if has_explicit_memory_intent(normalized):
-        if any(marker in normalized for marker in _SOP_MARKERS):
-            return MemoryKind.SOP
         if any(marker in normalized for marker in _EXPERIENCE_MARKERS):
             return MemoryKind.EXPERIENCE
+        if any(marker in normalized for marker in _SOP_MARKERS):
+            return MemoryKind.SOP
         if any(marker in normalized for marker in _REFERENCE_MARKERS):
             return MemoryKind.REFERENCE
         if is_project_fact(normalized):

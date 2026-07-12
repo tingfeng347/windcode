@@ -21,6 +21,18 @@ class MemoryService:
         self.workspace = workspace.expanduser().resolve()
         self.project_id = project_identifier(self.workspace)
         self.store = MemoryStore(memory_root or state_root / "memory")
+        self._migrate_lifecycle_policy()
+
+    def _migrate_lifecycle_policy(self) -> None:
+        for record in self.store.list(project_id=self.project_id):
+            current = record
+            if current.status is MemoryStatus.CANDIDATE and current.kind is not MemoryKind.SOP:
+                current = self.store.transition(current.memory_id, MemoryStatus.ACTIVE)
+            if (
+                current.kind is MemoryKind.REFERENCE
+                and current.activation is not MemoryActivation.SEARCH
+            ):
+                self.store.update(current.memory_id, activation=MemoryActivation.SEARCH)
 
     def create_candidate(
         self,

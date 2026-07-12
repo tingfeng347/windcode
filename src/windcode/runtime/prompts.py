@@ -96,6 +96,8 @@ def build_system_prompt(
             "当用户明确要求查看、列出、搜索、核对或回忆长期记忆时, 必须调用 memory_list、"
             "memory_search 或 memory_get, 并基于工具实际结果回答。宽泛的‘看看长期记忆’调用 "  # noqa: RUF001
             "memory_list; 带主题的请求调用 memory_search; 查看单条详情调用 memory_get。"
+            "memory_list 和 memory_search 默认同时返回 active 与 candidate; 回答时必须明确区分"
+            "已生效记忆和待确认候选, 不得因候选未注入自动上下文而声称记录不存在。"
             "不得使用 glob、grep、read_file、shell 或其他工作区工具代替长期记忆查询。"
             "自动注入的记忆只用于当前任务上下文, 不能冒充主动查询结果。"
             "搜索无结果时直接说明没有匹配记忆, 不得转而扫描仓库。"
