@@ -49,9 +49,16 @@ def resolve_role_tools(
     policy = ROLE_POLICIES[role]
     if kind not in policy.allowed_kinds:
         raise ValueError(f"role {role.value} does not allow {kind.value} tasks")
+    network_tools = frozenset(
+        name
+        for name in parent_tools
+        if "__" in name
+        or name in {"list_mcp_servers", "search_mcp_tools", "read_mcp_resource", "get_mcp_prompt"}
+    )
+    allowed_tools = policy.default_tools | network_tools
     if requested_tools is not None:
-        unknown = requested_tools - policy.default_tools
+        unknown = requested_tools - allowed_tools
         if unknown:
             raise ValueError(f"requested tools exceed role policy: {', '.join(sorted(unknown))}")
-    selected = policy.default_tools if requested_tools is None else requested_tools
+    selected = allowed_tools if requested_tools is None else requested_tools
     return selected & parent_tools

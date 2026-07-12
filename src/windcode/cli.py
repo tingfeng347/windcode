@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import json
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -65,9 +67,93 @@ def resolve_config(options: CLIOptions) -> AppConfig:
     )
 
 
+def build_extensions_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="windcode extensions")
+    parser.add_argument(
+        "action", choices=("list", "inspect", "install", "enable", "disable", "reload", "trust")
+    )
+    parser.add_argument("target", nargs="?")
+    parser.add_argument("--workspace", type=Path, default=Path.cwd())
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--enable", action="store_true", help="enable a plugin while installing")
+    parser.add_argument("--untrust", action="store_true", help="remove workspace trust")
+    parser.add_argument("--json", action="store_true", dest="json_output")
+    return parser
+
+
+async def _run_extensions(argv: Sequence[str]) -> int:
+    namespace = build_extensions_parser().parse_args(argv)
+    workspace: Path = namespace.workspace.expanduser().resolve()
+    if not workspace.is_dir():  # noqa: ASYNC240 - CLI setup happens before concurrent work
+        raise ConfigError(workspace, "workspace is not a directory")
+    config = load_config(workspace, explicit_file=namespace.config)
+    from windcode.sdk import Windcode
+
+    async with Windcode.open(config, workspace=workspace) as client:
+        action = str(namespace.action)
+        target = None if namespace.target is None else str(namespace.target)
+        if action == "list":
+            value: object = await client.list_extensions()
+        elif action == "inspect":
+            if target is None:
+                raise ConfigError("extensions inspect", "TARGET is required")
+            value = await client.inspect_extension(target)
+        elif action == "install":
+            if target is None:
+                raise ConfigError("extensions install", "PATH is required")
+            value = await client.install_extension(Path(target), enable=bool(namespace.enable))
+        elif action in {"enable", "disable"}:
+            if target is None:
+                raise ConfigError(f"extensions {action}", "TARGET is required")
+            value = await client.set_extension_enabled(target, action == "enable")
+        elif action == "trust":
+            trust_target = (
+                workspace if target is None else Path(target).expanduser().resolve()  # noqa: ASYNC240
+            )
+            value = await client.trust_extension_workspace(
+                trust_target, not bool(namespace.untrust)
+            )
+        else:
+            value = await client.reload_extensions()
+        if namespace.json_output:
+            from dataclasses import asdict, is_dataclass
+
+            payload = (
+                [asdict(item) for item in value]
+                if isinstance(value, tuple)
+                else asdict(value)
+                if is_dataclass(value)
+                else value
+            )
+            print(json.dumps(payload, default=str, sort_keys=True))
+        else:
+            if isinstance(value, tuple):
+                for item in value:
+                    print(getattr(item, "capability_id", str(item)))
+            else:
+                print(value)
+    return 0
+
+
 def run(argv: Sequence[str] | None = None) -> int:
+    arguments = tuple(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "extensions":
+        try:
+            return asyncio.run(_run_extensions(arguments[1:]))
+        except ConfigError as exc:
+            print(f"windcode: {exc}", file=sys.stderr)
+            return 2
+        except KeyError as exc:
+            print(f"windcode: {exc}", file=sys.stderr)
+            return 3
+        except ValueError as exc:
+            print(f"windcode: {exc}", file=sys.stderr)
+            return 4
+        except OSError as exc:
+            print(f"windcode: {exc}", file=sys.stderr)
+            return 5
     try:
-        options = parse_options(argv)
+        options = parse_options(arguments)
         if not options.workspace.is_dir():
             raise ConfigError(options.workspace, "workspace is not a directory")
         config = resolve_config(options)

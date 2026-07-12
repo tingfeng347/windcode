@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -32,6 +32,7 @@ from windcode.domain.events import (
 from windcode.domain.messages import (
     Message,
     Role,
+    SourcedContextMessage,
     TextBlock,
     ToolCallBlock,
     ToolResultBlock,
@@ -91,6 +92,8 @@ class AgentLoop:
         preserve_recent_turns: int = 8,
         max_tool_result_chars: int = 20_000,
         close_event_bus: bool = True,
+        sourced_context_provider: Callable[[], tuple[SourcedContextMessage, ...]] | None = None,
+        compact_observer: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         if not model_chain:
             raise ValueError("model_chain cannot be empty")
@@ -107,6 +110,8 @@ class AgentLoop:
         self.preserve_recent_turns = preserve_recent_turns
         self.max_tool_result_chars = max_tool_result_chars
         self.close_event_bus = close_event_bus
+        self.sourced_context_provider = sourced_context_provider
+        self.compact_observer = compact_observer
         self._turn = 0
         self.scheduler.approval_handler = self._approval_handler
         self.scheduler.before_execute = self._before_tool_execute
@@ -189,6 +194,34 @@ class AgentLoop:
             durable=side_effect,
         )
 
+    def _settle_pending_tool_calls(self, pending: tuple[ScheduledCall, ...]) -> None:
+        """Persist cancelled results for tool calls left unanswered on exit.
+
+        The assistant tool_calls message is persisted before the tools run, so
+        bailing out mid-execution (cancellation, budget, error) would otherwise
+        leave a dangling tool call that providers reject on the next run.
+        """
+
+        if not pending:
+            return
+        tool_message = Message(
+            Role.TOOL,
+            tuple(
+                ToolResultBlock(
+                    call.call_id,
+                    call.tool_name,
+                    "Tool call was interrupted before it produced a result.",
+                    is_error=True,
+                )
+                for call in pending
+            ),
+        )
+        self.event_bus.session_store.append(
+            "conversation_message",
+            message_to_dict(tool_message),
+            durable=True,
+        )
+
     async def _on_retry(self, target: ModelTarget, attempt: int, error: WindcodeError) -> None:
         await self.event_bus.publish(
             ModelRetrying(
@@ -247,15 +280,30 @@ class AgentLoop:
         records: list[ToolExecutionRecord] = []
         total_usage = Usage()
         final_text = ""
+        pending_calls: tuple[ScheduledCall, ...] = ()
         await self.event_bus.publish(RunStarted(**self._common(0), prompt=prompt), durable=True)
         try:
             while True:
                 self._turn = self.control.start_model_step()
                 primary = self.model_chain[0]
                 await self.event_bus.publish(ModelStarted(**self._common(), model=primary.model))
+                sourced = (
+                    () if self.sourced_context_provider is None else self.sourced_context_provider()
+                )
+                request_messages = (
+                    *messages,
+                    *(
+                        Message(
+                            Role.SYSTEM,
+                            (TextBlock(f"[extension source: {item.source_id}]\n{item.content}"),),
+                            provider_metadata={"extension_source": item.source_id},
+                        )
+                        for item in sourced
+                    ),
+                )
                 request = ModelRequest(
                     model=primary.model,
-                    messages=messages,
+                    messages=request_messages,
                     system_prompt=self.system_prompt,
                     tools=self.scheduler.registry.schemas(),
                     max_output_tokens=self.max_output_tokens,
@@ -263,6 +311,8 @@ class AgentLoop:
                 if self.token_estimator is not None:
                     before = self.token_estimator.estimate(request)
                     if before.should_compact or self.control.consume_compaction_request():
+                        if self.compact_observer is not None:
+                            await self.compact_observer("before")
                         candidate = messages
                         if self.artifact_store is not None:
                             candidate = truncate_context(
@@ -282,7 +332,7 @@ class AgentLoop:
                             messages = compacted.messages
                             request = ModelRequest(
                                 model=primary.model,
-                                messages=messages,
+                                messages=(*messages, *request_messages[len(messages) :]),
                                 system_prompt=self.system_prompt,
                                 tools=self.scheduler.registry.schemas(),
                                 max_output_tokens=self.max_output_tokens,
@@ -296,6 +346,10 @@ class AgentLoop:
                                 ),
                                 durable=True,
                             )
+                            if self.compact_observer is not None:
+                                await self.compact_observer("after")
+                        elif self.compact_observer is not None:
+                            await self.compact_observer("error")
                 text_parts: list[str] = []
                 call_order: list[str] = []
                 calls: dict[str, dict[str, str]] = {}
@@ -367,6 +421,8 @@ class AgentLoop:
                     durable=True,
                 )
 
+                pending_calls = tuple(scheduled)
+
                 if not scheduled:
                     result = build_run_result(final_text, tuple(records), usage=total_usage)
                     await self.event_bus.publish(
@@ -417,14 +473,18 @@ class AgentLoop:
                     message_to_dict(tool_message),
                     durable=True,
                 )
+                pending_calls = ()
         except asyncio.CancelledError:
+            self._settle_pending_tool_calls(pending_calls)
             self.control.cancel()
             await self.event_bus.publish(RunCancelled(**self._common()), durable=True)
             self.event_bus.session_store.set_status(SessionStatus.CANCELLED)
             return RunResult(status="cancelled", final_text=final_text, usage=total_usage)
         except BudgetExceeded as exc:
+            self._settle_pending_tool_calls(pending_calls)
             return await self._terminal_failure(str(exc), "budget", usage=total_usage)
         except AgentBlocked as exc:
+            self._settle_pending_tool_calls(pending_calls)
             result = RunResult(status="blocked", final_text=str(exc), usage=total_usage)
             await self.event_bus.publish(
                 RunFailed(**self._common(), message=str(exc), category="blocked"), durable=True
@@ -432,8 +492,10 @@ class AgentLoop:
             self.event_bus.session_store.set_status(SessionStatus.FAILED)
             return result
         except WindcodeError as exc:
+            self._settle_pending_tool_calls(pending_calls)
             return await self._terminal_failure(str(exc), exc.category.value, usage=total_usage)
         except Exception as exc:
+            self._settle_pending_tool_calls(pending_calls)
             return await self._terminal_failure(str(exc), "internal", usage=total_usage)
         finally:
             if self.close_event_bus:

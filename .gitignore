@@ -9,3 +9,7 @@ wheels/
 .pytest_cache/
 # Virtual environments
 .venv
+
+tests/
+
+.windcode/config.toml

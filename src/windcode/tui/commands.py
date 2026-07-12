@@ -25,6 +25,11 @@ COMMAND_CATALOG = (
     CommandDefinition("clear", "清空当前消息显示"),
     CommandDefinition("status", "显示会话状态"),
     CommandDefinition("agents", "显示子智能体状态"),
+    CommandDefinition(
+        "extensions",
+        "管理扩展",
+        "[list|inspect|install|enable|disable|reload|trust] [目标]",
+    ),
     CommandDefinition("help", "显示可用命令"),
     CommandDefinition("quit", "退出 Windcode"),
 )
@@ -38,18 +43,21 @@ class SlashCommand:
     arguments: tuple[str, ...] = ()
 
 
-def complete_commands(prefix: str) -> tuple[CommandDefinition, ...]:
+def complete_commands(
+    prefix: str, extra: tuple[CommandDefinition, ...] = ()
+) -> tuple[CommandDefinition, ...]:
     if prefix != prefix.strip() or not prefix.startswith("/") or " " in prefix or "\n" in prefix:
         return ()
     name_prefix = prefix[1:].casefold()
-    return tuple(command for command in COMMAND_CATALOG if command.name.startswith(name_prefix))
+    catalog = (*COMMAND_CATALOG, *extra)
+    return tuple(command for command in catalog if command.name.startswith(name_prefix))
 
 
-def parse_command(value: str) -> SlashCommand:
+def parse_command(value: str, extra_names: frozenset[str] = frozenset()) -> SlashCommand:
     parts = value.strip().split()
     if not parts or not parts[0].startswith("/"):
         raise ValueError("命令必须以 / 开头")
     name = parts[0][1:].casefold()
-    if name not in COMMANDS:
+    if name not in COMMANDS and name not in extra_names:
         raise ValueError(f"未知命令: /{name}")
     return SlashCommand(name, tuple(parts[1:]))

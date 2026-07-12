@@ -20,18 +20,41 @@ from windcode.domain.events import (
     RunResponse,
     RunResult,
 )
-from windcode.domain.messages import Message, Role, TextBlock, message_from_dict
+from windcode.domain.messages import (
+    Message,
+    Role,
+    TextBlock,
+    heal_dangling_tool_calls,
+    message_from_dict,
+)
 from windcode.domain.subagents import SubagentRecord, SubagentResult
-from windcode.domain.tools import Tool, ToolEffect
+from windcode.domain.tools import Tool, ToolContext, ToolEffect
+from windcode.extensions.commands import CommandRoute
+from windcode.extensions.hooks.models import HookContext, HookEvent
+from windcode.extensions.mcp.catalog import McpToolDefinition
+from windcode.extensions.mcp.tools import (
+    register_mcp_management_tools,
+    register_mcp_status_tool,
+)
+from windcode.extensions.models import (
+    CapabilityKind,
+    CapabilityRecord,
+    ExtensionSnapshot,
+    ManagementResult,
+)
+from windcode.extensions.plugins.installer import InstallResult
+from windcode.extensions.runtime import RunExtensions
+from windcode.extensions.service import ExtensionService
+from windcode.extensions.state import ExtensionStateStore, ManagementAuditRecord
 from windcode.instructions import load_instructions
-from windcode.observability import TraceStore
+from windcode.observability import DynamicRedactor, TraceStore
 from windcode.policy import PolicyEngine, PolicyRequest
 from windcode.providers import ModelTarget, ModelTransport, TransportRegistry
 from windcode.runtime.control import RunBudgets, RunControl
 from windcode.runtime.event_bus import EventBus
 from windcode.runtime.loop import AgentLoop
 from windcode.runtime.prompts import build_system_prompt
-from windcode.runtime.scheduler import ToolScheduler
+from windcode.runtime.scheduler import ScheduledCall, ToolScheduler
 from windcode.runtime.subagents import (
     ChildRuntimeFactory,
     SubagentCoordinator,
@@ -132,15 +155,22 @@ class Windcode:
         *,
         state_root: Path | None = None,
         credential_store: CredentialStore | None = None,
+        workspace: Path | None = None,
     ) -> None:
         self.config = config
         self.state_root = (state_root or user_state_path("windcode")).expanduser().resolve()
         self.credential_store = credential_store or FileCredentialStore()
+        self.workspace = (workspace or Path.cwd()).expanduser().resolve()
         self.transport_registry = TransportRegistry()
         self.tool_registry: ToolRegistry | None = None
         self._default_chain: list[str] = []
         self._handles: set[RunHandle] = set()
         self._entered = False
+        self.extension_service: ExtensionService | None = None
+        self._client_extensions: RunExtensions | None = None
+        self._mcp_tool_catalogs: dict[str, tuple[McpToolDefinition, ...]] = {}
+        self._mcp_direct_servers: tuple[str, ...] = ()
+        self._mcp_start_task: asyncio.Task[None] | None = None
 
     @classmethod
     def open(
@@ -149,9 +179,15 @@ class Windcode:
         *,
         state_root: Path | None = None,
         credential_store: CredentialStore | None = None,
+        workspace: Path | None = None,
     ) -> Self:
         parsed = config if isinstance(config, AppConfig) else AppConfig.model_validate(config or {})
-        return cls(parsed, state_root=state_root, credential_store=credential_store)
+        return cls(
+            parsed,
+            state_root=state_root,
+            credential_store=credential_store,
+            workspace=workspace,
+        )
 
     async def __aenter__(self) -> Self:
         if self._entered:
@@ -173,7 +209,84 @@ class Windcode:
         self.tool_registry = create_builtin_registry(
             shell_timeout=self.config.budgets.shell_timeout_seconds,
         )
+        extension_root = self.state_root / "extensions"
+        self.extension_service = ExtensionService(
+            self.config.extensions,
+            self.workspace,
+            ExtensionStateStore(extension_root / "state.json"),
+            extension_root / "plugins",
+        )
+        await self.extension_service.reload()
+        self._client_extensions = RunExtensions.create(
+            self.extension_service.snapshot,
+            session_id="client",
+            run_id="startup",
+            credential_store=self.credential_store,
+            max_content_bytes=self.config.extensions.max_content_bytes,
+            connect_timeout=self.config.extensions.connect_timeout_seconds,
+            call_timeout=self.config.extensions.call_timeout_seconds,
+            network_enabled=self.config.sandbox.network_enabled,
+            mcp_tool_catalogs=self._mcp_tool_catalogs,
+        )
+        self._mcp_start_task = asyncio.create_task(self._start_required_mcp())
         return self
+
+    async def _start_required_mcp(self) -> None:
+        if self._client_extensions is None or self.tool_registry is None:
+            return
+        await self._client_extensions.mcp.activate_required()
+        registered = await self._client_extensions.mcp_capabilities.register_direct_tools(
+            self.tool_registry,
+            direct_tool_limit=self.config.extensions.direct_tool_limit,
+        )
+        if registered:
+            self._mcp_direct_servers = self._client_extensions.mcp.required_server_ids
+
+    async def wait_for_required_mcp(self) -> None:
+        """Wait for the single client-level MCP startup task."""
+        if self._mcp_start_task is not None:
+            await self._mcp_start_task
+
+    @property
+    def required_mcp_loading(self) -> bool:
+        return self._mcp_start_task is not None and not self._mcp_start_task.done()
+
+    def _extensions(self) -> ExtensionService:
+        if not self._entered or self.extension_service is None:
+            raise RuntimeError("manage extensions inside the Windcode async context")
+        return self.extension_service
+
+    @property
+    def extension_snapshot(self) -> ExtensionSnapshot:
+        return self._extensions().snapshot
+
+    async def list_extensions(self) -> tuple[CapabilityRecord, ...]:
+        return await self._extensions().list_capabilities()
+
+    async def inspect_extension(self, identifier: str) -> tuple[CapabilityRecord, ...]:
+        return await self._extensions().inspect(identifier)
+
+    async def install_extension(self, path: Path, *, enable: bool = False) -> InstallResult:
+        return await self._extensions().install_local(path, enable=enable)
+
+    async def set_extension_enabled(self, identifier: str, enabled: bool) -> ManagementResult:
+        return await self._extensions().set_enabled(identifier, enabled)
+
+    async def trust_extension_workspace(
+        self, workspace: Path, trusted: bool = True
+    ) -> ManagementResult:
+        return await self._extensions().trust_workspace(workspace, trusted)
+
+    async def reload_extensions(self) -> ManagementResult:
+        return await self._extensions().reload()
+
+    def extension_commands(
+        self, *, reserved: frozenset[str] = frozenset()
+    ) -> tuple[CommandRoute, ...]:
+        return self._extensions().command_routes(reserved=reserved)
+
+    def extension_audit(self) -> tuple[ManagementAuditRecord, ...]:
+        return self._extensions().audit_records
 
     async def __aexit__(
         self,
@@ -263,10 +376,12 @@ class Windcode:
         return ancestor_chain(store.load_records(), store.metadata.head_record_id)
 
     def load_session_messages(self, session_id: str) -> tuple[Message, ...]:
-        return tuple(
-            message_from_dict(record.payload)
-            for record in self.load_session_records(session_id)
-            if record.record_type == "conversation_message"
+        return heal_dangling_tool_calls(
+            tuple(
+                message_from_dict(record.payload)
+                for record in self.load_session_records(session_id)
+                if record.record_type == "conversation_message"
+            )
         )
 
     def _ensure_session_summary(self, store: SessionStore) -> SessionMetadata:
@@ -307,18 +422,38 @@ class Windcode:
                 session.load_records(),
                 session.metadata.head_record_id,
             )
-            initial_messages = tuple(
-                message_from_dict(record.payload)
-                for record in records
-                if record.record_type == "conversation_message"
+            initial_messages = heal_dangling_tool_calls(
+                tuple(
+                    message_from_dict(record.payload)
+                    for record in records
+                    if record.record_type == "conversation_message"
+                )
             )
         run_id = uuid4().hex
+        artifact_store = ArtifactStore(session.session_dir)
+        extension_snapshot = self._extensions().snapshot
+        extension_redactor = DynamicRedactor()
+        run_extensions = RunExtensions.create(
+            extension_snapshot,
+            session_id=session.metadata.session_id,
+            run_id=run_id,
+            credential_store=self.credential_store,
+            max_content_bytes=self.config.extensions.max_content_bytes,
+            connect_timeout=self.config.extensions.connect_timeout_seconds,
+            call_timeout=self.config.extensions.call_timeout_seconds,
+            observe_secret=extension_redactor.register,
+            artifact_store=artifact_store,
+            network_enabled=self.config.sandbox.network_enabled,
+            mcp_runtime=(None if self._client_extensions is None else self._client_extensions.mcp),
+            mcp_tool_catalogs=self._mcp_tool_catalogs,
+        )
         trace = TraceStore(
             run_id,
             root=self.state_root / "traces",
             include_tool_arguments=self.config.trace.include_tool_arguments,
         )
         bus = EventBus(session, trace)
+        run_extensions.event_observer = lambda event: bus.publish(event, durable=True)
         mode = (
             PermissionMode(request.permission_mode)
             if request.permission_mode is not None
@@ -331,6 +466,9 @@ class Windcode:
             else None
         )
         run_registry = self.tool_registry.clone()
+        register_mcp_status_tool(run_registry, extension_snapshot.capabilities)
+        if run_extensions.mcp.server_ids:
+            register_mcp_management_tools(run_registry, run_extensions.mcp_capabilities)
         run_registry.register(
             ShellTool(
                 sandbox=sandbox,
@@ -389,15 +527,41 @@ class Windcode:
                 timeout_seconds=self.config.budgets.shell_timeout_seconds,
             ),
             network_enabled=self.config.sandbox.network_enabled,
+            event_observer=run_extensions.subagent_lifecycle,
         )
         add_subagent_tools(run_registry, coordinator)
-        system_prompt = build_system_prompt(
-            workspace=workspace,
-            permission_mode=mode,
-            instructions=instructions,
-            tools=run_registry,
-            delegation_mode=self.config.subagents.mode,
+
+        unavailable_mcp_servers = tuple(
+            (
+                record.public_name,
+                "未信任当前工作区, 需要执行 extensions trust 后 reload"
+                if not record.trusted
+                else "已禁用, 需要启用后 reload",
+            )
+            for record in extension_snapshot.capabilities
+            if record.kind is CapabilityKind.MCP_SERVER
+            and (not record.enabled or not record.trusted)
         )
+
+        def make_system_prompt(
+            direct_servers: tuple[str, ...], search_servers: tuple[str, ...]
+        ) -> str:
+            return build_system_prompt(
+                workspace=workspace,
+                permission_mode=mode,
+                instructions=instructions,
+                tools=run_registry,
+                delegation_mode=self.config.subagents.mode,
+                skills=run_extensions.skills.search(),
+                mcp_direct_servers=direct_servers,
+                mcp_search_servers=search_servers,
+                mcp_unavailable_servers=unavailable_mcp_servers,
+            )
+
+        # Direct tools are not registered until run start (after activation), so
+        # build a provisional prompt now and refine it once we know which servers
+        # expose their tools directly versus needing the search/select flow.
+        system_prompt = make_system_prompt((), run_extensions.mcp.server_ids)
 
         def record_session_approval(request: PolicyRequest) -> None:
             session.append(
@@ -413,8 +577,30 @@ class Windcode:
         scheduler = ToolScheduler(
             run_registry,
             policy,
+            before_policy=run_extensions.before_policy,
+            permission_observer=run_extensions.permission_requested,
+            after_execute=run_extensions.after_execute,
             session_approval_recorder=record_session_approval,
         )
+
+        async def run_hook_command(command: str, origin: str, hook_context: HookContext) -> str:
+            del hook_context
+            scheduled = ScheduledCall(
+                uuid4().hex,
+                "shell",
+                {"command": command},
+                origin=origin,
+            )
+            results = await scheduler.execute(
+                (scheduled,),
+                ToolContext(workspace, run_id, lambda: control.cancelled),
+            )
+            result = results[0].result
+            if result.is_error:
+                raise RuntimeError(result.output)
+            return result.output
+
+        run_extensions.hooks.executor.command_runner = run_hook_command
         loop = AgentLoop(
             session_id=session.metadata.session_id,
             run_id=run_id,
@@ -427,20 +613,59 @@ class Windcode:
                 self.config.context.window_tokens,
                 compaction_threshold=self.config.context.compaction_threshold,
             ),
-            artifact_store=ArtifactStore(session.session_dir),
+            artifact_store=artifact_store,
             preserve_recent_turns=self.config.context.preserve_recent_turns,
             max_tool_result_chars=self.config.context.max_tool_result_chars,
             close_event_bus=False,
+            sourced_context_provider=run_extensions.drain_context,
+            compact_observer=run_extensions.compact_lifecycle,
         )
         after_sequence = session.metadata.next_sequence - 1
 
         async def run_with_subagents() -> RunResult:
             try:
+                await self.wait_for_required_mcp()
+                await run_extensions.mcp_capabilities.register_direct_tools(
+                    run_registry,
+                    direct_tool_limit=self.config.extensions.direct_tool_limit,
+                )
+                await run_extensions.mcp_capabilities.register_direct_tools(
+                    child_tools,
+                    direct_tool_limit=self.config.extensions.direct_tool_limit,
+                )
+                direct_servers = self._mcp_direct_servers
+                search_servers = tuple(
+                    server_id
+                    for server_id in run_extensions.mcp.server_ids
+                    if server_id not in set(direct_servers)
+                )
+                loop.system_prompt = make_system_prompt(direct_servers, search_servers)
+                if not existing_session:
+                    await run_extensions.lifecycle(HookEvent.SESSION_START)
+                await run_extensions.lifecycle(HookEvent.USER_SUBMIT)
+                await run_extensions.lifecycle(HookEvent.RUN_START)
+                prompt_parts = request.prompt.strip().split(maxsplit=1)
+                if prompt_parts and prompt_parts[0].startswith("$"):
+                    await run_extensions.activate_skill(prompt_parts[0])
+                elif prompt_parts and prompt_parts[0].startswith("@prompt:"):
+                    await run_extensions.activate_prompt(prompt_parts[0].removeprefix("@prompt:"))
+                elif prompt_parts and prompt_parts[0].startswith("@capability:"):
+                    run_extensions.activate_capability(prompt_parts[0].removeprefix("@capability:"))
                 if existing_session:
                     await coordinator.recover()
-                return await loop.run(request.prompt, workspace, initial_messages)
+                result = await loop.run(request.prompt, workspace, initial_messages)
+                await run_extensions.lifecycle(HookEvent.RUN_END, status=result.status)
+                return result
+            except BaseException:
+                await run_extensions.lifecycle(HookEvent.RUN_ERROR, status="error")
+                raise
             finally:
                 await coordinator.shutdown("parent run ended")
+                await run_extensions.lifecycle(HookEvent.SESSION_END)
+                await run_extensions.aclose()
+                # The MCP runtime outlives this run; do not retain its closed event bus.
+                run_extensions.mcp.observer = None
+                extension_redactor.clear()
                 await bus.close()
 
         task = asyncio.create_task(run_with_subagents())
@@ -481,6 +706,15 @@ class Windcode:
             return
         handles = tuple(self._handles)
         await asyncio.gather(*(handle.cancel() for handle in handles))
+        if self._mcp_start_task is not None:
+            if not self._mcp_start_task.done():
+                self._mcp_start_task.cancel()
+            await asyncio.gather(self._mcp_start_task, return_exceptions=True)
+            self._mcp_start_task = None
+        if self._client_extensions is not None:
+            self._client_extensions.mcp.observer = None
+            await self._client_extensions.aclose()
+            self._client_extensions = None
         await self.transport_registry.aclose()
         self._entered = False
 

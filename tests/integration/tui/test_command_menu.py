@@ -69,6 +69,22 @@ async def test_slash_filters_and_tab_completes_selected_command(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_navigation_keeps_highlight_in_visible_window(tmp_path: Path) -> None:
+    del tmp_path
+    app = CommandApp()
+    async with app.run_test() as pilot:
+        menu = app.query_one(CommandMenu)
+        menu.show_commands(COMMAND_CATALOG)
+        for _ in range(7):
+            menu.move_down()
+        await pilot.pause()
+
+        assert menu.cursor == 7
+        assert f"> {COMMAND_CATALOG[7].value}" in str(menu.render())
+        assert COMMAND_CATALOG[0].value not in str(menu.render())
+
+
+@pytest.mark.asyncio
 async def test_enter_submits_selected_command_and_escape_closes_menu(tmp_path: Path) -> None:
     del tmp_path
     app = CommandApp()

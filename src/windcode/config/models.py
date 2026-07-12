@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Self
+from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -98,6 +98,53 @@ class TraceConfig(StrictModel):
     include_tool_arguments: bool = False
 
 
+class EnvironmentReference(StrictModel):
+    env: str = Field(min_length=1, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+class CredentialReference(StrictModel):
+    credential: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+SecretReference = Annotated[
+    EnvironmentReference | CredentialReference, Field(union_mode="left_to_right")
+]
+
+
+class McpStdioConfig(StrictModel):
+    transport: Literal["stdio"] = "stdio"
+    command: str = Field(min_length=1)
+    args: tuple[str, ...] = ()
+    cwd: str | None = Field(default=None, min_length=1)
+    env: dict[str, SecretReference] = Field(default_factory=dict[str, SecretReference])
+    required: bool = False
+
+
+class McpHttpConfig(StrictModel):
+    transport: Literal["streamable_http"]
+    url: str = Field(min_length=1, pattern=r"^https?://")
+    headers: dict[str, SecretReference] = Field(default_factory=dict[str, SecretReference])
+    required: bool = False
+
+
+McpServerConfig = Annotated[McpStdioConfig | McpHttpConfig, Field(union_mode="left_to_right")]
+
+
+class ExtensionConfig(StrictModel):
+    enabled: bool = False
+    direct_tool_limit: int = Field(default=24, ge=0, le=256)
+    connect_timeout_seconds: float = Field(default=10.0, gt=0, le=300)
+    call_timeout_seconds: float = Field(default=60.0, gt=0, le=3600)
+    hook_timeout_seconds: float = Field(default=10.0, gt=0, le=300)
+    max_metadata_bytes: int = Field(default=65_536, ge=1_024, le=1_048_576)
+    max_content_bytes: int = Field(default=1_048_576, ge=1_024, le=16_777_216)
+    max_scan_depth: int = Field(default=8, ge=1, le=32)
+    max_scan_entries: int = Field(default=10_000, ge=1, le=100_000)
+    skill_roots: tuple[str, ...] = ()
+    mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict[str, McpServerConfig])
+    project_mcp_servers: frozenset[str] = Field(default_factory=frozenset, exclude=True)
+
+
 class AppConfig(StrictModel):
     providers: dict[str, ProviderConfig] = Field(default_factory=dict[str, ProviderConfig])
     primary_provider: str | None = None
@@ -108,6 +155,7 @@ class AppConfig(StrictModel):
     context: ContextConfig = Field(default_factory=ContextConfig)
     trace: TraceConfig = Field(default_factory=TraceConfig)
     subagents: SubagentConfig = Field(default_factory=SubagentConfig)
+    extensions: ExtensionConfig = Field(default_factory=ExtensionConfig)
 
     @model_validator(mode="after")
     def validate_provider_chain(self) -> Self:

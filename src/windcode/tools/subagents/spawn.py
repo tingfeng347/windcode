@@ -52,7 +52,7 @@ class SpawnSubagentsTool:
     name = "spawn_subagents"
     description = (
         "Create bounded temporary subagents. Declare requires_network for network-dependent "
-        "tasks; read-only subagents cannot use external networks."
+        "tasks; network access follows the parent run's network policy and permission workflow."
     )
     input_model = SpawnSubagentsInput
     effects = frozenset({ToolEffect.PROCESS, ToolEffect.WORKSPACE_WRITE})

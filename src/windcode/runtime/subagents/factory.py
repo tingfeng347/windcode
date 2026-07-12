@@ -6,12 +6,10 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel
-
 from windcode.config import AppConfig, PermissionMode
 from windcode.context import TokenEstimator
 from windcode.domain.subagents import SubagentRecord, SubagentTaskKind
-from windcode.domain.tools import ToolContext, ToolResult
+from windcode.domain.tools import ToolContext
 from windcode.instructions import load_instructions
 from windcode.observability import TraceStore
 from windcode.policy import ApprovalChoice, PolicyDecision, PolicyEngine, PolicyRequest
@@ -27,7 +25,7 @@ from windcode.runtime.subagents.roles import ROLE_POLICIES, resolve_role_tools
 from windcode.sandbox import BubblewrapSandbox, detect_bubblewrap
 from windcode.sessions import ArtifactStore, SessionStore
 from windcode.tools import ToolRegistry
-from windcode.tools.shell import ShellInput, ShellTool
+from windcode.tools.shell import ShellTool
 
 
 def _git_common_directory(workspace: Path) -> Path | None:
@@ -73,17 +71,6 @@ class AggregateRunControl(RunControl):
         except AggregateBudgetExceeded as exc:
             raise BudgetExceeded(f"aggregate_{exc.budget}") from exc
         super().reserve_tool_calls(count)
-
-
-class ReadOnlyShellTool(ShellTool):
-    async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
-        if isinstance(arguments, ShellInput) and arguments.network:
-            return ToolResult(
-                output="read-only subagents cannot enable network access",
-                is_error=True,
-                data={"error": "network_disabled"},
-            )
-        return await super().execute(context, arguments)
 
 
 class ChildToolScheduler(ToolScheduler):
@@ -200,9 +187,8 @@ class ChildRuntimeFactory:
             else None
         )
         if "shell" in registry.names():
-            shell_type = ReadOnlyShellTool if spec.kind is SubagentTaskKind.READ else ShellTool
             registry.register(
-                shell_type(
+                ShellTool(
                     sandbox=sandbox,
                     default_timeout=self.config.budgets.shell_timeout_seconds,
                 ),
@@ -245,6 +231,9 @@ class ChildRuntimeFactory:
             instructions=instructions,
             tools=registry,
             is_subagent=True,
+            mcp_direct_servers=tuple(
+                name.split("__", 1)[0] for name in registry.names() if "__" in name
+            ),
         )
         system_prompt += (
             f"\n\n## Temporary subagent role\n{policy.system_instructions}\n"

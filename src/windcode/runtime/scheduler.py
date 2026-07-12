@@ -23,6 +23,7 @@ class ScheduledCall:
     call_id: str
     tool_name: str
     arguments: Mapping[str, Any]
+    origin: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,8 +32,17 @@ class ScheduledResult:
     result: ToolResult
 
 
+@dataclass(frozen=True, slots=True)
+class PolicyConstraints:
+    additional_effects: frozenset[ToolEffect] = frozenset()
+    reject_reason: str | None = None
+
+
 ApprovalHandler = Callable[[PolicyRequest, PolicyDecision], Awaitable[ApprovalChoice]]
 BeforeExecute = Callable[[ScheduledCall, PolicyRequest], Awaitable[None]]
+BeforePolicy = Callable[[ScheduledCall, ToolContext], Awaitable[PolicyConstraints]]
+PermissionObserver = Callable[[ScheduledCall, PolicyRequest, PolicyDecision], Awaitable[None]]
+AfterExecute = Callable[[ScheduledCall, PolicyRequest, ToolResult], Awaitable[None]]
 SessionApprovalRecorder = Callable[[PolicyRequest], None]
 
 
@@ -44,17 +54,29 @@ class ToolScheduler:
         *,
         approval_handler: ApprovalHandler | None = None,
         before_execute: BeforeExecute | None = None,
+        before_policy: BeforePolicy | None = None,
+        permission_observer: PermissionObserver | None = None,
+        after_execute: AfterExecute | None = None,
         session_approval_recorder: SessionApprovalRecorder | None = None,
     ) -> None:
         self.registry = registry
         self.policy = policy
         self.approval_handler = approval_handler
         self.before_execute = before_execute
+        self.before_policy = before_policy
+        self.permission_observer = permission_observer
+        self.after_execute = after_execute
         self.session_approval_recorder = session_approval_recorder
 
-    def _policy_request(self, call: ScheduledCall, context: ToolContext) -> PolicyRequest:
+    def _policy_request(
+        self,
+        call: ScheduledCall,
+        context: ToolContext,
+        additional_effects: frozenset[ToolEffect] = frozenset(),
+    ) -> PolicyRequest:
         tool = self.registry.get(call.tool_name)
         effects = set(tool.effects)
+        effects.update(additional_effects)
         raw_path = call.arguments.get("path")
         path = str(raw_path) if isinstance(raw_path, str) else None
         if path is not None and not resolve_path(context.workspace, path).inside_workspace:
@@ -75,7 +97,21 @@ class ToolScheduler:
 
     async def _execute_one(self, call: ScheduledCall, context: ToolContext) -> ScheduledResult:
         try:
-            request = self._policy_request(call, context)
+            constraints = (
+                await self.before_policy(call, context)
+                if self.before_policy is not None
+                else PolicyConstraints()
+            )
+            if constraints.reject_reason is not None:
+                return ScheduledResult(
+                    call.call_id,
+                    ToolResult(
+                        constraints.reject_reason,
+                        is_error=True,
+                        data={"error": "extension_rejected"},
+                    ),
+                )
+            request = self._policy_request(call, context, constraints.additional_effects)
         except KeyError as exc:
             return ScheduledResult(
                 call.call_id,
@@ -86,6 +122,8 @@ class ToolScheduler:
                 ),
             )
         decision = self.policy.evaluate(request)
+        if self.permission_observer is not None:
+            await self.permission_observer(call, request, decision)
         if decision.action is PolicyAction.DENY:
             return ScheduledResult(
                 call.call_id,
@@ -122,6 +160,8 @@ class ToolScheduler:
         if self.before_execute is not None:
             await self.before_execute(call, request)
         result = await self.registry.execute(call.tool_name, context, call.arguments)
+        if self.after_execute is not None:
+            await self.after_execute(call, request, result)
         return ScheduledResult(call.call_id, result)
 
     def _is_read_only(self, call: ScheduledCall) -> bool:

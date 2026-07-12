@@ -33,3 +33,6 @@ max_tool_result_chars = 20000
 [trace]
 enabled = true
 include_tool_arguments = false
+
+[extensions]
+enabled = true

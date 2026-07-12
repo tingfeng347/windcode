@@ -30,6 +30,14 @@ from windcode.domain.subagents import (
     VerificationResult,
 )
 from windcode.domain.tools import Tool, ToolContext, ToolEffect, ToolResult
+from windcode.extensions.models import (
+    CapabilityRecord,
+    Diagnostic,
+    ExtensionSnapshot,
+    ManagementResult,
+)
+from windcode.extensions.plugins.installer import InstallResult
+from windcode.extensions.state import ManagementAuditRecord
 
 AgentEvent = AgentEventType
 
@@ -37,6 +45,12 @@ __all__ = [
     "AgentEvent",
     "ApprovalRequested",
     "ApprovalResponse",
+    "CapabilityRecord",
+    "Diagnostic",
+    "ExtensionSnapshot",
+    "InstallResult",
+    "ManagementAuditRecord",
+    "ManagementResult",
     "RunRequest",
     "RunResponse",
     "RunResult",

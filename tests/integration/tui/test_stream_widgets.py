@@ -3,6 +3,7 @@ from textual.app import App, ComposeResult
 from textual.widgets import Static
 
 from windcode.domain.events import (
+    ModelStarted,
     ReasoningStatus,
     RunCompleted,
     TextDeltaEvent,
@@ -71,6 +72,48 @@ async def test_reasoning_deltas_update_only_one_live_spinner() -> None:
         await pilot.pause()
         assert not list(stream.query("#spinner-live"))
         assert len(list(stream.query(".thinking-done"))) == 1
+        assert "本轮耗时" in str(stream.query_one(".thinking-done", Static).content)
+
+
+@pytest.mark.asyncio
+async def test_live_status_stays_after_tool_blocks_and_in_latest_ai_row() -> None:
+    app = StreamApp()
+    async with app.run_test(size=(80, 24)) as pilot:
+        stream = app.query_one("#chat-area", MessageStream)
+        await stream.begin_run()
+        await stream.apply_event(
+            ToolStarted(
+                event_id="tool",
+                session_id="session",
+                run_id="run",
+                turn=1,
+                call_id="call",
+                tool_name="shell",
+                arguments={},
+            )
+        )
+        await stream.mount_in_ai_row(Static("工具输出"))
+
+        spinner = stream.query_one("#spinner-live", Static)
+        assert spinner.parent is not None
+        assert spinner.parent.children[-1] is spinner
+
+        await stream.apply_event(
+            ModelStarted(
+                event_id="model",
+                session_id="session",
+                run_id="run",
+                turn=1,
+                model="test",
+            )
+        )
+        await stream.apply_event(event("answer", "后续回复"))
+        await pilot.pause()
+
+        latest_row = list(stream.query(".ai-row"))[-1]
+        assert spinner.parent is latest_row
+        assert latest_row.children[-1] is spinner
+        assert "处理中" in str(spinner.content)
 
 
 @pytest.mark.asyncio
@@ -125,7 +168,7 @@ def test_tool_block_tracks_result_metadata() -> None:
         turn=1,
         call_id="call",
         tool_name="shell",
-        arguments={"command": "pytest"},
+        arguments={"command": "pytest -q 'tests with spaces'"},
     )
     block = ToolBlock(started)
     block.finish(
@@ -140,3 +183,5 @@ def test_tool_block_tracks_result_metadata() -> None:
     )
     assert "退出码 0" in str(block.title)
     assert "<0.01 秒" in str(block.title)
+    assert "bash:" in str(block.content)
+    assert "pytest -q 'tests with spaces'" in str(block.content)

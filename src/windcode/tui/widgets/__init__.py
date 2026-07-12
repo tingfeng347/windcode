@@ -1,5 +1,6 @@
 from windcode.tui.widgets.approval import ApprovalWidget
 from windcode.tui.widgets.command_menu import CommandMenu
+from windcode.tui.widgets.extensions import ExtensionList
 from windcode.tui.widgets.input import ChatInput
 from windcode.tui.widgets.messages import MessageStream
 from windcode.tui.widgets.models import ModelManager, ProviderManager
@@ -14,6 +15,7 @@ __all__ = [
     "ApprovalWidget",
     "ChatInput",
     "CommandMenu",
+    "ExtensionList",
     "MessageStream",
     "ModelManager",
     "ProviderManager",

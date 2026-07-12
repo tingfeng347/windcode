@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from rich.markup import escape
 from textual.widgets import Static
 
 from windcode.domain.events import ToolFinished, ToolProgress, ToolStarted
@@ -28,11 +29,22 @@ class ToolBlock(Static, can_focus=True):
     def __init__(self, event: ToolStarted) -> None:
         self.call_id = event.call_id
         self.tool_name = event.tool_name
+        command = event.arguments.get("command")
+        self.command = str(command) if command is not None else None
         self.title = TOOL_LABELS.get(event.tool_name, event.tool_name)
-        super().__init__(f"  ● {self.title} ...", classes="tool-block tool-block-loading")
+        super().__init__(
+            self._content(f"● {self.title} ..."),
+            classes="tool-block tool-block-loading",
+        )
+
+    def _content(self, status: str) -> str:
+        lines = [f"  {status}"]
+        if self.tool_name == "shell" and self.command:
+            lines.append(f"    [bold cyan]bash:[/bold cyan] {escape(self.command)}")
+        return "\n".join(lines)
 
     def progress(self, event: ToolProgress) -> None:
-        self.update(f"  ● {self.title} ... {event.message}")
+        self.update(self._content(f"● {self.title} ... {escape(event.message)}"))
 
     def finish(self, event: ToolFinished) -> None:
         self.remove_class("tool-block-loading")
@@ -45,4 +57,4 @@ class ToolBlock(Static, can_focus=True):
             f"{TOOL_LABELS.get(self.tool_name, self.tool_name)}{detail}"
             f" ({format_duration(event.result.elapsed_seconds)})"
         )
-        self.update(f"  {marker} {self.title}")
+        self.update(self._content(f"{marker} {self.title}"))

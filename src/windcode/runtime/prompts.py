@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from windcode.config import DelegationMode, PermissionMode
 from windcode.instructions import InstructionBlock
 from windcode.tools import ToolRegistry
+
+if TYPE_CHECKING:
+    from windcode.extensions.skills.tools import SkillSearchResult
 
 
 def build_system_prompt(
@@ -15,11 +19,47 @@ def build_system_prompt(
     tools: ToolRegistry,
     delegation_mode: DelegationMode | None = None,
     is_subagent: bool = False,
+    skills: tuple[SkillSearchResult, ...] = (),
+    mcp_direct_servers: tuple[str, ...] = (),
+    mcp_search_servers: tuple[str, ...] = (),
+    mcp_unavailable_servers: tuple[tuple[str, str], ...] = (),
 ) -> str:
     tool_lines = "\n".join(f"- {schema.name}: {schema.description}" for schema in tools.schemas())
     instruction_sections = "\n\n".join(
         f"### {block.path}\n{block.content.rstrip()}" for block in instructions
     )
+    extension_sections = ""
+    if skills:
+        skill_lines = "\n".join(
+            f"- ${item.name}: {item.description} [source: {item.source_id}]" for item in skills
+        )
+        extension_sections += f"\n\n## Agent Skills\n{skill_lines}"
+    if mcp_direct_servers:
+        server_lines = "\n".join(f"- {server_id}" for server_id in sorted(mcp_direct_servers))
+        extension_sections += (
+            f"\n\n## MCP 服务器 (工具已直接可用)\n{server_lines}\n"
+            "这些服务器的工具已列在上方“可用工具”中, 直接按名称调用即可, "
+            "无需再调用 search_mcp_tools 搜索或启用。"
+        )
+    if mcp_search_servers:
+        server_lines = "\n".join(f"- {server_id}" for server_id in sorted(mcp_search_servers))
+        extension_sections += (
+            f"\n\n## MCP 服务器 (按需启用)\n{server_lines}\n"
+            "这些服务器的工具默认不可直接调用, 需先启用: "
+            "1) 调用 search_mcp_tools, query 传关键词(或空串列出全部)找到目标工具的 id; "
+            "2) 再次调用 search_mcp_tools, query 传 select:<id> 启用它, "
+            "返回值中的 call_name 即可调用的工具名; "
+            "3) 用该 call_name 直接调用工具并传入其参数。启用后的工具在本次运行内保持可用。"
+        )
+    if mcp_unavailable_servers:
+        server_lines = "\n".join(
+            f"- {server_id}: {reason}" for server_id, reason in sorted(mcp_unavailable_servers)
+        )
+        extension_sections += (
+            f"\n\n## MCP 服务器 (本次运行不可用)\n{server_lines}\n"
+            "这些服务器已经配置, 因此不得声称 Windcode 没有 MCP 集成。"
+            "它们当前不能调用; 可使用 list_mcp_servers 核实状态, 并向用户准确说明原因。"
+        )
     delegation = ""
     if is_subagent:
         delegation = (
@@ -31,14 +71,14 @@ def build_system_prompt(
             "\n\n## 委派策略: explicit\n"
             "仅当用户明确要求委派、并行或使用子智能体时, 才可调用子智能体工具。"
             "创建后调用 wait_subagents 一次等待结果; 禁止循环调用 list_subagents。"
-            "子智能体不能访问外部网络, 不得委派实时网络任务。"
+            "子智能体可按运行网络策略和权限审批访问外部网络。"
         )
     elif delegation_mode is DelegationMode.PROACTIVE:
         delegation = (
             "\n\n## 委派策略: proactive\n"
             "可在任务确实独立且适合并行时主动委派; 必须保持任务有界、状态可见并统一汇总。"
             "创建后调用 wait_subagents 一次等待结果; 禁止循环调用 list_subagents。"
-            "子智能体不能访问外部网络, 不得委派实时网络任务。"
+            "子智能体可按运行网络策略和权限审批访问外部网络。"
         )
     return (
         "你是 Windcode, 在终端中帮助用户完成软件工程任务的本地编码 Agent.\n"
@@ -57,5 +97,6 @@ def build_system_prompt(
         f"## 可用工具\n{tool_lines or '- 无'}\n\n"
         f"## 项目指令 (按根目录到当前目录排列, 后者优先)\n"
         f"{instruction_sections or '无项目指令'}"
+        f"{extension_sections}"
         f"{delegation}"
     )

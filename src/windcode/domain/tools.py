@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -50,3 +50,6 @@ class Tool(Protocol):
     def effects(self) -> frozenset[ToolEffect]: ...
 
     def execute(self, context: ToolContext, arguments: BaseModel) -> Awaitable[ToolResult]: ...
+
+
+ValidatedArguments = BaseModel | Mapping[str, Any]

@@ -9,6 +9,8 @@ from windcode.tui.commands import CommandDefinition
 class CommandMenu(Static):
     """Keyboard-driven slash command candidates shown above the prompt."""
 
+    visible_items = 4
+
     def __init__(
         self,
         *,
@@ -65,12 +67,18 @@ class CommandMenu(Static):
         return self._items[self._cursor].value
 
     def _render_items(self) -> None:
+        window_start = min(
+            max(0, self._cursor - self.visible_items + 1),
+            max(0, len(self._items) - self.visible_items),
+        )
+        visible = self._items[window_start : window_start + self.visible_items]
         command_width = max(
             len(item.value) + (len(item.argument_hint) + 1 if item.argument_hint else 0)
-            for item in self._items
+            for item in visible
         )
         lines: list[str] = []
-        for index, item in enumerate(self._items):
+        for offset, item in enumerate(visible):
+            index = window_start + offset
             command = item.value
             if item.argument_hint:
                 command = f"{command} {item.argument_hint}"

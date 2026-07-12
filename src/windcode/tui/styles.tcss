@@ -12,35 +12,36 @@ Screen {
     color: #aab3ba;
 }
 
-#welcome-view {
+#content-shell {
+    width: 100%;
     height: 1fr;
+}
+
+#welcome-view {
+    height: auto;
     width: 100%;
     align: center middle;
-    padding: 1 4 0 4;
+    padding: 0 4;
     background: #151719;
+}
+
+.welcome-mode #content-shell {
+    align: center middle;
 }
 
 #welcome-logo {
     width: 100%;
-    height: auto;
+    height: 5;
     content-align: center middle;
     color: #5fa8e8;
 }
 
 #welcome-subtitle {
-    width: 100%;
-    height: 1;
-    margin-top: 1;
-    text-align: center;
-    color: #88939b;
+    display: none;
 }
 
 #welcome-context {
-    width: 100%;
-    height: auto;
-    margin-top: 1;
-    text-align: center;
-    color: #9ca6ad;
+    display: none;
 }
 
 #welcome-notice {
@@ -107,7 +108,7 @@ Screen {
 }
 
 .tool-block {
-    width: auto;
+    width: 100%;
     height: auto;
     padding: 0 2;
     color: #aab3ba;
@@ -132,22 +133,42 @@ Screen {
     color: #d9a557;
 }
 
-#input-area {
+#input-dock {
     dock: bottom;
     width: 100%;
     height: auto;
     max-height: 24;
-    padding: 0 2;
+    padding: 0 2 1 2;
     background: #151719;
+}
+
+#input-area {
+    width: 100%;
+    height: auto;
+    max-height: 23;
+    padding: 0 2;
+    background: #1b2024;
     border-left: thick #5fa8e8;
 }
 
 .welcome-mode #input-area {
-    width: 76%;
-    offset-x: 12%;
-    margin-bottom: 2;
+    width: 75%;
+    offset-x: 15%;
     padding: 0 1;
-    background: #1b2024;
+}
+
+.welcome-mode #input-dock {
+    dock: none;
+    padding: 1 2 0 2;
+}
+
+.narrow #input-dock {
+    padding: 0;
+}
+
+.narrow.welcome-mode #input-area {
+    width: 100%;
+    offset-x: 0;
 }
 
 #command-menu {
@@ -165,9 +186,9 @@ Screen {
 #chat-input {
     width: 100%;
     height: auto;
-    min-height: 3;
-    max-height: 9;
-    padding: 0 1;
+    min-height: 4;
+    max-height: 10;
+    padding: 1 2 0 2;
     border: none;
     background: #1b2024;
     color: #e4e9ed;
@@ -181,7 +202,7 @@ Screen {
     width: 100%;
     height: 1;
     min-height: 1;
-    padding: 0 1;
+    padding: 0 2;
     background: #1b2024;
     color: #88939b;
 }

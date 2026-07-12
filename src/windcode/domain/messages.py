@@ -59,6 +59,13 @@ class Message:
     provider_metadata: dict[str, Any] = field(default_factory=dict[str, Any], repr=False)
 
 
+@dataclass(frozen=True, slots=True)
+class SourcedContextMessage:
+    source_id: str
+    content: str
+    lifecycle: str = "next_model_step"
+
+
 def message_to_dict(message: Message) -> dict[str, Any]:
     content: list[dict[str, Any]] = []
     for block in message.content:
@@ -101,6 +108,56 @@ def message_to_dict(message: Message) -> dict[str, Any]:
         "created_at": message.created_at.isoformat(),
         "provider_metadata": message.provider_metadata,
     }
+
+
+def heal_dangling_tool_calls(messages: tuple[Message, ...]) -> tuple[Message, ...]:
+    """Ensure every assistant tool_call is answered by a tool result.
+
+    A run that is cancelled or fails after the assistant tool_calls message is
+    persisted but before tool results are recorded leaves a dangling tool call.
+    OpenAI-compatible providers reject such transcripts, so synthesize a
+    cancelled tool result for any call id that has no matching result.
+    """
+
+    healed: list[Message] = []
+    index = 0
+    total = len(messages)
+    while index < total:
+        message = messages[index]
+        healed.append(message)
+        call_blocks = [block for block in message.content if isinstance(block, ToolCallBlock)]
+        if message.role is not Role.ASSISTANT or not call_blocks:
+            index += 1
+            continue
+        required = {block.call_id: block.name for block in call_blocks}
+        answered: set[str] = set()
+        cursor = index + 1
+        while cursor < total and messages[cursor].role is Role.TOOL:
+            healed.append(messages[cursor])
+            answered.update(
+                block.call_id
+                for block in messages[cursor].content
+                if isinstance(block, ToolResultBlock)
+            )
+            cursor += 1
+        missing = [call_id for call_id in required if call_id not in answered]
+        if missing:
+            healed.append(
+                Message(
+                    Role.TOOL,
+                    tuple(
+                        ToolResultBlock(
+                            call_id,
+                            required[call_id],
+                            "Tool call was interrupted before it produced a result.",
+                            is_error=True,
+                        )
+                        for call_id in missing
+                    ),
+                )
+            )
+        index = cursor
+    return tuple(healed)
 
 
 def _object_mapping(value: object) -> dict[str, object]:

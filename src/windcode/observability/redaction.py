@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
@@ -63,3 +64,32 @@ def redact(value: Any, *, secrets: Iterable[str] = ()) -> Any:
         return item
 
     return visit(cast(object, value))
+
+
+class DynamicRedactor:
+    """Run-scoped sensitive value registry with explicit cleanup."""
+
+    def __init__(self) -> None:
+        self._secrets: set[str] = set()
+        self._lock = threading.Lock()
+
+    def register(self, secret: str) -> None:
+        if not secret:
+            return
+        with self._lock:
+            self._secrets.add(secret)
+
+    def redact(self, value: Any) -> Any:
+        with self._lock:
+            secrets = tuple(sorted(self._secrets, key=len, reverse=True))
+        return redact(value, secrets=secrets)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._secrets.clear()
+
+    def __enter__(self) -> DynamicRedactor:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.clear()

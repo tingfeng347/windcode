@@ -7,7 +7,7 @@ from typing import ClassVar, Literal
 from rich.text import Text as RichText
 from textual import events, on
 from textual.app import App, ComposeResult
-from textual.binding import BindingType
+from textual.binding import Binding, BindingType
 from textual.containers import Vertical
 from textual.css.query import NoMatches
 from textual.theme import Theme
@@ -27,11 +27,18 @@ from windcode.domain.events import (
 )
 from windcode.domain.messages import TextBlock, message_from_dict
 from windcode.sdk import RunHandle, Windcode
-from windcode.tui.commands import SlashCommand, complete_commands, parse_command
+from windcode.tui.commands import (
+    COMMANDS,
+    CommandDefinition,
+    SlashCommand,
+    complete_commands,
+    parse_command,
+)
 from windcode.tui.widgets import (
     ApprovalWidget,
     ChatInput,
     CommandMenu,
+    ExtensionList,
     MessageStream,
     ModelManager,
     ProviderManager,
@@ -52,6 +59,8 @@ class WindcodeApp(App[None]):
     BINDINGS: ClassVar[list[BindingType]] = [
         ("ctrl+c", "cancel_or_quit", "取消"),
         ("ctrl+q", "quit", "退出"),
+        Binding("shift+tab", "cycle_permission_mode", "切换权限模式", priority=True),
+        Binding("backtab", "cycle_permission_mode", "切换权限模式", priority=True),
     ]
 
     def __init__(
@@ -76,7 +85,10 @@ class WindcodeApp(App[None]):
         self.session_id = session_id
         self.permission_mode = permission_mode or config.permission.mode.value
         self.client = Windcode.open(
-            config, state_root=state_root, credential_store=credential_store
+            config,
+            state_root=state_root,
+            credential_store=credential_store,
+            workspace=workspace,
         )
         self.handle: RunHandle | None = None
         self.tool_blocks: dict[str, ToolBlock] = {}
@@ -86,6 +98,7 @@ class WindcodeApp(App[None]):
         self.provider_manager: ProviderManager | None = None
         self.subagent_group: SubagentGroup | None = None
         self.compact_next_run = False
+        self.pending_extension_mutation: tuple[str, str | None] | None = None
         self.ui_mode: Literal["welcome", "chat"] = "chat"
 
     def _display_model(self) -> str:
@@ -110,18 +123,23 @@ class WindcodeApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Static(self._make_banner(), id="title-bar")
-        yield WelcomeView(
-            model=self._display_model(),
-            permission=self.permission_mode,
-            sandbox=self.config.sandbox.enabled,
-            workspace=self.workspace,
-            id="welcome-view",
-        )
-        yield MessageStream(id="chat-area")
-        with Vertical(id="input-area"):
-            yield CommandMenu(id="command-menu")
-            yield ChatInput(placeholder="输入任务, 或输入 / 使用命令", id="chat-input")
-            yield StatusBar(id="status-bar")
+        with Vertical(id="content-shell"):
+            yield WelcomeView(
+                model=self._display_model(),
+                permission=self.permission_mode,
+                sandbox=self.config.sandbox.enabled,
+                workspace=self.workspace,
+                id="welcome-view",
+            )
+            yield MessageStream(id="chat-area")
+            with Vertical(id="input-dock"):
+                with Vertical(id="input-area"):
+                    yield CommandMenu(id="command-menu")
+                    yield ChatInput(
+                        placeholder="输入任务, 或输入 / 使用命令",
+                        id="chat-input",
+                    )
+                    yield StatusBar(id="status-bar")
 
     async def on_mount(self) -> None:
         await self.client.__aenter__()
@@ -142,9 +160,24 @@ class WindcodeApp(App[None]):
         self._set_ui_mode("chat" if self.session_id else "welcome")
         self.set_class(self.size.width < 60, "narrow")
         self.query_one("#chat-input", ChatInput).focus()
-        self._update_status("idle")
+        self._update_status("loading MCP" if self.client.required_mcp_loading else "idle")
+        if self.client.required_mcp_loading:
+            self.query_one("#welcome-view", WelcomeView).start_mcp_loading()
+            self.run_worker(self._load_required_mcp(), group="mcp-startup", exclusive=True)
         if self.session_id is not None and self.client.session_exists(self.session_id):
             await self._restore_session(self.session_id, announce=False)
+
+    async def _load_required_mcp(self) -> None:
+        try:
+            await self.client.wait_for_required_mcp()
+        except Exception as exc:
+            self.query_one("#welcome-view", WelcomeView).stop_mcp_loading()
+            self._update_status("MCP 加载失败")
+            await self._show_system_message(f"MCP 服务加载失败: {exc}", error=True)
+            return
+        self.query_one("#welcome-view", WelcomeView).stop_mcp_loading()
+        self._update_status("idle")
+        await self._show_system_message("MCP 服务已加载")
 
     def on_resize(self, event: events.Resize) -> None:
         self.set_class(event.size.width < 60, "narrow")
@@ -168,6 +201,22 @@ class WindcodeApp(App[None]):
             sandbox=self.config.sandbox.enabled,
             workspace=self.workspace,
         )
+
+    async def action_cycle_permission_mode(self) -> None:
+        if self.handle is not None and not self.handle.done:
+            await self._show_system_message("任务运行期间不能切换权限模式", error=True)
+            return
+        modes = tuple(PermissionMode)
+        current = PermissionMode(self.permission_mode)
+        self.permission_mode = modes[(modes.index(current) + 1) % len(modes)].value
+        self._update_status("idle")
+        labels = {
+            PermissionMode.PLAN.value: "计划",
+            PermissionMode.DEFAULT.value: "默认",
+            PermissionMode.ACCEPT_EDITS.value: "自动编辑",
+            PermissionMode.FULL_ACCESS.value: "完全授权",
+        }
+        await self._show_system_message(f"权限模式: {labels[self.permission_mode]}")
 
     def _set_ui_mode(self, mode: Literal["welcome", "chat"]) -> None:
         self.ui_mode = mode
@@ -334,8 +383,18 @@ class WindcodeApp(App[None]):
     @on(ChatInput.SlashMenuUpdate)
     def update_slash_menu(self, event: ChatInput.SlashMenuUpdate) -> None:
         menu = self.query_one("#command-menu", CommandMenu)
-        matches = complete_commands(event.prefix) if event.prefix is not None else ()
+        matches = (
+            complete_commands(event.prefix, self._extension_command_definitions())
+            if event.prefix is not None
+            else ()
+        )
         menu.show_commands(matches) if matches else menu.hide()
+
+    def _extension_command_definitions(self) -> tuple[CommandDefinition, ...]:
+        return tuple(
+            CommandDefinition(route.name, f"插件命令 · {route.source_id}")
+            for route in self.client.extension_commands(reserved=COMMANDS)
+        )
 
     @on(ChatInput.Submitted)
     async def submit_prompt(self, event: ChatInput.Submitted) -> None:
@@ -345,10 +404,16 @@ class WindcodeApp(App[None]):
             return
         if value.startswith("/"):
             try:
-                await self._command(parse_command(value))
+                definitions = self._extension_command_definitions()
+                await self._command(
+                    parse_command(value, frozenset(item.name for item in definitions))
+                )
             except ValueError as exc:
                 await self._show_system_message(str(exc), error=True)
             return
+        await self._start_prompt(value)
+
+    async def _start_prompt(self, value: str) -> None:
         if self.handle is not None and not self.handle.done:
             await self._show_system_message("已有任务正在运行")
             return
@@ -538,6 +603,18 @@ class WindcodeApp(App[None]):
     async def _command(self, command: SlashCommand) -> None:
         messages = self.query_one("#chat-area", MessageStream)
         active = self.handle is not None and not self.handle.done
+        routes = {route.name: route for route in self.client.extension_commands(reserved=COMMANDS)}
+        route = routes.get(command.name)
+        if route is not None:
+            target_kind, selector_value = route.target.split(":", 1)
+            selector = {
+                "skill": f"${selector_value}",
+                "prompt": f"@prompt:{selector_value}",
+                "capability": f"@capability:{selector_value}",
+            }[target_kind]
+            prompt = " ".join((selector, *command.arguments))
+            await self._start_prompt(prompt)
+            return
         if command.name == "quit":
             self.exit()
             return
@@ -605,6 +682,7 @@ class WindcodeApp(App[None]):
                 self.permission_mode = PermissionMode(command.arguments[0]).value
             except ValueError as exc:
                 raise ValueError(f"未知权限模式: {command.arguments[0]}") from exc
+            self._update_status("idle")
             await self._show_system_message(f"权限模式: {self.permission_mode}")
         elif command.name == "model":
             if active:
@@ -635,7 +713,7 @@ class WindcodeApp(App[None]):
             if command.arguments:
                 raise ValueError("用法: /help")
             lines = ["可用命令:"]
-            for definition in complete_commands("/"):
+            for definition in complete_commands("/", self._extension_command_definitions()):
                 hint = f" {definition.argument_hint}" if definition.argument_hint else ""
                 lines.append(f"/{definition.name}{hint}  {definition.description}")
             await self._show_system_message("\n".join(lines))
@@ -661,6 +739,60 @@ class WindcodeApp(App[None]):
                         line += f" · Worktree: {record.worktree_path}"
                     lines.append(line)
                 await self._show_system_message("\n".join(lines))
+        elif command.name == "extensions":
+            action = command.arguments[0] if command.arguments else "list"
+            target = command.arguments[1] if len(command.arguments) > 1 else None
+            if len(command.arguments) > 2:
+                raise ValueError("用法: /extensions [操作] [目标]")
+            mutations = {"install", "enable", "disable", "reload", "trust"}
+            if active and action in mutations:
+                raise ValueError("任务运行期间不能修改扩展状态")
+            mutation = (action, target)
+            if action in mutations and self.pending_extension_mutation != mutation:
+                self.pending_extension_mutation = mutation
+                target_label = "" if target is None else f" {target}"
+                await self._show_system_message(
+                    f"确认扩展操作: {action}{target_label}; 再次输入相同命令执行"
+                )
+                return
+            if action in mutations:
+                self.pending_extension_mutation = None
+            if action == "list":
+                records = await self.client.list_extensions()
+            elif action == "inspect":
+                if target is None:
+                    raise ValueError("用法: /extensions inspect 目标")
+                records = await self.client.inspect_extension(target)
+            elif action == "install":
+                if target is None:
+                    raise ValueError("用法: /extensions install 路径")
+                result = await self.client.install_extension(
+                    Path(target).expanduser()  # noqa: ASYNC240 - local command parsing
+                )
+                await self._show_system_message(
+                    f"已安装 {result.manifest.plugin_id}, 默认禁用; "
+                    "运行 /extensions reload 后刷新目录"
+                )
+                records = await self.client.list_extensions()
+            elif action in {"enable", "disable"}:
+                if target is None:
+                    raise ValueError(f"用法: /extensions {action} 目标")
+                await self.client.set_extension_enabled(target, action == "enable")
+                await self._show_system_message("扩展状态已更新; 显式 reload 后影响新运行")
+                records = await self.client.list_extensions()
+            elif action == "reload":
+                await self.client.reload_extensions()
+                records = await self.client.list_extensions()
+            elif action == "trust":
+                trust_path = (
+                    self.workspace if target is None else Path(target).expanduser()  # noqa: ASYNC240 - local command parsing
+                )
+                await self.client.trust_extension_workspace(trust_path)
+                await self._show_system_message("工作区信任已记录; 显式 reload 后生效")
+                records = await self.client.list_extensions()
+            else:
+                raise ValueError(f"未知扩展操作: {action}")
+            await self._show_system_message(ExtensionList.render_text(records))
         self._update_status("running" if self.handle and not self.handle.done else "idle")
 
     async def action_cancel_or_quit(self) -> None:

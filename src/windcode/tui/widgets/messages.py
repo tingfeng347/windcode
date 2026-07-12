@@ -111,8 +111,8 @@ class MessageStream(VerticalScroll):
         self._thinking_active = True
         self._finished_thinking_seconds = 0.0
         self._spinner_index = 0
-        self._spinner_label = Static("  ⠋ 思考中...", id="spinner-live")
-        await self._mount_if_attached(self._spinner_label)
+        self._spinner_label = Static("  ⠋ 处理中...", id="spinner-live")
+        await self._place_spinner_at_end()
         if self.is_attached:
             self._spinner_timer = self.set_interval(0.08, self._tick_spinner)
             self.call_after_refresh(self.scroll_end, animate=False)
@@ -123,7 +123,20 @@ class MessageStream(VerticalScroll):
         await self._mount_if_attached(self._ai_row)
         if self._ai_row.is_attached:
             await self._ai_row.mount(self._streaming_label)
+        await self._place_spinner_at_end()
         self._accumulated_text = ""
+
+    async def _place_spinner_at_end(self) -> None:
+        """Keep the run activity status after the newest response content."""
+        if self._ai_row is None or not self._ai_row.is_attached or self._spinner_label is None:
+            return
+        if self._spinner_label.parent is not self._ai_row:
+            if self._spinner_label.is_attached:
+                await self._spinner_label.remove()
+            await self._ai_row.mount(self._spinner_label)
+            return
+        if self._ai_row.children[-1] is not self._spinner_label:
+            self._ai_row.move_child(self._spinner_label, after=self._ai_row.children[-1])
 
     async def _ensure_streaming_label(self) -> Static | None:
         if self._ai_row is None:
@@ -132,6 +145,7 @@ class MessageStream(VerticalScroll):
             self._streaming_label = Static("", classes="message ai-message")
             if self._ai_row.is_attached:
                 await self._ai_row.mount(self._streaming_label)
+            await self._place_spinner_at_end()
         return self._streaming_label
 
     async def _append_text(self, text: str) -> None:
@@ -142,6 +156,7 @@ class MessageStream(VerticalScroll):
             content.append("● ", style="bold color(99)")
             content.append(self._accumulated_text)
             label.update(content)
+        await self._place_spinner_at_end()
         if self.is_attached:
             self.call_after_refresh(self.scroll_end, animate=False)
 
@@ -156,6 +171,7 @@ class MessageStream(VerticalScroll):
             await self._new_ai_row()
         if self._ai_row is not None:
             await self._ai_row.mount(widget)
+            await self._place_spinner_at_end()
 
     def _tick_spinner(self) -> None:
         self._spinner_index += 1
@@ -164,7 +180,7 @@ class MessageStream(VerticalScroll):
             if self._thinking_pause_keys:
                 self._spinner_label.update("  等待审批...")
             else:
-                self._spinner_label.update(f"  {frame} 思考中...  ({self.thinking_seconds:.0f}s)")
+                self._spinner_label.update(f"  {frame} 处理中...  ({self.thinking_seconds:.0f}s)")
 
     @property
     def thinking_seconds(self) -> float:
@@ -209,7 +225,7 @@ class MessageStream(VerticalScroll):
         if self._ai_row is not None and self._ai_row.is_attached:
             await self._ai_row.mount(
                 Static(
-                    f"✻ 已思考 {elapsed:.1f} 秒",
+                    f"✻ 本轮耗时 {elapsed:.1f} 秒",
                     classes="message thinking-done",
                 )
             )

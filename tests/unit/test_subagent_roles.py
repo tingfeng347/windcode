@@ -37,3 +37,14 @@ def test_requested_tools_cannot_expand_role_or_parent() -> None:
         frozenset({"read_file"}),
         frozenset({"read_file"}),
     ) == {"read_file"}
+
+
+def test_researcher_inherits_parent_mcp_tools() -> None:
+    tools = resolve_role_tools(
+        SubagentRole.RESEARCHER,
+        SubagentTaskKind.READ,
+        frozenset({"read_file", "search_mcp_tools", "tavily-mcp__tavily_search"}),
+    )
+
+    assert "search_mcp_tools" in tools
+    assert "tavily-mcp__tavily_search" in tools

@@ -4,12 +4,41 @@ import json
 from collections.abc import Mapping
 from dataclasses import replace
 from time import monotonic
-from typing import Any
+from typing import Any, Protocol, cast
 
+import jsonschema
 from pydantic import ValidationError
 
 from windcode.domain.models import ToolSchema
-from windcode.domain.tools import Tool, ToolContext, ToolResult
+from windcode.domain.tools import Tool, ToolContext, ToolResult, ValidatedArguments
+
+
+class _RawSchemaTool(Protocol):
+    @property
+    def input_schema(self) -> Mapping[str, Any]: ...
+
+    def validate_arguments(self, arguments: Mapping[str, Any]) -> ValidatedArguments: ...
+
+
+def _input_schema(tool: Tool) -> dict[str, Any]:
+    raw = getattr(tool, "input_schema", None)
+    if isinstance(raw, Mapping):
+        mapping = cast(Mapping[object, object], raw)
+        return {str(key): value for key, value in mapping.items()}
+    return tool.input_model.model_json_schema()
+
+
+def _validate(tool: Tool, arguments: Mapping[str, Any]) -> ValidatedArguments:
+    validator = getattr(tool, "validate_arguments", None)
+    if callable(validator):
+        return cast(_RawSchemaTool, tool).validate_arguments(arguments)
+    schema = getattr(tool, "input_schema", None)
+    if isinstance(schema, Mapping):
+        typed_schema = cast(Mapping[str, Any], schema)
+        validator = jsonschema.Draft202012Validator(typed_schema)
+        validator.validate(arguments)  # pyright: ignore[reportUnknownMemberType]
+        return dict(arguments)
+    return tool.input_model.model_validate(arguments)
 
 
 class ToolRegistry:
@@ -40,7 +69,7 @@ class ToolRegistry:
             ToolSchema(
                 name=tool.name,
                 description=tool.description,
-                parameters=tool.input_model.model_json_schema(),
+                parameters=_input_schema(tool),
             )
             for tool in self._tools.values()
         )
@@ -60,16 +89,28 @@ class ToolRegistry:
                 data={"error": "unknown_tool", "tool": name},
             )
         try:
-            parsed = tool.input_model.model_validate(arguments)
-        except ValidationError as exc:
+            parsed = _validate(tool, arguments)
+        except (ValidationError, jsonschema.ValidationError, jsonschema.SchemaError) as exc:
+            errors: object
+            if isinstance(exc, ValidationError):
+                errors = exc.errors(include_url=False)
+            elif isinstance(exc, jsonschema.ValidationError):
+                path_parts = cast(tuple[object, ...], tuple(exc.absolute_path))
+                path_values: list[str] = [str(part) for part in path_parts]
+                errors = cast(
+                    object,
+                    [{"path": path_values, "message": str(exc.message)}],
+                )
+            else:
+                errors = [{"path": tuple[str, ...](), "message": str(exc)}]
             return ToolResult(
-                output=json.dumps(exc.errors(include_url=False), ensure_ascii=True),
+                output=json.dumps(errors, ensure_ascii=True),
                 is_error=True,
                 data={"error": "invalid_arguments"},
             )
         started = monotonic()
         try:
-            result = await tool.execute(context, parsed)
+            result = await tool.execute(context, cast(Any, parsed))
         except (OSError, ValueError, UnicodeError) as exc:
             result = ToolResult(
                 output=str(exc),

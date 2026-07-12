@@ -70,10 +70,19 @@ def load_config(
         layers.append(("explicit overrides", dict(overrides)))
 
     merged: dict[str, Any] = {}
+    project_mcp_servers: set[str] = set()
     disabled_aliases: set[str] = set()
     last_source: Path | str = "built-in defaults"
-    for source, layer in layers:
+    for layer_index, (source, layer) in enumerate(layers):
         if layer:
+            if layer_index == 1:
+                raw_extensions = layer.get("extensions")
+                if isinstance(raw_extensions, Mapping):
+                    extension_values = cast(Mapping[object, object], raw_extensions)
+                    raw_mcp = extension_values.get("mcp_servers")
+                    if isinstance(raw_mcp, Mapping):
+                        mcp_values = cast(Mapping[object, object], raw_mcp)
+                        project_mcp_servers.update(str(server_id) for server_id in mcp_values)
             raw_disabled = layer.get("disabled_providers", [])
             raw_enabled = layer.get("enabled_providers", [])
             if not isinstance(raw_disabled, list) or not isinstance(raw_enabled, list):
@@ -86,6 +95,10 @@ def load_config(
             last_source = source
     merged.pop("disabled_providers", None)
     merged.pop("enabled_providers", None)
+    if project_mcp_servers:
+        raw_extensions = merged.setdefault("extensions", {})
+        if isinstance(raw_extensions, dict):
+            raw_extensions["project_mcp_servers"] = sorted(project_mcp_servers)
     if disabled_aliases and isinstance(merged.get("providers"), dict):
         providers = cast(dict[str, Any], merged["providers"])
         for alias in disabled_aliases:

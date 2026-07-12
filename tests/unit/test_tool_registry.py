@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import cast
+from typing import Any, ClassVar, cast
 
 import pytest
 from pydantic import BaseModel, ConfigDict
@@ -61,3 +61,31 @@ def test_clone_preserves_order_and_isolates_replacements() -> None:
     assert registry.names() == cloned.names() == ("echo",)
     assert registry.get("echo") is original
     assert cloned.get("echo") is replacement
+
+
+class RawSchemaTool(EchoTool):
+    input_schema: ClassVar[dict[str, Any]] = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {"oneOf": [{"type": "string"}, {"type": "integer"}]},
+            }
+        },
+        "required": ["items"],
+        "additionalProperties": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_raw_json_schema_is_preserved_and_validated(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    tool = RawSchemaTool()
+    registry.register(tool)
+
+    assert registry.schemas()[0].parameters is not tool.input_schema
+    assert registry.schemas()[0].parameters == tool.input_schema
+    invalid = await registry.execute("echo", context(tmp_path), {"items": [True]})
+    assert invalid.is_error
+    assert invalid.data["error"] == "invalid_arguments"
+    assert "items" in invalid.output

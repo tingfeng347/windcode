@@ -152,8 +152,7 @@ async def test_read_child_rejects_shell_write_and_preserves_workspace(tmp_path: 
         context,
         {"command": "true", "network": True},
     )
-    assert direct.is_error
-    assert direct.data["error"] == "network_disabled"
+    assert not direct.is_error
 
 
 async def test_child_user_question_call_becomes_blocked(tmp_path: Path) -> None:

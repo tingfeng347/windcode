@@ -171,6 +171,20 @@ class RunCancelled(AgentEvent):
 
 
 @dataclass(frozen=True, slots=True)
+class ExtensionEvent(AgentEvent):
+    kind: ClassVar[str] = "extension_event"
+    action: str = "diagnostic"
+    snapshot_generation: int = 0
+    extension_id: str = ""
+    source_id: str = ""
+    server_id: str | None = None
+    hook_id: str | None = None
+    call_id: str | None = None
+    status: str = ""
+    details: dict[str, Any] = field(default_factory=dict[str, Any])
+
+
+@dataclass(frozen=True, slots=True)
 class SubagentEvent(AgentEvent):
     parent_run_id: str = ""
     subagent_id: str = ""
@@ -267,6 +281,7 @@ AgentEventType = (
     | RunCompleted
     | RunFailed
     | RunCancelled
+    | ExtensionEvent
     | SubagentQueued
     | SubagentStarted
     | SubagentProgress
@@ -478,6 +493,19 @@ def event_from_dict(value: Mapping[str, object]) -> AgentEventType:
         )
     if kind == RunCancelled.kind:
         return RunCancelled(**common, reason=str(raw.get("reason", "cancelled by user")))
+    if kind == ExtensionEvent.kind:
+        return ExtensionEvent(
+            **common,
+            action=str(raw.get("action", "diagnostic")),
+            snapshot_generation=_int_value(raw.get("snapshot_generation")),
+            extension_id=str(raw.get("extension_id", "")),
+            source_id=str(raw.get("source_id", "")),
+            server_id=None if raw.get("server_id") is None else str(raw.get("server_id")),
+            hook_id=None if raw.get("hook_id") is None else str(raw.get("hook_id")),
+            call_id=None if raw.get("call_id") is None else str(raw.get("call_id")),
+            status=str(raw.get("status", "")),
+            details=_mapping(raw.get("details")),
+        )
     if kind == SubagentQueued.kind:
         return SubagentQueued(**_subagent_common(raw))
     if kind == SubagentStarted.kind:

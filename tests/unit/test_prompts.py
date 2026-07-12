@@ -55,7 +55,50 @@ def test_prompt_describes_explicit_and_proactive_delegation_modes(tmp_path: Path
     assert "用户明确要求" in explicit
     assert "wait_subagents" in explicit
     assert "禁止循环调用 list_subagents" in explicit
-    assert "不得委派实时网络任务" in explicit
+    assert "可按运行网络策略和权限审批访问外部网络" in explicit
     assert "主动委派" in proactive
     assert "不得继续委派" in child
     assert "不得直接询问用户" in child
+
+
+def test_prompt_marks_direct_mcp_servers_as_callable_without_select(tmp_path: Path) -> None:
+    prompt = build_system_prompt(
+        workspace=tmp_path,
+        permission_mode=PermissionMode.DEFAULT,
+        instructions=(),
+        tools=create_builtin_registry(),
+        mcp_direct_servers=("tavily-mcp",),
+    )
+
+    assert "工具已直接可用" in prompt
+    assert "tavily-mcp" in prompt
+    # A directly-exposed server must not be pushed through the select flow.
+    assert "select:<id>" not in prompt
+
+
+def test_prompt_describes_select_flow_only_for_search_servers(tmp_path: Path) -> None:
+    prompt = build_system_prompt(
+        workspace=tmp_path,
+        permission_mode=PermissionMode.DEFAULT,
+        instructions=(),
+        tools=create_builtin_registry(),
+        mcp_search_servers=("lazy-server",),
+    )
+
+    assert "按需启用" in prompt
+    assert "select:<id>" in prompt
+    assert "lazy-server" in prompt
+
+
+def test_prompt_reports_configured_but_unavailable_mcp_servers(tmp_path: Path) -> None:
+    prompt = build_system_prompt(
+        workspace=tmp_path,
+        permission_mode=PermissionMode.DEFAULT,
+        instructions=(),
+        tools=create_builtin_registry(),
+        mcp_unavailable_servers=(("project-server", "workspace is untrusted"),),
+    )
+
+    assert "project-server: workspace is untrusted" in prompt
+    assert "不得声称 Windcode 没有 MCP 集成" in prompt
+    assert "list_mcp_servers" in prompt

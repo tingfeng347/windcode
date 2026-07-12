@@ -72,6 +72,38 @@ async def test_new_session_shows_welcome_and_accepts_status_command(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_shift_tab_cycles_permission_modes_and_updates_ui(tmp_path: Path) -> None:
+    app = WindcodeApp(AppConfig(), workspace=tmp_path, state_root=tmp_path / "state")
+    async with app.run_test(size=(80, 24)) as pilot:
+        prompt = app.query_one("#chat-input", ChatInput)
+
+        await pilot.press("shift+tab")
+        await pilot.pause()
+        assert app.permission_mode == "accept_edits"
+        assert "自动编辑" in str(app.query_one("#mode-label", Static).content)
+
+        await pilot.press("backtab", "backtab", "backtab")
+        await pilot.pause()
+        assert app.permission_mode == "default"
+        assert prompt.has_focus
+
+
+@pytest.mark.asyncio
+async def test_welcome_logo_animates_with_multiple_colors(tmp_path: Path) -> None:
+    app = WindcodeApp(AppConfig(), workspace=tmp_path, state_root=tmp_path / "state")
+    async with app.run_test(size=(100, 30)) as pilot:
+        logo = app.query_one("#welcome-logo", Static)
+        first = logo.render()
+        first_styles = tuple(str(span.style) for span in first.spans)
+        await pilot.pause(0.15)
+        second = logo.render()
+
+        assert first_styles != tuple(str(span.style) for span in second.spans)
+        colors = {str(span.style) for span in second.spans}
+        assert len(colors) >= 4
+
+
+@pytest.mark.asyncio
 async def test_resumed_session_uses_compact_chat_layout(tmp_path: Path) -> None:
     app = WindcodeApp(
         AppConfig(), workspace=tmp_path, state_root=tmp_path / "state", session_id="existing"

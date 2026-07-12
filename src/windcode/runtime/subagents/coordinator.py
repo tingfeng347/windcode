@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from time import monotonic
@@ -69,6 +69,7 @@ class SubagentCoordinator:
         worktrees: WorktreeManager,
         verification: VerificationRunner,
         network_enabled: bool = False,
+        event_observer: Callable[[SubagentEvent], Awaitable[None]] | None = None,
     ) -> None:
         self.parent_session_id = parent_session_id
         self.parent_run_id = parent_run_id
@@ -80,6 +81,7 @@ class SubagentCoordinator:
         self.worktrees = worktrees
         self.verification = verification
         self.network_enabled = network_enabled
+        self.event_observer = event_observer
         self.aggregate_budget = AggregateBudget(
             max_model_steps=config.max_total_model_steps,
             max_tool_calls=config.max_total_tool_calls,
@@ -138,8 +140,7 @@ class SubagentCoordinator:
             unavailable_network = [
                 spec.task_name
                 for spec in specs
-                if spec.requires_network
-                and (spec.kind is SubagentTaskKind.READ or not self.network_enabled)
+                if spec.requires_network and not self.network_enabled
             ]
             if unavailable_network:
                 raise SubagentCoordinatorError(
@@ -214,6 +215,8 @@ class SubagentCoordinator:
     ) -> None:
         event = cast(AgentEventType, event_type(**self._event_common(record), **values))
         await self.event_bus.publish(event, durable=True)
+        if self.event_observer is not None and isinstance(event, SubagentEvent):
+            await self.event_observer(event)
 
     async def _replace_record(self, record: SubagentRecord) -> None:
         self._records[record.subagent_id] = record
