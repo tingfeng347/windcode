@@ -104,6 +104,23 @@ class SubagentCoordinator:
         self._closed = False
         self._lock = asyncio.Lock()
 
+    def set_permission_mode(self, mode: PermissionMode) -> None:
+        previous = self.permission_mode
+        self.permission_mode = mode
+        for runtime in self._runtimes.values():
+            policy = runtime.loop.scheduler.policy
+            if runtime.record.spec.kind is SubagentTaskKind.READ and (
+                not self.factory.config.sandbox.enabled or not policy.sandbox_available
+            ):
+                effective = PermissionMode.PLAN
+            else:
+                effective = mode
+            policy.set_mode(effective)
+            runtime.loop.system_prompt = runtime.loop.system_prompt.replace(
+                f"权限模式: {previous.value}.",
+                f"权限模式: {effective.value}.",
+            )
+
     async def _publish_approval(self, event: ApprovalRequested) -> None:
         await self.event_bus.publish(event, durable=True)
 

@@ -69,15 +69,11 @@ class PolicyEngine:
     ) -> None:
         self._session_approvals.add((tool_name, effects))
 
+    def set_mode(self, mode: PermissionMode) -> None:
+        self.mode = mode
+
     def evaluate(self, request: PolicyRequest) -> PolicyDecision:
         risk = assess_risk(request)
-        if self._fingerprint(request) in self._session_approvals:
-            return PolicyDecision(
-                action=PolicyAction.ALLOW,
-                risk=risk,
-                reason="matching operation was approved for this session",
-            )
-
         effects = request.effects
         side_effects = {
             ToolEffect.WORKSPACE_WRITE,
@@ -96,6 +92,13 @@ class PolicyEngine:
                 action=PolicyAction.ALLOW,
                 risk=risk,
                 reason="plan mode permits reading and user interaction",
+            )
+
+        if self._fingerprint(request) in self._session_approvals:
+            return PolicyDecision(
+                action=PolicyAction.ALLOW,
+                risk=risk,
+                reason="matching operation was approved for this session",
             )
 
         sandbox_degraded = (

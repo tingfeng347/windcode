@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from rich.markup import escape
+from rich.text import Text as RichText
 from textual.widgets import Static
 
 from windcode.domain.events import ToolFinished, ToolProgress, ToolStarted
@@ -41,14 +41,16 @@ class ToolBlock(Static, can_focus=True):
             classes="tool-block tool-block-loading",
         )
 
-    def _content(self, status: str) -> str:
-        lines = [f"  {status}"]
+    def _content(self, status: str) -> RichText:
+        content = RichText(f"  {status}")
         if self.tool_name == "shell" and self.command:
-            lines.append(f"    [bold cyan]bash:[/bold cyan] {escape(self.command)}")
-        return "\n".join(lines)
+            content.append("\n    ")
+            content.append("bash:", style="bold cyan")
+            content.append(f" {self.command}")
+        return content
 
     def progress(self, event: ToolProgress) -> None:
-        self.update(self._content(f"● {self.title} ... {escape(event.message)}"))
+        self.update(self._content(f"● {self.title} ... {event.message}"))
 
     def finish(self, event: ToolFinished) -> None:
         self.remove_class("tool-block-loading")

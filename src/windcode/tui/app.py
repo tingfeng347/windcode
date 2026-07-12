@@ -209,13 +209,14 @@ class WindcodeApp(App[None]):
         )
 
     async def action_cycle_permission_mode(self) -> None:
-        if self.handle is not None and not self.handle.done:
-            await self._show_system_message("任务运行期间不能切换权限模式", error=True)
-            return
         modes = tuple(PermissionMode)
         current = PermissionMode(self.permission_mode)
         self.permission_mode = modes[(modes.index(current) + 1) % len(modes)].value
-        self._update_status("idle")
+        active = self.handle is not None and not self.handle.done
+        if active:
+            assert self.handle is not None
+            self.handle.set_permission_mode(self.permission_mode)
+        self._update_status("running" if active else "idle")
 
     async def action_copy_last_response(self) -> None:
         text = self.query_one("#chat-area", MessageStream).last_ai_text
@@ -225,7 +226,9 @@ class WindcodeApp(App[None]):
         try:
             await self.copy_to_clipboard(text)
             preview = text.replace("\n", " ")[:60]
-            await self._show_system_message(f"已复制到剪贴板: {preview}{'...' if len(text) > 60 else ''}")
+            await self._show_system_message(
+                f"已复制到剪贴板: {preview}{'...' if len(text) > 60 else ''}"
+            )
         except Exception:
             await self._show_system_message(
                 "复制失败; 终端可能不支持 OSC 52 剪贴板, 试试 Shift+鼠标选择", error=True
@@ -750,15 +753,16 @@ class WindcodeApp(App[None]):
             await self._restore_session(self.session_id, announce=False)
             await self._show_system_message(f"已回退到记录 {record_id[:12]}")
         elif command.name == "mode":
-            if active:
-                raise ValueError("任务运行期间不能切换权限模式")
             if len(command.arguments) != 1:
                 raise ValueError("用法: /mode 模式")
             try:
                 self.permission_mode = PermissionMode(command.arguments[0]).value
             except ValueError as exc:
                 raise ValueError(f"未知权限模式: {command.arguments[0]}") from exc
-            self._update_status("idle")
+            if active:
+                assert self.handle is not None
+                self.handle.set_permission_mode(self.permission_mode)
+            self._update_status("running" if active else "idle")
         elif command.name == "model":
             if active:
                 raise ValueError("任务运行期间不能切换模型")

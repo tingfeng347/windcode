@@ -112,12 +112,16 @@ class RunHandle:
         *,
         after_sequence: int = 0,
         coordinator: SubagentCoordinator,
+        policy: PolicyEngine,
+        loop: AgentLoop,
     ) -> None:
         self._task = task
         self._event_bus = event_bus
         self._control = control
         self._after_sequence = after_sequence
         self._coordinator = coordinator
+        self._policy = policy
+        self._loop = loop
         self._result: RunResult | None = None
         self._result_lock = asyncio.Lock()
 
@@ -151,6 +155,21 @@ class RunHandle:
         if self.done:
             raise RuntimeError("cannot compact a completed run")
         self._control.request_compaction()
+
+    @property
+    def permission_mode(self) -> PermissionMode:
+        return self._policy.mode
+
+    def set_permission_mode(self, mode: PermissionMode | str) -> PermissionMode:
+        selected = PermissionMode(mode)
+        previous = self._policy.mode
+        self._policy.set_mode(selected)
+        self._loop.system_prompt = self._loop.system_prompt.replace(
+            f"权限模式: {previous.value}.",
+            f"权限模式: {selected.value}.",
+        )
+        self._coordinator.set_permission_mode(selected)
+        return selected
 
     @property
     def done(self) -> bool:
@@ -804,7 +823,7 @@ class Windcode:
         ) -> str:
             prompt = build_system_prompt(
                 workspace=workspace,
-                permission_mode=mode,
+                permission_mode=policy.mode,
                 instructions=instructions,
                 tools=run_registry,
                 delegation_mode=self.config.subagents.mode,
@@ -1147,6 +1166,8 @@ class Windcode:
             control,
             after_sequence=after_sequence,
             coordinator=coordinator,
+            policy=policy,
+            loop=loop,
         )
         self._handles.add(handle)
         task.add_done_callback(lambda _task: self._handles.discard(handle))
