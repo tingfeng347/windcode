@@ -94,6 +94,7 @@ class AgentLoop:
         close_event_bus: bool = True,
         sourced_context_provider: Callable[[], tuple[SourcedContextMessage, ...]] | None = None,
         compact_observer: Callable[[str], Awaitable[None]] | None = None,
+        completion_observer: Callable[[RunResult], Awaitable[None]] | None = None,
     ) -> None:
         if not model_chain:
             raise ValueError("model_chain cannot be empty")
@@ -112,6 +113,7 @@ class AgentLoop:
         self.close_event_bus = close_event_bus
         self.sourced_context_provider = sourced_context_provider
         self.compact_observer = compact_observer
+        self.completion_observer = completion_observer
         self._turn = 0
         self.scheduler.approval_handler = self._approval_handler
         self.scheduler.before_execute = self._before_tool_execute
@@ -425,6 +427,12 @@ class AgentLoop:
 
                 if not scheduled:
                     result = build_run_result(final_text, tuple(records), usage=total_usage)
+                    if self.completion_observer is not None:
+                        try:
+                            await self.completion_observer(result)
+                        except Exception:
+                            # Learning is best-effort and must never change task success.
+                            pass
                     await self.event_bus.publish(
                         RunCompleted(**self._common(), result=result), durable=True
                     )

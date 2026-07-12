@@ -55,3 +55,20 @@ def save_model_config(path: Path, previous: AppConfig, updated: AppConfig) -> No
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def save_memory_config(path: Path, config: AppConfig) -> None:
+    """Persist non-secret memory policy without rewriting unrelated configuration."""
+    path = path.expanduser().resolve()
+    data = _read_config(path)
+    data["memory"] = config.memory.model_dump(mode="json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(f"{path.suffix}.tmp-{uuid4().hex}")
+    try:
+        with temporary.open("wb") as stream:
+            tomli_w.dump(data, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)

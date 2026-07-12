@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 from rich.text import Text as RichText
-from textual.widgets import Static
+from textual.widgets import Button, OptionList, Static, Switch
 
 from windcode import Windcode
 from windcode.config import AppConfig, SandboxConfig
@@ -17,8 +17,16 @@ from windcode.domain.models import (
     TextDelta,
     ToolCallDelta,
 )
+from windcode.memory import MemoryKind, MemoryScope
 from windcode.tui import WindcodeApp
-from windcode.tui.widgets import ApprovalWidget, ChatInput, CommandMenu, MessageStream, WelcomeView
+from windcode.tui.widgets import (
+    ApprovalWidget,
+    ChatInput,
+    CommandMenu,
+    MemoryManager,
+    MessageStream,
+    WelcomeView,
+)
 
 
 class EchoTransport:
@@ -69,6 +77,43 @@ async def test_new_session_shows_welcome_and_accepts_status_command(tmp_path: Pa
         assert "会话: 新会话" in str(notice.content)
         assert "委派: explicit" in str(notice.content)
         assert not app.query_one("#command-menu", CommandMenu).is_open
+
+
+@pytest.mark.asyncio
+async def test_memory_command_opens_manager_and_persists_enabled_switch(tmp_path: Path) -> None:
+    config_file = tmp_path / ".windcode" / "config.toml"
+    app = WindcodeApp(
+        AppConfig(),
+        workspace=tmp_path,
+        state_root=tmp_path / "state",
+        config_file=config_file,
+    )
+    async with app.run_test(size=(80, 24)) as pilot:
+        app.client.create_memory_candidate(
+            kind=MemoryKind.USER_PROFILE,
+            scope=MemoryScope.USER,
+            title="编程偏好",
+            summary="我喜欢编程",
+            body="我喜欢编程",
+        )
+        await pilot.press("/", "m", "e", "m", "o", "r", "y", "enter")
+        await pilot.pause()
+        manager = app.screen
+        assert isinstance(manager, MemoryManager)
+        forget = manager.query_one("#memory-forget", Button)
+        close = manager.query_one("#memory-close", Button)
+        assert forget.region.bottom <= manager.size.height
+        assert close.region.bottom <= manager.size.height
+        manager.query_one("#memory-list", OptionList).action_first()
+        await pilot.pause()
+        details = str(manager.query_one("#memory-details", Static).content)
+        assert details.count("我喜欢编程") == 1
+        switch = manager.query_one("#memory-enabled", Switch)
+        assert switch.value
+        switch.toggle()
+        await pilot.pause()
+        assert not app.config.memory.enabled
+        assert "enabled = false" in config_file.read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio

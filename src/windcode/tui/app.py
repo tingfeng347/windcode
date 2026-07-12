@@ -26,6 +26,7 @@ from windcode.domain.events import (
     UserResponse,
 )
 from windcode.domain.messages import TextBlock, message_from_dict
+from windcode.memory import MemoryStatus
 from windcode.sdk import RunHandle, Windcode
 from windcode.tui.commands import (
     COMMANDS,
@@ -39,6 +40,7 @@ from windcode.tui.widgets import (
     ChatInput,
     CommandMenu,
     ExtensionList,
+    MemoryManager,
     MessageStream,
     ModelManager,
     ProviderManager,
@@ -95,6 +97,7 @@ class WindcodeApp(App[None]):
         self.approval_widgets: dict[str, ApprovalWidget] = {}
         self.session_selector: SessionSelector | None = None
         self.model_manager: ModelManager | None = None
+        self.memory_manager: MemoryManager | None = None
         self.provider_manager: ProviderManager | None = None
         self.subagent_group: SubagentGroup | None = None
         self.compact_next_run = False
@@ -371,6 +374,19 @@ class WindcodeApp(App[None]):
             self.provider_manager = None
         self.query_one("#chat-input", ChatInput).focus()
 
+    async def _open_memory_manager(self) -> None:
+        if self.memory_manager is not None:
+            await self.memory_manager.dismiss()
+        records = self.client.list_memories() if self.config.memory.enabled else ()
+        self.memory_manager = MemoryManager(records, enabled=self.config.memory.enabled)
+        await self.push_screen(self.memory_manager)
+
+    async def _close_memory_manager(self) -> None:
+        if self.memory_manager is not None:
+            await self.memory_manager.dismiss()
+            self.memory_manager = None
+        self.query_one("#chat-input", ChatInput).focus()
+
     async def _select_model(self, alias: str) -> None:
         if alias not in self.client.transport_registry.aliases:
             raise ValueError(f"未配置模型: {alias}")
@@ -600,6 +616,34 @@ class WindcodeApp(App[None]):
         await self._close_provider_manager()
         await self._open_model_manager()
 
+    @on(MemoryManager.EnabledChanged)
+    async def memory_enabled_changed(self, event: MemoryManager.EnabledChanged) -> None:
+        try:
+            self.client.set_memory_enabled(event.enabled, config_file=self.config_file)
+        except (OSError, ValueError) as exc:
+            await self._show_system_message(f"无法保存长期记忆设置: {exc}", error=True)
+            return
+        self.config = self.client.config
+        if self.memory_manager is not None:
+            records = self.client.list_memories() if event.enabled else ()
+            self.memory_manager.refresh_records(records)
+
+    @on(MemoryManager.Forget)
+    async def memory_forget(self, event: MemoryManager.Forget) -> None:
+        self.client.delete_memory(event.memory_id)
+        if self.memory_manager is not None:
+            self.memory_manager.refresh_records(self.client.list_memories())
+
+    @on(MemoryManager.Rebuild)
+    async def memory_rebuild(self) -> None:
+        self.client.rebuild_memory_index()
+        if self.memory_manager is not None:
+            self.memory_manager.refresh_records(self.client.list_memories())
+
+    @on(MemoryManager.Closed)
+    async def memory_manager_closed(self) -> None:
+        await self._close_memory_manager()
+
     async def _command(self, command: SlashCommand) -> None:
         messages = self.query_one("#chat-area", MessageStream)
         active = self.handle is not None and not self.handle.done
@@ -739,6 +783,80 @@ class WindcodeApp(App[None]):
                         line += f" · Worktree: {record.worktree_path}"
                     lines.append(line)
                 await self._show_system_message("\n".join(lines))
+        elif command.name == "memory":
+            if active:
+                raise ValueError("任务运行期间不能管理长期记忆")
+            if not command.arguments:
+                await self._open_memory_manager()
+                return
+            action = command.arguments[0] if command.arguments else "status"
+            arguments = command.arguments[1:]
+            if not self.config.memory.enabled:
+                if action == "status":
+                    await self._show_system_message("长期记忆: 已禁用")
+                    return
+                raise ValueError("长期记忆已在配置中禁用")
+            if action == "status":
+                records = self.client.list_memories()
+                candidates = sum(item.status is MemoryStatus.CANDIDATE for item in records)
+                active_count = sum(item.status is MemoryStatus.ACTIVE for item in records)
+                await self._show_system_message(
+                    f"长期记忆: 已启用; 生效 {active_count}; 候选 {candidates}; 总计 {len(records)}"
+                )
+            elif action == "candidates":
+                records = self.client.list_memories(status=MemoryStatus.CANDIDATE)
+                text = "\n".join(f"{item.memory_id[:10]}  {item.title}" for item in records)
+                await self._show_system_message(text or "没有待确认的记忆候选")
+            elif action == "search":
+                if not arguments:
+                    raise ValueError("用法: /memory search 关键词")
+                records = self.client.search_memories(" ".join(arguments))
+                text = "\n".join(
+                    f"{item.memory_id[:10]}  [{item.status.value}] {item.title}" for item in records
+                )
+                await self._show_system_message(text or "没有匹配的记忆")
+            elif action == "show":
+                if len(arguments) != 1:
+                    raise ValueError("用法: /memory show ID")
+                matches = tuple(
+                    item
+                    for item in self.client.list_memories()
+                    if item.memory_id.startswith(arguments[0])
+                )
+                if len(matches) != 1:
+                    raise ValueError("记忆 ID 不存在或前缀不唯一")
+                item = matches[0]
+                await self._show_system_message(
+                    f"{item.title}\n类型: {item.kind.value}; 范围: {item.scope.value}; "
+                    f"状态: {item.status.value}\n摘要: {item.summary}\n\n{item.body}"
+                )
+            elif action in {"confirm", "reject", "forget"}:
+                if len(arguments) != 1:
+                    raise ValueError(f"用法: /memory {action} ID")
+                matches = tuple(
+                    item
+                    for item in self.client.list_memories()
+                    if item.memory_id.startswith(arguments[0])
+                )
+                if len(matches) != 1:
+                    raise ValueError("记忆 ID 不存在或前缀不唯一")
+                item = matches[0]
+                if action == "confirm":
+                    updated = self.client.confirm_memory(item.memory_id)
+                    await self._show_system_message(f"记忆已确认: {updated.title}")
+                elif action == "reject":
+                    updated = self.client.reject_memory(item.memory_id)
+                    await self._show_system_message(f"记忆已拒绝: {updated.title}")
+                else:
+                    self.client.delete_memory(item.memory_id)
+                    await self._show_system_message(f"记忆已删除: {item.title}")
+            elif action == "rebuild":
+                count = self.client.rebuild_memory_index()
+                await self._show_system_message(f"记忆索引已重建: {count} 条")
+            else:
+                raise ValueError(
+                    "用法: /memory [status|candidates|search|show|confirm|reject|forget|rebuild]"
+                )
         elif command.name == "extensions":
             action = command.arguments[0] if command.arguments else "list"
             target = command.arguments[1] if len(command.arguments) > 1 else None

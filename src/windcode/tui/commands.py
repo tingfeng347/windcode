@@ -30,6 +30,10 @@ COMMAND_CATALOG = (
         "管理扩展",
         "[list|inspect|install|enable|disable|reload|trust] [目标]",
     ),
+    CommandDefinition(
+        "memory",
+        "管理长期记忆",
+    ),
     CommandDefinition("help", "显示可用命令"),
     CommandDefinition("quit", "退出 Windcode"),
 )

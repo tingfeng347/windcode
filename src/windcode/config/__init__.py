@@ -6,6 +6,7 @@ from windcode.config.models import (
     BudgetConfig,
     ContextConfig,
     DelegationMode,
+    MemoryConfig,
     PermissionConfig,
     PermissionMode,
     ProviderConfig,
@@ -14,7 +15,7 @@ from windcode.config.models import (
     SubagentConfig,
     TraceConfig,
 )
-from windcode.config.writer import save_model_config
+from windcode.config.writer import save_memory_config, save_model_config
 
 __all__ = [
     "HARD_MAX_CONCURRENT_SUBAGENTS",
@@ -24,6 +25,7 @@ __all__ = [
     "ConfigError",
     "ContextConfig",
     "DelegationMode",
+    "MemoryConfig",
     "PermissionConfig",
     "PermissionMode",
     "ProviderConfig",
@@ -32,5 +34,6 @@ __all__ = [
     "SubagentConfig",
     "TraceConfig",
     "load_config",
+    "save_memory_config",
     "save_model_config",
 ]

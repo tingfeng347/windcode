@@ -185,6 +185,17 @@ class ExtensionEvent(AgentEvent):
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryEvent(AgentEvent):
+    kind: ClassVar[str] = "memory_event"
+    action: str = "recalled"
+    memory_id: str | None = None
+    memory_kind: str | None = None
+    scope: str | None = None
+    status: str = ""
+    details: dict[str, Any] = field(default_factory=dict[str, Any])
+
+
+@dataclass(frozen=True, slots=True)
 class SubagentEvent(AgentEvent):
     parent_run_id: str = ""
     subagent_id: str = ""
@@ -282,6 +293,7 @@ AgentEventType = (
     | RunFailed
     | RunCancelled
     | ExtensionEvent
+    | MemoryEvent
     | SubagentQueued
     | SubagentStarted
     | SubagentProgress
@@ -503,6 +515,16 @@ def event_from_dict(value: Mapping[str, object]) -> AgentEventType:
             server_id=None if raw.get("server_id") is None else str(raw.get("server_id")),
             hook_id=None if raw.get("hook_id") is None else str(raw.get("hook_id")),
             call_id=None if raw.get("call_id") is None else str(raw.get("call_id")),
+            status=str(raw.get("status", "")),
+            details=_mapping(raw.get("details")),
+        )
+    if kind == MemoryEvent.kind:
+        return MemoryEvent(
+            **common,
+            action=str(raw.get("action", "recalled")),
+            memory_id=None if raw.get("memory_id") is None else str(raw.get("memory_id")),
+            memory_kind=(None if raw.get("memory_kind") is None else str(raw.get("memory_kind"))),
+            scope=None if raw.get("scope") is None else str(raw.get("scope")),
             status=str(raw.get("status", "")),
             details=_mapping(raw.get("details")),
         )

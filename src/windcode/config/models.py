@@ -98,6 +98,21 @@ class TraceConfig(StrictModel):
     include_tool_arguments: bool = False
 
 
+class MemoryConfig(StrictModel):
+    enabled: bool = True
+    extraction_enabled: bool = True
+    recall_limit: int = Field(default=5, ge=1, le=20)
+    recall_max_chars: int = Field(default=12_000, ge=1_000, le=100_000)
+    extraction_max_chars: int = Field(default=20_000, ge=1_000, le=200_000)
+    extraction_max_output_tokens: int = Field(default=600, ge=128, le=4_096)
+    candidate_retention_days: int = Field(default=90, ge=1, le=3_650)
+    stale_after_days: int = Field(default=30, ge=1, le=3_650)
+    user_profile_enabled: bool = True
+    project_knowledge_enabled: bool = True
+    experience_enabled: bool = True
+    reference_enabled: bool = True
+
+
 class EnvironmentReference(StrictModel):
     env: str = Field(min_length=1, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -154,6 +169,7 @@ class AppConfig(StrictModel):
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     context: ContextConfig = Field(default_factory=ContextConfig)
     trace: TraceConfig = Field(default_factory=TraceConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
     subagents: SubagentConfig = Field(default_factory=SubagentConfig)
     extensions: ExtensionConfig = Field(default_factory=ExtensionConfig)
 

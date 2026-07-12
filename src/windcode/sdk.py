@@ -11,11 +11,12 @@ from uuid import uuid4
 from platformdirs import user_state_path
 
 from windcode.auth import CredentialStore, FileCredentialStore
-from windcode.config import AppConfig, PermissionMode, save_model_config
+from windcode.config import AppConfig, PermissionMode, save_memory_config, save_model_config
 from windcode.context import TokenEstimator
 from windcode.domain.events import (
     AgentEventType,
     ApprovalResponse,
+    MemoryEvent,
     RunRequest,
     RunResponse,
     RunResult,
@@ -47,6 +48,18 @@ from windcode.extensions.runtime import RunExtensions
 from windcode.extensions.service import ExtensionService
 from windcode.extensions.state import ExtensionStateStore, ManagementAuditRecord
 from windcode.instructions import load_instructions
+from windcode.memory import (
+    MemoryKind,
+    MemoryRecord,
+    MemoryScope,
+    MemoryService,
+    MemorySource,
+    MemoryStatus,
+    has_explicit_memory_intent,
+    is_project_fact,
+    is_stable_user_fact,
+    refine_memory,
+)
 from windcode.observability import DynamicRedactor, TraceStore
 from windcode.policy import PolicyEngine, PolicyRequest
 from windcode.providers import ModelTarget, ModelTransport, TransportRegistry
@@ -171,6 +184,7 @@ class Windcode:
         self._mcp_tool_catalogs: dict[str, tuple[McpToolDefinition, ...]] = {}
         self._mcp_direct_servers: tuple[str, ...] = ()
         self._mcp_start_task: asyncio.Task[None] | None = None
+        self.memory_service: MemoryService | None = None
 
     @classmethod
     def open(
@@ -194,6 +208,8 @@ class Windcode:
             raise RuntimeError("Windcode client is already open")
         self._entered = True
         self.state_root.mkdir(parents=True, exist_ok=True)
+        if self.config.memory.enabled:
+            self.memory_service = MemoryService(self.state_root, self.workspace)
         if self.config.providers:
             self.transport_registry = TransportRegistry.from_config(
                 self.config,
@@ -356,6 +372,85 @@ class Windcode:
             chain = (replace(chain[0], model=requested), *chain[1:])
         return chain
 
+    def _memory(self) -> MemoryService:
+        if not self.config.memory.enabled or self.memory_service is None:
+            raise RuntimeError("long-term memory is disabled")
+        return self.memory_service
+
+    def list_memories(self, *, status: MemoryStatus | None = None) -> tuple[MemoryRecord, ...]:
+        service = self._memory()
+        return service.store.list(status=status, project_id=service.project_id)
+
+    def search_memories(self, query: str, *, limit: int | None = None) -> tuple[MemoryRecord, ...]:
+        service = self._memory()
+        results = service.store.search(
+            query,
+            project_id=service.project_id,
+            limit=limit or self.config.memory.recall_limit,
+            statuses=(MemoryStatus.ACTIVE, MemoryStatus.CANDIDATE),
+        )
+        return tuple(result.record for result in results)
+
+    def get_memory(self, memory_id: str) -> MemoryRecord:
+        return self._memory().store.get(memory_id)
+
+    def create_memory_candidate(
+        self,
+        *,
+        kind: MemoryKind,
+        scope: MemoryScope,
+        title: str,
+        summary: str,
+        body: str,
+        source: MemorySource | None = None,
+        tags: tuple[str, ...] = (),
+        evidence: tuple[str, ...] = (),
+        confidence: float = 0.5,
+    ) -> MemoryRecord:
+        return self._memory().create_candidate(
+            kind=kind,
+            scope=scope,
+            title=title,
+            summary=summary,
+            body=body,
+            source=source,
+            tags=tags,
+            evidence=evidence,
+            confidence=confidence,
+        )
+
+    def confirm_memory(self, memory_id: str) -> MemoryRecord:
+        return self._memory().store.transition(memory_id, MemoryStatus.ACTIVE)
+
+    def reject_memory(self, memory_id: str) -> MemoryRecord:
+        return self._memory().store.transition(memory_id, MemoryStatus.REJECTED)
+
+    def archive_memory(self, memory_id: str) -> MemoryRecord:
+        return self._memory().store.transition(memory_id, MemoryStatus.ARCHIVED)
+
+    def update_memory(self, memory_id: str, **changes: Any) -> MemoryRecord:
+        return self._memory().store.update(memory_id, **changes)
+
+    def delete_memory(self, memory_id: str) -> None:
+        self._memory().store.delete(memory_id)
+
+    def rebuild_memory_index(self) -> int:
+        return self._memory().store.rebuild()
+
+    def export_project_memories(self, destination: Path) -> tuple[Path, ...]:
+        service = self._memory()
+        return service.store.export_project(service.project_id, destination)
+
+    def draft_skill_from_memory(self, memory_id: str) -> str:
+        return self._memory().draft_skill(memory_id)
+
+    def set_memory_enabled(self, enabled: bool, *, config_file: Path) -> None:
+        updated_memory = self.config.memory.model_copy(update={"enabled": enabled})
+        updated = self.config.model_copy(update={"memory": updated_memory})
+        save_memory_config(config_file, updated)
+        self.config = updated
+        self.memory_service = MemoryService(self.state_root, self.workspace) if enabled else None
+
     @staticmethod
     def _session_summary(prompt: str, *, limit: int = 60) -> str:
         summary = " ".join(prompt.split())
@@ -499,6 +594,16 @@ class Windcode:
             policy.restore_session_approval(tool_name, effects)
         child_tools = run_registry.clone()
         instructions = load_instructions(workspace, workspace_root=workspace)
+        run_memory = (
+            MemoryService(self.state_root, workspace) if self.config.memory.enabled else None
+        )
+        memory_context = ""
+        if run_memory is not None:
+            memory_context = run_memory.recall(
+                request.prompt,
+                limit=self.config.memory.recall_limit,
+                max_chars=self.config.memory.recall_max_chars,
+            )
         budgets = RunBudgets(
             max_model_steps=self.config.budgets.max_model_steps,
             max_tool_calls=self.config.budgets.max_tool_calls,
@@ -546,7 +651,7 @@ class Windcode:
         def make_system_prompt(
             direct_servers: tuple[str, ...], search_servers: tuple[str, ...]
         ) -> str:
-            return build_system_prompt(
+            prompt = build_system_prompt(
                 workspace=workspace,
                 permission_mode=mode,
                 instructions=instructions,
@@ -557,6 +662,9 @@ class Windcode:
                 mcp_search_servers=search_servers,
                 mcp_unavailable_servers=unavailable_mcp_servers,
             )
+            if memory_context:
+                prompt += f"\n\n{memory_context}"
+            return prompt
 
         # Direct tools are not registered until run start (after activation), so
         # build a provisional prompt now and refine it once we know which servers
@@ -601,10 +709,94 @@ class Windcode:
             return result.output
 
         run_extensions.hooks.executor.command_runner = run_hook_command
+        model_chain = self._model_chain(request.model)
+
+        async def extract_memories(result: RunResult) -> None:
+            if (
+                not self.config.memory.enabled
+                or not self.config.memory.extraction_enabled
+                or run_memory is None
+            ):
+                return
+            if has_explicit_memory_intent(request.prompt) or is_stable_user_fact(request.prompt):
+                project_fact = is_project_fact(request.prompt)
+                kind = MemoryKind.PROJECT_KNOWLEDGE if project_fact else MemoryKind.USER_PROFILE
+                refined = await refine_memory(
+                    model_chain[0],
+                    text=request.prompt,
+                    kind=kind,
+                    max_output_tokens=self.config.memory.extraction_max_output_tokens,
+                )
+                candidate = run_memory.create_candidate(
+                    kind=kind,
+                    scope=MemoryScope.PROJECT if project_fact else MemoryScope.USER,
+                    title=refined.title,
+                    summary=refined.summary,
+                    body=refined.body,
+                    source=MemorySource(session.metadata.session_id, run_id),
+                    tags=refined.tags,
+                    evidence=(f"用户原话: {request.prompt}",),
+                    confidence=0.8,
+                )
+                activated = run_memory.store.transition(candidate.memory_id, MemoryStatus.ACTIVE)
+                await bus.publish(
+                    MemoryEvent(
+                        event_id=uuid4().hex,
+                        session_id=session.metadata.session_id,
+                        run_id=run_id,
+                        turn=0,
+                        action="activated",
+                        memory_id=activated.memory_id,
+                        memory_kind=activated.kind.value,
+                        scope=activated.scope.value,
+                        status=activated.status.value,
+                        details={"policy": "stable_fact_auto_commit"},
+                    ),
+                    durable=True,
+                )
+            if self.config.memory.experience_enabled and result.verification:
+                experience_text = (result.final_text or request.prompt)[
+                    : self.config.memory.extraction_max_chars
+                ]
+                refined = await refine_memory(
+                    model_chain[0],
+                    text=experience_text,
+                    kind=MemoryKind.EXPERIENCE,
+                    evidence=result.verification,
+                    max_output_tokens=self.config.memory.extraction_max_output_tokens,
+                )
+                experience = run_memory.create_candidate(
+                    kind=MemoryKind.EXPERIENCE,
+                    scope=MemoryScope.PROJECT,
+                    title=refined.title,
+                    summary=refined.summary,
+                    body=refined.body,
+                    source=MemorySource(session.metadata.session_id, run_id),
+                    tags=refined.tags,
+                    evidence=result.verification,
+                    confidence=0.7,
+                )
+                verified = run_memory.store.transition(experience.memory_id, MemoryStatus.ACTIVE)
+                await bus.publish(
+                    MemoryEvent(
+                        event_id=uuid4().hex,
+                        session_id=session.metadata.session_id,
+                        run_id=run_id,
+                        turn=0,
+                        action="activated",
+                        memory_id=verified.memory_id,
+                        memory_kind=verified.kind.value,
+                        scope=verified.scope.value,
+                        status=verified.status.value,
+                        details={"verified": True, "policy": "no_execution_no_memory"},
+                    ),
+                    durable=True,
+                )
+
         loop = AgentLoop(
             session_id=session.metadata.session_id,
             run_id=run_id,
-            model_chain=self._model_chain(request.model),
+            model_chain=model_chain,
             scheduler=scheduler,
             control=control,
             event_bus=bus,
@@ -619,6 +811,7 @@ class Windcode:
             close_event_bus=False,
             sourced_context_provider=run_extensions.drain_context,
             compact_observer=run_extensions.compact_lifecycle,
+            completion_observer=extract_memories,
         )
         after_sequence = session.metadata.next_sequence - 1
 
@@ -640,6 +833,18 @@ class Windcode:
                     if server_id not in set(direct_servers)
                 )
                 loop.system_prompt = make_system_prompt(direct_servers, search_servers)
+                if memory_context:
+                    await bus.publish(
+                        MemoryEvent(
+                            event_id=uuid4().hex,
+                            session_id=session.metadata.session_id,
+                            run_id=run_id,
+                            turn=0,
+                            action="recalled",
+                            status="active",
+                            details={"characters": len(memory_context)},
+                        )
+                    )
                 if not existing_session:
                     await run_extensions.lifecycle(HookEvent.SESSION_START)
                 await run_extensions.lifecycle(HookEvent.USER_SUBMIT)
