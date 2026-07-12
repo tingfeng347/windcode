@@ -220,6 +220,7 @@ class Windcode:
         self._mcp_selected_tools: set[str] = set()
         self._mcp_direct_servers: tuple[str, ...] = ()
         self._mcp_start_task: asyncio.Task[None] | None = None
+        self._mcp_retirement_tasks: set[asyncio.Task[None]] = set()
         self.memory_service: MemoryService | None = None
 
     def _resolve_state_root(self, explicit_root: Path | None) -> Path:
@@ -322,7 +323,14 @@ class Windcode:
             extension_root / "plugins",
         )
         await self.extension_service.reload()
-        self._client_extensions = RunExtensions.create(
+        self._client_extensions = self._create_client_extensions()
+        self._mcp_start_task = asyncio.create_task(self._start_required_mcp())
+        return self
+
+    def _create_client_extensions(self) -> RunExtensions:
+        if self.extension_service is None:
+            raise RuntimeError("extension service is not initialized")
+        return RunExtensions.create(
             self.extension_service.snapshot,
             session_id="client",
             run_id="startup",
@@ -333,8 +341,20 @@ class Windcode:
             network_enabled=self.config.sandbox.network_enabled,
             mcp_tool_catalogs=self._mcp_tool_catalogs,
         )
-        self._mcp_start_task = asyncio.create_task(self._start_required_mcp())
-        return self
+
+    async def _retire_client_extensions(
+        self,
+        extensions: RunExtensions,
+        handles: tuple[RunHandle, ...],
+        startup: asyncio.Task[None] | None,
+    ) -> None:
+        await asyncio.gather(*(handle.result() for handle in handles), return_exceptions=True)
+        if startup is not None:
+            if not startup.done():
+                startup.cancel()
+            await asyncio.gather(startup, return_exceptions=True)
+        extensions.mcp.observer = None
+        await extensions.aclose()
 
     async def _start_required_mcp(self) -> None:
         if self._client_extensions is None or self.tool_registry is None:
@@ -384,9 +404,20 @@ class Windcode:
 
     async def reload_extensions(self) -> ManagementResult:
         result = await self._extensions().reload()
+        previous = self._client_extensions
+        previous_startup = self._mcp_start_task
+        active_handles = tuple(handle for handle in self._handles if not handle.done)
         self._mcp_tool_catalogs.clear()
         self._mcp_selected_tools.clear()
         self._mcp_direct_servers = ()
+        self._client_extensions = self._create_client_extensions()
+        self._mcp_start_task = asyncio.create_task(self._start_required_mcp())
+        if previous is not None:
+            retirement = asyncio.create_task(
+                self._retire_client_extensions(previous, active_handles, previous_startup)
+            )
+            self._mcp_retirement_tasks.add(retirement)
+            retirement.add_done_callback(self._mcp_retirement_tasks.discard)
         return result
 
     def extension_commands(
@@ -1204,6 +1235,9 @@ class Windcode:
                 self._mcp_start_task.cancel()
             await asyncio.gather(self._mcp_start_task, return_exceptions=True)
             self._mcp_start_task = None
+        if self._mcp_retirement_tasks:
+            await asyncio.gather(*tuple(self._mcp_retirement_tasks), return_exceptions=True)
+            self._mcp_retirement_tasks.clear()
         if self._client_extensions is not None:
             self._client_extensions.mcp.observer = None
         extension_close = (

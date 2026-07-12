@@ -26,6 +26,21 @@ Windcode 是一个Coding Agent。它可以在本地
 
 环境要求：Linux、Python 3.12+、[uv](https://docs.astral.sh/uv/)。bubblewrap 可选。
 
+从 PyPI 安装命令行工具：
+
+```bash
+uv tool install windcode
+windcode /path/to/project
+```
+
+也可以安装到当前 Python 环境：
+
+```bash
+uv pip install windcode
+```
+
+从源码运行：
+
 ```bash
 uv sync --frozen --all-groups
 cp .windcode/config.toml.example .windcode/config.toml
@@ -115,6 +130,40 @@ uv run pyright
 uv run pytest -q
 uv build
 ```
+
+## 构建与发布
+
+发布前更新 `pyproject.toml` 和 `src/windcode/__init__.py` 中的版本号，并完成完整检查：
+
+```bash
+uv sync --frozen --all-groups
+uv run ruff format --check .
+uv run ruff check .
+uv run pyright
+uv run pytest -q
+uv build --no-sources
+```
+
+可以先发布到 TestPyPI 验证：
+
+```bash
+uv publish \
+  --publish-url https://test.pypi.org/legacy/ \
+  --token "$TEST_PYPI_TOKEN"
+```
+
+正式版本通过 GitHub Release 自动发布：创建与项目版本一致的标签，例如 `v0.1.0`，然后发布
+GitHub Release。`.github/workflows/publish.yml` 会验证标签、运行测试、构建发行包，并使用
+PyPI Trusted Publishing 发布。首次发布前需要在 PyPI 配置以下 Trusted Publisher：
+
+```text
+Owner: tingfeng347
+Repository: windcode
+Workflow: publish.yml
+Environment: pypi
+```
+
+PyPI 不允许覆盖已经发布的同名版本；重新发布前必须增加版本号。
 
 生产代码位于 `src/windcode/`。本地 `tests/` 与 `spec/` 目录由 Git 忽略，仅用于开发和规格管理。
 

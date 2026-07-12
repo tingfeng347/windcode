@@ -1,0 +1,109 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+concurrency:
+  group: pypi-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify distribution
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Verify release tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          PACKAGE_VERSION="$(uv run --no-project python -c \
+            'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          test "${RELEASE_TAG#v}" = "$PACKAGE_VERSION" || {
+            echo "Release tag $RELEASE_TAG does not match package version $PACKAGE_VERSION"
+            exit 1
+          }
+
+      - name: Install locked dependencies
+        run: uv sync --frozen --all-groups
+
+      - name: Verify runtime version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          uv run python - <<'PY'
+          import os
+          import windcode
+
+          expected = os.environ["RELEASE_TAG"].removeprefix("v")
+          if windcode.__version__ != expected:
+              raise SystemExit(
+                  f"windcode.__version__={windcode.__version__} does not match {expected}"
+              )
+          PY
+
+      - name: Run quality checks
+        run: |
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run pytest -q
+
+      - name: Build distributions
+        run: uv build --no-sources
+
+      - name: Verify distribution contents
+        run: |
+          uv run --with twine twine check dist/*
+          uv run --no-project python - <<'PY'
+          from pathlib import Path
+          import zipfile
+
+          wheel = next(Path("dist").glob("*.whl"))
+          with zipfile.ZipFile(wheel) as archive:
+              names = archive.namelist()
+          required = ("windcode/__init__.py", "windcode/tui/styles.tcss")
+          missing = [item for item in required if not any(name.endswith(item) for name in names)]
+          if missing:
+              raise SystemExit(f"Wheel is missing required files: {', '.join(missing)}")
+          PY
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish distribution
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/windcode/
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

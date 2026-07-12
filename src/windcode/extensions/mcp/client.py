@@ -172,7 +172,10 @@ class McpClient:
         except BaseException as exc:
             ready = self._ready
             if ready is not None and not ready.done():
-                ready.set_exception(exc)
+                if isinstance(exc, asyncio.CancelledError):
+                    ready.cancel()
+                else:
+                    ready.set_exception(exc)
             elif not isinstance(exc, asyncio.CancelledError):
                 raise
         finally:
@@ -237,6 +240,7 @@ class McpClient:
     async def aclose(self) -> None:
         task = self._owner_task
         if task is None:
+            self._settle_ready()
             self._close_stderr()
             return
         close_requested = self._close_requested
@@ -254,6 +258,16 @@ class McpClient:
             if result and isinstance(result[0], BaseException):
                 self._close_error = result[0]
         finally:
+            self._settle_ready()
             self._owner_task = None
             self._ready = None
             self._close_requested = None
+
+    def _settle_ready(self) -> None:
+        ready = self._ready
+        if ready is None:
+            return
+        if not ready.done():
+            ready.cancel()
+        elif not ready.cancelled():
+            ready.exception()
