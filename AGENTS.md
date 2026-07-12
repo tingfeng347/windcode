@@ -1,31 +1,78 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Command Routing
 
-Windcode is a Python 3.12 terminal application. Production code lives under `src/windcode/`. Keep core types and rules in `domain/`, orchestration in `runtime/`, model adapters in `providers/`, callable capabilities in `tools/`, and terminal UI code in `tui/`. Configuration, session, context, policy, and sandbox concerns each have dedicated packages. Tests mirror behavior by scope in `tests/unit/`, `tests/contract/`, `tests/integration/`, `tests/e2e/`, and `tests/smoke/`; TUI integration tests belong in `tests/integration/tui/`. Product requirements and implementation checklists live in `spec/`, including `spec/tui-refresh/`.
+- Only invoke the `mew-spec` workflow when the user's first non-whitespace token is exactly
+  `/spec`, or when the user explicitly names `$mew-spec`.
+- Do not infer spec mode from ordinary requests such as “功能开发” or “先澄清需求”.
 
-## Build, Test, and Development Commands
+## Project Structure
 
-- `uv sync --frozen --all-groups`: install the locked development environment.
-- `uv run windcode /path/to/project`: launch the CLI against a workspace.
-- `uv run ruff format --check .`: verify formatting without rewriting files.
+Windcode is a Python 3.12 terminal coding agent. Production code lives under `src/windcode/`:
+
+- `domain/`: core messages, events, models, errors, and tool contracts.
+- `runtime/`: agent loop, scheduling, budgets, subagents, prompts, and orchestration.
+- `providers/`: model protocol adapters and transport error normalization.
+- `tools/`: built-in callable tools and the tool registry.
+- `extensions/`: MCP, skills, hooks, plugins, discovery, and extension state.
+- `memory/`: long-term memory extraction, activation, indexing, and recall.
+- `tui/`: Textual application, commands, screens, and widgets.
+- `config/`, `sessions/`, `context/`, `policy/`, `sandbox/`, and `observability/` own their
+  corresponding infrastructure concerns.
+
+Local tests mirror behavior in `tests/unit/`, `tests/contract/`, `tests/integration/`, `tests/e2e/`,
+and `tests/smoke/`. Product requirements and checklists live under `spec/`. Both directories are
+intentionally Git-ignored and must not be force-added unless the user explicitly requests it.
+
+## Development Commands
+
+- `uv sync --frozen --all-groups`: install locked development dependencies.
+- `uv run windcode /path/to/project`: launch the TUI.
+- `uv run ruff format --check .`: verify formatting.
 - `uv run ruff check .`: run lint and import-order checks.
-- `uv run pyright`: run strict static type checking.
-- `uv run pytest -q`: execute the complete test suite.
-- `uv build`: create source and wheel distributions.
+- `uv run pyright`: run strict type checking.
+- `uv run pytest -q`: run the local test suite.
+- `uv build`: build the source and wheel distributions.
 
-## Coding Style & Naming Conventions
+## Engineering Conventions
 
-Use four-space indentation, Python 3.12 syntax, and type annotations for public APIs and non-trivial internals. Ruff enforces a 100-character line length and the `E`, `F`, `I`, `UP`, `B`, `ASYNC`, and `RUF` rule sets. Use `snake_case` for modules, functions, and variables; `PascalCase` for classes; and `UPPER_SNAKE_CASE` for constants. Keep async boundaries explicit and avoid coupling domain logic to Textual widgets or provider-specific payloads.
+Use four-space indentation, Python 3.12 syntax, and type annotations for public APIs and non-trivial
+internals. Ruff enforces a 100-character line length and the `E`, `F`, `I`, `UP`, `B`, `ASYNC`, and
+`RUF` rule sets. Use `snake_case` for modules and functions, `PascalCase` for classes, and
+`UPPER_SNAKE_CASE` for constants.
 
-## Testing Guidelines
+Keep domain logic independent of Textual and provider-specific payloads. Preserve explicit async
+boundaries. Prefer existing registries, stores, event types, and configuration models over parallel
+abstractions. Add focused tests for local rules and integration coverage for runtime, provider, MCP,
+memory, session, or TUI behavior.
 
-Pytest uses asyncio auto mode. Name files `test_*.py` and test functions `test_*`. Add focused unit tests for local logic, contract tests for stable interfaces, and integration tests for provider, runtime, or TUI flows. Keep real-provider smoke tests opt-in and never require credentials for the default suite.
+## State And Configuration
 
-## Commit & Pull Request Guidelines
+All runtime state uses one selected root:
 
-The history does not yet establish a formal convention. Use short imperative subjects, optionally scoped, such as `tui: add slash command completion` or `runtime: prevent historical event replay`. Pull requests should summarize behavioral changes, list verification commands and results, link relevant issues or specs, and include screenshots for visible TUI changes.
+```text
+explicit SDK state_root
+-> configured project_state_root
+-> user_storage_root
+```
 
-## Security & Configuration
+The root contains `memory/`, `sessions/`, `traces/`, `extensions/`, and `worktrees/`.
+`.windcode/config.toml`, `.windcode/state/`, `tests/`, and `spec/` are local-only ignored paths.
+Never remove, rewrite, force-add, or commit them without an explicit user request.
 
-Never commit API keys. In `.windcode/config.toml`, set `api_key_env` to an environment variable name, not the secret itself. Use `.windcode/config.toml.example` as the configuration reference.
+For MCP servers, `enable` controls discovery and runtime visibility; `required` only controls startup
+requirements for an enabled server. Disabled servers must not connect, appear in default server
+lists, participate in tool search, or enter the system prompt. Explicit extension reload invalidates
+MCP catalog and selected-tool caches.
+
+## Security
+
+Never commit API keys, tokens, credential-bearing URLs, local state, or trace data. Project TOML may
+contain environment-variable names or credential IDs, not secret values. Use
+`.windcode/config.toml.example` as the public configuration reference.
+
+## Commits And Reviews
+
+Use short imperative conventional subjects, for example `fix(tui): 允许取消空会话选择` or
+`feat(memory): 增加分层上下文召回`. Keep unrelated user changes intact. Reviews should lead with
+behavioral bugs and risks, include file references, and state remaining test gaps.
