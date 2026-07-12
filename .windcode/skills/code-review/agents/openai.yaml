@@ -1,0 +1,4 @@
+interface:
+  display_name: "Code Review"
+  short_description: "Find correctness risks and missing test coverage"
+  default_prompt: "Use $code-review to review the current code changes."

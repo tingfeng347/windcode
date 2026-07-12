@@ -7,7 +7,7 @@ from rich.text import Text as RichText
 from textual.containers import Vertical, VerticalScroll
 from textual.timer import Timer
 from textual.widget import Widget
-from textual.widgets import Static
+from textual.widgets import Markdown, Static
 
 from windcode.domain.events import (
     AgentEventType,
@@ -69,10 +69,12 @@ class MessageStream(VerticalScroll):
             self.call_after_refresh(self.scroll_end, animate=False)
 
     async def add_ai_message(self, text: str) -> None:
-        content = RichText()
-        content.append("● ", style="bold color(99)")
-        content.append(text)
-        row = Vertical(Static(content, classes="message ai-message"), classes="ai-row")
+        prefix = Static(RichText("● ", style="bold color(99)"), classes="message ai-prefix")
+        row = Vertical(
+            prefix,
+            Markdown(text, classes="message ai-message"),
+            classes="ai-row",
+        )
         await self._mount_if_attached(row)
         if self.is_attached:
             self.call_after_refresh(self.scroll_end, animate=False)
@@ -160,7 +162,23 @@ class MessageStream(VerticalScroll):
         if self.is_attached:
             self.call_after_refresh(self.scroll_end, animate=False)
 
+    async def _finalize_text(self) -> None:
+        """Replace the inexpensive streaming label with rich Markdown output."""
+        if not self._accumulated_text or self._ai_row is None:
+            return
+        if self._streaming_label is not None and self._streaming_label.is_attached:
+            await self._streaming_label.remove()
+        if self._ai_row.is_attached:
+            await self._ai_row.mount(
+                Static(RichText("● ", style="bold color(99)"), classes="message ai-prefix"),
+                Markdown(self._accumulated_text, classes="message ai-message"),
+            )
+        self._streaming_label = None
+        self._accumulated_text = ""
+        await self._place_spinner_at_end()
+
     async def begin_block(self) -> None:
+        await self._finalize_text()
         if self._streaming_label is not None and not self._accumulated_text:
             await self._streaming_label.remove()
         self._streaming_label = None
@@ -208,6 +226,7 @@ class MessageStream(VerticalScroll):
             self._thinking_paused_at = None
 
     async def finish_run(self) -> None:
+        await self._finalize_text()
         if self._streaming_label is not None and not self._accumulated_text:
             await self._streaming_label.remove()
             self._streaming_label = None

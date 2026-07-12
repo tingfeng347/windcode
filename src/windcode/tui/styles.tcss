@@ -97,6 +97,16 @@ Screen {
     padding: 0 2;
 }
 
+.ai-prefix {
+    height: 1;
+    color: #876fff;
+    padding: 0 2;
+}
+
+.ai-message MarkdownFence {
+    background: #1b2024;
+}
+
 .error-message {
     color: #e36d6d;
     padding: 0 2;
@@ -138,7 +148,7 @@ Screen {
     width: 100%;
     height: auto;
     max-height: 24;
-    padding: 0 2 1 2;
+    padding: 1 2 1 2;
     background: #151719;
 }
 
@@ -152,13 +162,18 @@ Screen {
 }
 
 .welcome-mode #input-area {
-    width: 75%;
-    offset-x: 15%;
+    width: 68%;
+    offset-x: 0;
     padding: 0 1;
+}
+
+.welcome-mode #chat-input {
+    min-height: 5;
 }
 
 .welcome-mode #input-dock {
     dock: none;
+    align-horizontal: center;
     padding: 1 2 0 2;
 }
 
@@ -186,7 +201,7 @@ Screen {
 #chat-input {
     width: 100%;
     height: auto;
-    min-height: 4;
+    min-height: 3;
     max-height: 10;
     padding: 1 2 0 2;
     border: none;
