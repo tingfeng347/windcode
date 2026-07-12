@@ -1143,10 +1143,20 @@ class Windcode:
             self._mcp_start_task = None
         if self._client_extensions is not None:
             self._client_extensions.mcp.observer = None
-            await self._client_extensions.aclose()
+        extension_close = (
+            self._client_extensions.aclose()
+            if self._client_extensions is not None
+            else asyncio.sleep(0)
+        )
+        try:
+            await asyncio.gather(
+                extension_close,
+                self.transport_registry.aclose(),
+                return_exceptions=True,
+            )
+        finally:
             self._client_extensions = None
-        await self.transport_registry.aclose()
-        self._entered = False
+            self._entered = False
 
 
 __all__ = ["RunHandle", "Windcode"]

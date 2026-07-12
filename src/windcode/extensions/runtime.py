@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -358,6 +359,7 @@ class RunExtensions:
         )
 
     async def aclose(self) -> None:
-        await self.hooks.aclose()
+        pending = [self.hooks.aclose()]
         if self.owns_mcp:
-            await self.mcp.aclose()
+            pending.append(self.mcp.aclose())
+        await asyncio.gather(*pending, return_exceptions=True)

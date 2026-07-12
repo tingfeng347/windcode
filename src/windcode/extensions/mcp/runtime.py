@@ -130,8 +130,15 @@ class McpRuntime:
         for server_id, slot in reversed(tuple(self._servers.items())):
             async with slot.lock:
                 slot.state = McpServerState.CLOSING
-                if slot.client is not None:
-                    await slot.client.aclose()
+                client = slot.client
+                try:
+                    if client is not None:
+                        await client.aclose()
+                        if client.close_error is not None:
+                            await self._observe("diagnostic", server_id, "close_failed")
+                except Exception:
+                    await self._observe("diagnostic", server_id, "close_failed")
+                finally:
                     slot.client = None
-                slot.state = McpServerState.CLOSED
-                await self._observe("mcp_closed", server_id, "closed")
+                    slot.state = McpServerState.CLOSED
+                    await self._observe("mcp_closed", server_id, "closed")

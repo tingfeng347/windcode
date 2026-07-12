@@ -62,6 +62,7 @@ class McpClient:
         self._owner_task: asyncio.Task[None] | None = None
         self._ready: asyncio.Future[InitializeResult] | None = None
         self._close_requested: asyncio.Event | None = None
+        self._close_error: BaseException | None = None
 
     @property
     def stderr(self) -> str:
@@ -78,6 +79,10 @@ class McpClient:
     @property
     def connected(self) -> bool:
         return self._session is not None
+
+    @property
+    def close_error(self) -> BaseException | None:
+        return self._close_error
 
     async def __aenter__(self) -> Self:
         await self.connect()
@@ -238,11 +243,15 @@ class McpClient:
             close_requested.set()
         try:
             async with asyncio.timeout(self.connect_timeout):
-                await task
+                result = await asyncio.gather(task, return_exceptions=True)
+                if result and isinstance(result[0], BaseException):
+                    self._close_error = result[0]
         except TimeoutError:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-            raise
+            result = await asyncio.gather(task, return_exceptions=True)
+            self._close_error = TimeoutError("MCP connection close timed out")
+            if result and isinstance(result[0], BaseException):
+                self._close_error = result[0]
         finally:
             self._owner_task = None
             self._ready = None
