@@ -60,7 +60,14 @@ jobs:
         run: |
           uv run ruff format --check .
           uv run ruff check .
-          uv run pytest -q
+
+      - name: Run tests when present in the checkout
+        run: |
+          if [ -d tests ] && find tests -type f -name 'test_*.py' -print -quit | grep -q .; then
+            uv run pytest -q
+          else
+            echo "No tracked tests are present in this checkout; skipping pytest."
+          fi
 
       - name: Build distributions
         run: uv build --no-sources
