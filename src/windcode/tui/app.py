@@ -963,6 +963,12 @@ class WindcodeApp(App[None]):
         self._update_status("running" if self.handle and not self.handle.done else "idle")
 
     async def action_cancel_or_quit(self) -> None:
+        # If the user has selected text, copy it first instead of canceling.
+        selected = self.screen.get_selected_text()
+        if selected:
+            await self.copy_to_clipboard(selected)
+            self.screen.clear_selection()
+            return
         if self.handle is not None and not self.handle.done:
             await self.handle.cancel()
             return
