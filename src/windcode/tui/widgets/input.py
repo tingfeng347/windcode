@@ -35,6 +35,9 @@ class ChatInput(TextArea):
             super().__init__()
             self.prefix = prefix
 
+    class EscapePressed(Message):
+        pass
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.cursor_blink = False
@@ -69,8 +72,10 @@ class ChatInput(TextArea):
 
     def action_dismiss_menu(self) -> None:
         menu = self._command_menu()
-        if menu is not None:
+        if menu is not None and menu.is_open:
             menu.hide()
+        else:
+            self.post_message(self.EscapePressed())
         self.focus()
 
     def action_nav_up(self) -> None:

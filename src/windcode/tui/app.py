@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+from collections import deque
 from pathlib import Path
+from time import monotonic
 from typing import ClassVar, Literal
 
 from rich.text import Text as RichText
@@ -57,6 +59,7 @@ from windcode.types import RunRequest
 
 
 class WindcodeApp(App[None]):
+    ESCAPE_INTERRUPT_WINDOW = 1.5
     CSS_PATH = "styles.tcss"
     TITLE = "Windcode"
     INLINE_PADDING = 0
@@ -105,6 +108,8 @@ class WindcodeApp(App[None]):
         self.subagent_group: SubagentGroup | None = None
         self.compact_next_run = False
         self.pending_extension_mutation: tuple[str, str | None] | None = None
+        self.prompt_queue: deque[str] = deque()
+        self._escape_interrupt_deadline = 0.0
         self.ui_mode: Literal["welcome", "chat"] = "chat"
 
     def _display_model(self) -> str:
@@ -189,6 +194,7 @@ class WindcodeApp(App[None]):
         self.set_class(event.size.width < 60, "narrow")
 
     async def on_unmount(self) -> None:
+        self.prompt_queue.clear()
         if self.handle is not None and not self.handle.done:
             await self.handle.cancel()
         await self.client.aclose()
@@ -453,8 +459,12 @@ class WindcodeApp(App[None]):
 
     async def _start_prompt(self, value: str) -> None:
         if self.handle is not None and not self.handle.done:
-            await self._show_system_message("已有任务正在运行")
+            self.prompt_queue.append(value)
+            self._update_status(f"运行中 · 队列 {len(self.prompt_queue)}")
             return
+        await self._launch_prompt(value)
+
+    async def _launch_prompt(self, value: str) -> None:
         messages = self.query_one("#chat-area", MessageStream)
         self._set_ui_mode("chat")
         await messages.add_user_message(value)
@@ -507,12 +517,38 @@ class WindcodeApp(App[None]):
                     await self.subagent_group.apply_event(event)
                 messages.scroll_end(animate=False)
             result = await handle.result()
+            self._escape_interrupt_deadline = 0.0
             self._update_status(result.status)
         finally:
             try:
                 self.query_one("#chat-input", ChatInput).focus()
             except NoMatches:
                 pass
+        if self.prompt_queue:
+            value = self.prompt_queue.popleft()
+            await self._launch_prompt(value)
+
+    @on(ChatInput.EscapePressed)
+    async def escape_pressed(self) -> None:
+        if self.handle is None or self.handle.done:
+            self._escape_interrupt_deadline = 0.0
+            return
+        now = monotonic()
+        if now <= self._escape_interrupt_deadline:
+            self._escape_interrupt_deadline = 0.0
+            await self.handle.cancel()
+            return
+        self._escape_interrupt_deadline = now + self.ESCAPE_INTERRUPT_WINDOW
+        self._update_status("再次 Esc 中断")
+        self.set_timer(self.ESCAPE_INTERRUPT_WINDOW, self._reset_escape_interrupt)
+
+    def _reset_escape_interrupt(self) -> None:
+        if not self._escape_interrupt_deadline or monotonic() < self._escape_interrupt_deadline:
+            return
+        self._escape_interrupt_deadline = 0.0
+        if self.handle is not None and not self.handle.done:
+            state = f"运行中 · 队列 {len(self.prompt_queue)}" if self.prompt_queue else "running"
+            self._update_status(state)
 
     @on(ApprovalWidget.Decision)
     async def approval_decision(self, event: ApprovalWidget.Decision) -> None:
