@@ -240,6 +240,12 @@ class Windcode:
             project_root = self.workspace / project_root
         return project_root.resolve()
 
+    def _user_storage_root(self) -> Path:
+        configured = self.config.storage.user_storage_root
+        if configured is not None:
+            return self._configured_state_path(configured)
+        return user_state_path("windcode").expanduser().resolve()
+
     @classmethod
     def open(
         cls,
@@ -798,7 +804,10 @@ class Windcode:
             config=self.config.subagents,
             event_bus=bus,
             factory=factory,
-            worktrees=WorktreeManager(worktrees_root=self.state_root / "worktrees"),
+            worktrees=WorktreeManager(
+                worktrees_root=self.state_root / "worktrees",
+                fallback_worktrees_root=self._user_storage_root() / "worktrees",
+            ),
             verification=VerificationRunner(
                 sandbox=sandbox,
                 timeout_seconds=self.config.budgets.shell_timeout_seconds,

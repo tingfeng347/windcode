@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 from pathlib import Path
 
@@ -42,21 +43,43 @@ class WorktreeManager:
         *,
         runner: GitRunner | None = None,
         worktrees_root: Path | None = None,
+        fallback_worktrees_root: Path | None = None,
     ) -> None:
         self.runner = runner or GitRunner()
         self.worktrees_root = _resolve(worktrees_root) if worktrees_root else None
+        self.fallback_worktrees_root = (
+            _resolve(fallback_worktrees_root) if fallback_worktrees_root else None
+        )
         self._lock = asyncio.Lock()
 
     def _effective_root(self, repository: Path) -> Path:
         default = repository.parent / f".{repository.name}-windcode-worktrees"
-        if self.worktrees_root is None:
-            return default
-        # A project-local state root such as `.windcode` is valid for metadata,
-        # sessions, and traces, but Git forbids linked worktree checkouts inside
-        # the parent repository. Relocate only the checkout directory.
-        if self.worktrees_root.is_relative_to(repository):
-            return default
-        return self.worktrees_root
+        primary = self.worktrees_root
+        fallback = self.fallback_worktrees_root
+        if primary is not None and fallback is None:
+            return primary
+        if primary is not None and primary != fallback and primary.is_dir():
+            return primary
+        if fallback is not None:
+            digest = hashlib.sha256(str(repository).encode()).hexdigest()[:12]
+            project = _safe_component(repository.name)
+            return fallback / f"{project}-{digest}"
+        return default
+
+    async def _validate_nested_root(self, root: Path, repository: Path) -> None:
+        if not root.is_relative_to(repository):
+            return
+        probe = root / ".windcode-ignore-probe"
+        ignored = await self.runner.run(
+            ("check-ignore", "--quiet", "--no-index", str(probe)),
+            cwd=repository,
+            check=False,
+        )
+        if ignored.returncode != 0:
+            raise WorktreeError(
+                GitErrorCategory.INVALID_PATH,
+                "a nested subagent Worktree root must be ignored by the parent repository",
+            )
 
     async def validate_parent(
         self,
@@ -114,11 +137,7 @@ class WorktreeManager:
         branch = f"windcode/subagents/{safe_run}/{safe_task}-{safe_id[:12]}"
         root = self._effective_root(baseline.repository)
         path = _resolve(root / f"{safe_task}-{safe_id[:12]}")
-        if path.is_relative_to(baseline.repository):
-            raise WorktreeError(
-                GitErrorCategory.INVALID_PATH,
-                "subagent Worktree must be outside the parent repository",
-            )
+        await self._validate_nested_root(root, baseline.repository)
         async with self._lock:
             _mkdir(root)
             if _exists(path):
