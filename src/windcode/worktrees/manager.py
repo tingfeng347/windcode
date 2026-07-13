@@ -47,7 +47,23 @@ class WorktreeManager:
         self.worktrees_root = _resolve(worktrees_root) if worktrees_root else None
         self._lock = asyncio.Lock()
 
-    async def validate_parent(self, workspace: Path) -> GitBaseline:
+    def _effective_root(self, repository: Path) -> Path:
+        default = repository.parent / f".{repository.name}-windcode-worktrees"
+        if self.worktrees_root is None:
+            return default
+        # A project-local state root such as `.windcode` is valid for metadata,
+        # sessions, and traces, but Git forbids linked worktree checkouts inside
+        # the parent repository. Relocate only the checkout directory.
+        if self.worktrees_root.is_relative_to(repository):
+            return default
+        return self.worktrees_root
+
+    async def validate_parent(
+        self,
+        workspace: Path,
+        *,
+        require_clean: bool = True,
+    ) -> GitBaseline:
         workspace = _resolve(workspace)
         try:
             repository_result = await self.runner.run(
@@ -68,17 +84,18 @@ class WorktreeManager:
             )
         commit = (await self.runner.run(("rev-parse", "HEAD"), cwd=repository)).stdout.strip()
         await self.runner.run(("worktree", "list", "--porcelain"), cwd=repository)
-        status = (
-            await self.runner.run(
-                ("status", "--porcelain=v1", "--untracked-files=all"), cwd=repository
-            )
-        ).stdout
-        if status.strip():
-            details = ", ".join(line.strip() for line in status.splitlines()[:5])
-            raise WorktreeError(
-                GitErrorCategory.DIRTY_WORKSPACE,
-                f"parent workspace is not clean: {details}",
-            )
+        if require_clean:
+            status = (
+                await self.runner.run(
+                    ("status", "--porcelain=v1", "--untracked-files=all"), cwd=repository
+                )
+            ).stdout
+            if status.strip():
+                details = ", ".join(line.strip() for line in status.splitlines()[:5])
+                raise WorktreeError(
+                    GitErrorCategory.DIRTY_WORKSPACE,
+                    f"parent workspace is not clean: {details}",
+                )
         return GitBaseline(
             repository=repository, branch=branch_result.stdout.strip(), commit=commit
         )
@@ -95,9 +112,7 @@ class WorktreeManager:
         safe_task = _safe_component(task_name)
         safe_id = _safe_component(subagent_id)
         branch = f"windcode/subagents/{safe_run}/{safe_task}-{safe_id[:12]}"
-        root = self.worktrees_root or (
-            baseline.repository.parent / f".{baseline.repository.name}-windcode-worktrees"
-        )
+        root = self._effective_root(baseline.repository)
         path = _resolve(root / f"{safe_task}-{safe_id[:12]}")
         if path.is_relative_to(baseline.repository):
             raise WorktreeError(

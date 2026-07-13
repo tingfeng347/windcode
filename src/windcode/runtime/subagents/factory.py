@@ -135,12 +135,19 @@ class ChildRuntime:
 def build_child_prompt(record: SubagentRecord) -> str:
     spec = record.spec
     verification = "\n".join(f"- {item}" for item in spec.verification)
+    delivery = (
+        "This is a read-only task. Return all findings in your final response for the parent "
+        "agent to consume. Do not create, edit, or save a report file, including through shell."
+        if spec.kind is SubagentTaskKind.READ
+        else "Complete file changes in the assigned worktree and commit them before responding."
+    )
     return (
         f"Task: {spec.task_name}\n"
         f"Goal: {spec.goal}\n\n"
         f"Context:\n{spec.context}\n\n"
         f"Expected output:\n{spec.expected_output}\n\n"
         f"Verification requirements:\n{verification}\n\n"
+        f"Delivery constraint:\n{delivery}\n\n"
         "Complete only this task. Do not delegate and do not ask the user questions."
     )
 

@@ -48,7 +48,9 @@ TERMINAL_SUBAGENT_STATUSES = frozenset(
 )
 
 _ALLOWED_TRANSITIONS: dict[SubagentStatus, frozenset[SubagentStatus]] = {
-    SubagentStatus.QUEUED: frozenset({SubagentStatus.RUNNING, SubagentStatus.CANCELLED}),
+    SubagentStatus.QUEUED: frozenset(
+        {SubagentStatus.RUNNING, SubagentStatus.FAILED, SubagentStatus.CANCELLED}
+    ),
     SubagentStatus.RUNNING: frozenset(
         {
             SubagentStatus.BLOCKED,

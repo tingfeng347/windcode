@@ -439,13 +439,18 @@ class SearchMcpToolsTool:
         selected_tools: set[str],
     ) -> None:
         self.service = service
-        self.registry = registry
+        self.registries = [registry]
         self.selected_tools = selected_tools
+
+    def add_registry(self, registry: ToolRegistry) -> None:
+        if all(item is not registry for item in self.registries):
+            self.registries.append(registry)
 
     async def _select(self, stable_id: str) -> tuple[McpToolAdapter, bool]:
         already_selected = stable_id in self.selected_tools
         adapter = await self.service.adapter(stable_id)
-        self.registry.register(adapter, replace=True)
+        for registry in self.registries:
+            registry.register(adapter, replace=True)
         self.selected_tools.add(stable_id)
         return adapter, already_selected
 

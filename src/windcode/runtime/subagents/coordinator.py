@@ -46,7 +46,7 @@ from windcode.runtime.subagents.approvals import ApprovalRouter
 from windcode.runtime.subagents.budgets import AggregateBudget
 from windcode.runtime.subagents.factory import ChildRuntime, ChildRuntimeFactory
 from windcode.runtime.subagents.verification import VerificationRunner
-from windcode.worktrees import GitBaseline, WorktreeLease, WorktreeManager
+from windcode.worktrees import GitBaseline, WorktreeError, WorktreeLease, WorktreeManager
 
 
 class SubagentCoordinatorError(RuntimeError):
@@ -98,6 +98,7 @@ class SubagentCoordinator:
         self._runtimes: dict[str, ChildRuntime] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._completion: dict[str, asyncio.Future[SubagentResult]] = {}
+        self._startup: dict[str, asyncio.Future[None]] = {}
         self._usage: dict[str, Usage] = {}
         self._queue: deque[str] = deque()
         self._active = 0
@@ -168,7 +169,10 @@ class SubagentCoordinator:
             baseline: GitBaseline | None = None
             if any(spec.kind is SubagentTaskKind.WRITE for spec in specs):
                 try:
-                    baseline = await self.worktrees.validate_parent(self.workspace)
+                    baseline = await self.worktrees.validate_parent(
+                        self.workspace,
+                        require_clean=False,
+                    )
                 except Exception as exc:
                     raise SubagentCoordinatorError("write_workspace_blocked", str(exc)) from exc
 
@@ -190,12 +194,22 @@ class SubagentCoordinator:
                 )
                 self._records[record.subagent_id] = record
                 self._completion[record.subagent_id] = loop.create_future()
+                self._startup[record.subagent_id] = loop.create_future()
                 self._queue.append(record.subagent_id)
                 await self._persist(record)
                 await self._publish_record_event(record, SubagentQueued)
                 created.append(record)
             self._schedule_locked()
-            return tuple(created)
+            scheduled_ids = tuple(
+                record.subagent_id for record in created if record.subagent_id in self._tasks
+            )
+        # Do not report a successful spawn while every child is merely a queued
+        # record. Yield outside the coordinator lock until each scheduled task has
+        # either published its running state or reached a terminal failure.
+        await asyncio.gather(
+            *(asyncio.shield(self._startup[subagent_id]) for subagent_id in scheduled_ids)
+        )
+        return tuple(self._records[record.subagent_id] for record in created)
 
     def _schedule_locked(self) -> None:
         while self._queue and self._active < self.config.max_concurrent:
@@ -309,7 +323,10 @@ class SubagentCoordinator:
                     "",
                     record.base_commit,
                 )
-                validated = await self.worktrees.validate_parent(self.workspace)
+                validated = await self.worktrees.validate_parent(
+                    self.workspace,
+                    require_clean=False,
+                )
                 baseline = replace(
                     baseline, repository=validated.repository, branch=validated.branch
                 )
@@ -339,6 +356,9 @@ class SubagentCoordinator:
                 summary="subagent started",
                 workspace=str(workspace),
             )
+            startup = self._startup[subagent_id]
+            if not startup.done():
+                startup.set_result(None)
             forwarding = asyncio.create_task(self._forward_child_events(runtime))
             try:
                 run_result = await runtime.loop.run(runtime.prompt, runtime.workspace)
@@ -429,6 +449,9 @@ class SubagentCoordinator:
             if record.status in {SubagentStatus.QUEUED, SubagentStatus.RUNNING}:
                 await self._finish_failed(record, type(exc).__name__, str(exc))
         finally:
+            startup = self._startup.get(subagent_id)
+            if startup is not None and not startup.done():
+                startup.set_result(None)
             self._runtimes.pop(subagent_id, None)
             self.approvals.cancel(subagent_id)
             async with self._lock:
@@ -566,7 +589,14 @@ class SubagentCoordinator:
             raise SubagentCoordinatorError(
                 "not_integratable", "subagent must be a completed clean write task"
             )
-        integration = await self.worktrees.integrate(self._leases[subagent_id], self.workspace)
+        try:
+            integration = await self.worktrees.integrate(self._leases[subagent_id], self.workspace)
+        except WorktreeError as exc:
+            raise SubagentCoordinatorError(
+                "integration_workspace_blocked",
+                "subagent work is safely committed in its Worktree, but integration is blocked: "
+                f"{exc}",
+            ) from exc
         if not integration.integrated:
             conflict = await self._transition(record, SubagentStatus.CONFLICT)
             result = replace(

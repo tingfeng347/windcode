@@ -65,10 +65,19 @@ def resolve_role_tools(
         if "__" in name
         or name in {"list_mcp_servers", "search_mcp_tools", "read_mcp_resource", "get_mcp_prompt"}
     )
-    allowed_tools = policy.default_tools | network_tools
-    if requested_tools is not None:
-        unknown = requested_tools - allowed_tools
-        if unknown:
-            raise ValueError(f"requested tools exceed role policy: {', '.join(sorted(unknown))}")
-    selected = allowed_tools if requested_tools is None else requested_tools
+    # Task kind is an independent capability boundary. In particular, a worker
+    # may perform either kind of task, but a worker/read task must remain just as
+    # read-only as researcher/read and verifier/read.
+    kind_tools = (
+        policy.default_tools & _READ_TOOLS
+        if kind is SubagentTaskKind.READ
+        else policy.default_tools
+    )
+    allowed_tools = kind_tools | network_tools
+    # ``requested_tools`` is model-authored input, so treat it as a narrowing
+    # hint rather than a second policy boundary. A model can accidentally copy a
+    # write tool into a read-only researcher task; denying that tool is enough to
+    # preserve the role boundary and should not prevent the remaining research
+    # tools from starting.
+    selected = allowed_tools if requested_tools is None else requested_tools & allowed_tools
     return selected & parent_tools

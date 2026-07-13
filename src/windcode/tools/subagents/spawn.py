@@ -14,13 +14,26 @@ class SubagentTaskInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     task_name: str = Field(pattern=r"^[a-z0-9]+(?:_[a-z0-9]+)*$")
-    role: SubagentRole
-    kind: SubagentTaskKind
+    role: SubagentRole = Field(
+        description=(
+            "researcher and verifier are read-only; use worker only when the child itself must "
+            "modify files"
+        )
+    )
+    kind: SubagentTaskKind = Field(
+        description="Use read for research/verification and write only for a worker editing files."
+    )
     goal: str = Field(min_length=1)
     context: str = Field(min_length=1)
     expected_output: str = Field(min_length=1)
     verification: tuple[str, ...] = Field(min_length=1)
-    allowed_tools: frozenset[str] | None = None
+    allowed_tools: frozenset[str] | None = Field(
+        default=None,
+        description=(
+            "Optional tool restriction. Omit it to use role defaults. Never request write_file, "
+            "edit_file, or apply_patch for researcher/verifier read tasks."
+        ),
+    )
     model: str | None = None
     requires_network: bool = Field(
         default=False,
@@ -51,8 +64,14 @@ class SpawnSubagentsInput(BaseModel):
 class SpawnSubagentsTool:
     name = "spawn_subagents"
     description = (
-        "Create bounded temporary subagents. Declare requires_network for network-dependent "
-        "tasks; network access follows the parent run's network policy and permission workflow."
+        "Create bounded temporary subagents. Researchers and verifiers are read-only and return "
+        "their findings to the parent; use a worker/write task only when that child must edit "
+        "files. Write tasks use an isolated Git Worktree based on the current parent HEAD, so "
+        "never stash, commit, revert, move, or discard parent workspace changes before spawning; "
+        "uncommitted parent changes are intentionally not copied into the child Worktree. Omit "
+        "allowed_tools unless a narrower tool set is required. Declare "
+        "requires_network for network-dependent tasks; network access follows the parent run's "
+        "network policy and permission workflow."
     )
     input_model = SpawnSubagentsInput
     effects = frozenset({ToolEffect.PROCESS, ToolEffect.WORKSPACE_WRITE})

@@ -34,6 +34,7 @@ from windcode.extensions.commands import CommandRoute
 from windcode.extensions.hooks.models import HookContext, HookEvent
 from windcode.extensions.mcp.catalog import McpToolDefinition
 from windcode.extensions.mcp.tools import (
+    SearchMcpToolsTool,
     register_mcp_management_tools,
     register_mcp_status_tool,
 )
@@ -712,6 +713,10 @@ class Windcode:
                 continue
             policy.restore_session_approval(tool_name, effects)
         child_tools = run_registry.clone()
+        if "search_mcp_tools" in run_registry.names():
+            search_mcp_tools = run_registry.get("search_mcp_tools")
+            if isinstance(search_mcp_tools, SearchMcpToolsTool):
+                search_mcp_tools.add_registry(child_tools)
         instructions = load_instructions(workspace, workspace_root=workspace)
         run_memory = (
             MemoryService(self.state_root, workspace) if self.config.memory.enabled else None
