@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 from uuid import uuid4
 
+from platformdirs import user_state_path
 from pydantic import TypeAdapter, ValidationError
 
 from windcode.config.models import (
@@ -57,13 +58,23 @@ class ExtensionService:
         workspace: Path,
         state_store: ExtensionStateStore,
         plugins_root: Path,
+        *,
+        user_skill_root: Path | None = None,
     ) -> None:
         self.config = config
         self.workspace = workspace.expanduser().resolve()
         self.state_store = state_store
         self.plugins_root = plugins_root
-        self._user_skill_roots = tuple(Path(path).expanduser() for path in config.skill_roots)
-        self._project_skill_root = self.workspace / ".windcode" / "skills"
+        default_user_skill_root = user_skill_root or user_state_path("windcode") / "skill"
+        self._user_skill_roots = tuple(
+            dict.fromkeys(
+                (
+                    default_user_skill_root.expanduser().resolve(),
+                    *(Path(path).expanduser().resolve() for path in config.skill_roots),
+                )
+            )
+        )
+        self._project_skill_root = self.workspace / ".windcode" / "skill"
         loaded = state_store.load()
         self._state = loaded.state
         self._state_diagnostics = loaded.diagnostics

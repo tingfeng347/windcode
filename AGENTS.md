@@ -56,8 +56,9 @@ explicit SDK state_root
 -> user_storage_root
 ```
 
-The root contains `memory/`, `sessions/`, `traces/`, `extensions/`, and `worktrees/`.
-`.windcode/config.toml`, `.windcode/state/`, `tests/`, and `spec/` are local-only ignored paths.
+The root contains `skill/`, `memory/`, `sessions/`, `traces/`, `extensions/`, and `worktrees/`.
+`.windcode/config.toml`, runtime directories under `.windcode/`, `tests/`, and `spec/` are local-only
+ignored paths.
 Never remove, rewrite, force-add, or commit them without an explicit user request.
 
 For MCP servers, `enable` controls discovery and runtime visibility; `required` only controls startup

@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from windcode.config import AppConfig, ConfigError, PermissionMode, load_config
+from windcode.config import AppConfig, ConfigError, PermissionMode, ensure_user_config, load_config
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,8 +156,9 @@ def run(argv: Sequence[str] | None = None) -> int:
         options = parse_options(arguments)
         if not options.workspace.is_dir():
             raise ConfigError(options.workspace, "workspace is not a directory")
+        write_config_file = options.config_file or ensure_user_config()
         config = resolve_config(options)
-    except ConfigError as exc:
+    except (ConfigError, OSError) as exc:
         print(f"windcode: {exc}", file=sys.stderr)
         return 2
 
@@ -171,7 +172,7 @@ def run(argv: Sequence[str] | None = None) -> int:
         permission_mode=(
             options.permission_mode.value if options.permission_mode is not None else None
         ),
-        config_file=options.config_file,
+        config_file=write_config_file,
     )
     app.run()
     return 0

@@ -54,8 +54,8 @@ url =
 required = true
 
 [storage]
-project_state_root = ".windcode/state"
-user_storage_root = "~/.local/state/windcode/state"
+project_state_root = ".windcode"
+user_storage_root = "~/.local/state/windcode"
 
 [memory]
 enabled = true

@@ -1,4 +1,9 @@
-from windcode.config.loader import ConfigError, load_config
+from windcode.config.loader import (
+    ConfigError,
+    default_user_config_path,
+    ensure_user_config,
+    load_config,
+)
 from windcode.config.models import (
     HARD_MAX_CONCURRENT_SUBAGENTS,
     HARD_MAX_SUBAGENT_TASKS,
@@ -35,6 +40,8 @@ __all__ = [
     "StorageConfig",
     "SubagentConfig",
     "TraceConfig",
+    "default_user_config_path",
+    "ensure_user_config",
     "load_config",
     "save_memory_config",
     "save_model_config",

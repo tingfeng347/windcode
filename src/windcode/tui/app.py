@@ -16,7 +16,7 @@ from textual.theme import Theme
 from textual.widgets import Static
 
 from windcode.auth import CredentialStore, CredentialStoreError
-from windcode.config import AppConfig, PermissionMode, ProviderConfig
+from windcode.config import AppConfig, PermissionMode, ProviderConfig, default_user_config_path
 from windcode.domain.events import (
     ApprovalRequested,
     ApprovalResponse,
@@ -86,9 +86,7 @@ class WindcodeApp(App[None]):
         super().__init__()
         self.config = config
         self.workspace = workspace
-        self.config_file = (
-            (config_file or self.workspace / ".windcode" / "config.toml").expanduser().resolve()
-        )
+        self.config_file = (config_file or default_user_config_path()).expanduser().resolve()
         self.model = model
         self.session_id = session_id
         self.permission_mode = permission_mode or config.permission.mode.value

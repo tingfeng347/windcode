@@ -61,7 +61,7 @@ uv run python examples/07_bash_approval.py
 
 ```toml
 [storage]
-project_state_root = ".windcode/state"
+project_state_root = ".windcode"
 ```
 
 ## MCP 示例配置

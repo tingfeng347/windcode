@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import copy
+import os
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
+import tomli_w
 from platformdirs import user_config_path
 from pydantic import ValidationError
 
@@ -16,6 +18,30 @@ class ConfigError(ValueError):
     def __init__(self, source: Path | str, message: str) -> None:
         self.source = source
         super().__init__(f"{source}: {message}")
+
+
+def default_user_config_path() -> Path:
+    return user_config_path("windcode") / "config.toml"
+
+
+def ensure_user_config(path: Path | None = None) -> Path:
+    """Create the default user configuration once without overwriting an existing file."""
+    target = (path or default_user_config_path()).expanduser().resolve()
+    if target.exists():
+        return target
+
+    content = tomli_w.dumps(AppConfig().model_dump(mode="json", exclude_none=True)).encode()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return target
+
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(content)
+        stream.flush()
+        os.fsync(stream.fileno())
+    return target
 
 
 def _deep_merge(base: dict[str, Any], overlay: Mapping[str, Any]) -> dict[str, Any]:
@@ -52,7 +78,7 @@ def load_config(
     overrides: Mapping[str, Any] | None = None,
 ) -> AppConfig:
     workspace = workspace.expanduser().resolve()
-    default_user = user_config_path("windcode") / "config.toml"
+    default_user = default_user_config_path()
     default_project = workspace / ".windcode" / "config.toml"
     layers: list[tuple[Path | str, dict[str, Any]]] = [
         (

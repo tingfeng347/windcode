@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import shutil
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -226,55 +225,19 @@ class Windcode:
     def _resolve_state_root(self, explicit_root: Path | None) -> Path:
         if explicit_root is not None:
             return explicit_root.expanduser().resolve()
-        legacy_root = user_state_path("windcode").expanduser().resolve()
+        configured_project_root = self.config.storage.project_state_root
+        if configured_project_root is not None:
+            return self._configured_state_path(configured_project_root)
         configured_user_root = self.config.storage.user_storage_root
-        user_root = (
-            self._configured_state_path(configured_user_root)
-            if configured_user_root is not None
-            else legacy_root / "state"
-        )
-        source_root = user_root if user_root.exists() else legacy_root
-        configured = self.config.storage.project_state_root
-        if configured is None:
-            self._migrate_state_root(source_root, user_root)
-            return user_root
-        project_root = self._configured_state_path(configured)
-        self._migrate_state_root(source_root, project_root)
-        return project_root
+        if configured_user_root is not None:
+            return self._configured_state_path(configured_user_root)
+        return user_state_path("windcode").expanduser().resolve()
 
     def _configured_state_path(self, value: str) -> Path:
         project_root = Path(value).expanduser()
         if not project_root.is_absolute():
             project_root = self.workspace / project_root
         return project_root.resolve()
-
-    @staticmethod
-    def _state_manifest(root: Path) -> dict[str, int]:
-        return {
-            str(path.relative_to(root)): path.stat().st_size
-            for path in root.rglob("*")
-            if path.is_file() and not path.is_symlink()
-        }
-
-    @classmethod
-    def _migrate_state_root(cls, source: Path, target: Path) -> None:
-        """Copy the complete legacy state once, validate it, then atomically install it."""
-        if source == target or target.exists():
-            return
-        target.parent.mkdir(parents=True, exist_ok=True)
-        temporary_parent = source.parent if target.is_relative_to(source) else target.parent
-        temporary = temporary_parent / f".{target.name}.migrate-{uuid4().hex}"
-        try:
-            if source.exists():
-                shutil.copytree(source, temporary, copy_function=shutil.copy2)
-                if cls._state_manifest(source) != cls._state_manifest(temporary):
-                    raise OSError("project state migration validation failed")
-            else:
-                temporary.mkdir(parents=True)
-            temporary.replace(target)
-        finally:
-            if temporary.exists():
-                shutil.rmtree(temporary)
 
     @classmethod
     def open(
