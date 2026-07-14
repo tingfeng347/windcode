@@ -27,7 +27,6 @@ from windcode.domain.events import (
     UserInputRequested,
     UserResponse,
 )
-from windcode.domain.messages import TextBlock, message_from_dict
 from windcode.memory import MemoryStatus
 from windcode.providers import fetch_model_ids
 from windcode.sdk import RunHandle, Windcode
@@ -45,11 +44,13 @@ from windcode.tui.widgets import (
     ChatInput,
     CommandMenu,
     ExtensionList,
+    ExtensionManager,
     MemoryManager,
     MessageStream,
     ModelManager,
     ProviderManager,
     QuestionWidget,
+    RewindSelector,
     SessionSelector,
     StatusBar,
     SubagentGroup,
@@ -101,6 +102,8 @@ class WindcodeApp(App[None]):
         self.tool_blocks: dict[str, ToolBlock] = {}
         self.approval_widgets: dict[str, ApprovalWidget] = {}
         self.session_selector: SessionSelector | None = None
+        self.rewind_selector: RewindSelector | None = None
+        self.extension_manager: ExtensionManager | None = None
         self.model_manager: ModelManager | None = None
         self.memory_manager: MemoryManager | None = None
         self.provider_manager: ProviderManager | None = None
@@ -282,21 +285,6 @@ class WindcodeApp(App[None]):
             raise ValueError(f"未知会话: {value}")
         raise ValueError(f"会话短 ID 不唯一: {value}")
 
-    def _resolve_record_id(self, value: str) -> str:
-        if self.session_id is None:
-            raise ValueError("回退前请先选择会话")
-        record_ids = tuple(
-            record.record_id for record in self.client.load_session_records(self.session_id)
-        )
-        if value in record_ids:
-            return value
-        matches = tuple(record_id for record_id in record_ids if record_id.startswith(value))
-        if len(matches) == 1:
-            return matches[0]
-        if not matches:
-            raise ValueError(f"未知记录: {value}")
-        raise ValueError(f"记录短 ID 不唯一: {value}")
-
     async def _restore_session(self, session_id: str, *, announce: bool = True) -> None:
         messages = self.query_one("#chat-area", MessageStream)
         if self.handle is not None and self.handle.done:
@@ -361,6 +349,9 @@ class WindcodeApp(App[None]):
         if self.session_selector is not None:
             await self.session_selector.remove()
             self.session_selector = None
+        if self.rewind_selector is not None:
+            await self.rewind_selector.remove()
+            self.rewind_selector = None
         if self.model_manager is not None:
             await self.model_manager.dismiss()
         self.model_manager = ModelManager(
@@ -412,6 +403,18 @@ class WindcodeApp(App[None]):
         if self.memory_manager is not None:
             await self.memory_manager.dismiss()
             self.memory_manager = None
+        self.query_one("#chat-input", ChatInput).focus()
+
+    async def _open_extension_manager(self) -> None:
+        if self.extension_manager is not None:
+            await self.extension_manager.dismiss()
+        self.extension_manager = ExtensionManager(self.client.extension_snapshot.capabilities)
+        await self.push_screen(self.extension_manager)
+
+    async def _close_extension_manager(self) -> None:
+        if self.extension_manager is not None:
+            await self.extension_manager.dismiss()
+            self.extension_manager = None
         self.query_one("#chat-input", ChatInput).focus()
 
     async def _select_model(self, alias: str) -> None:
@@ -597,6 +600,26 @@ class WindcodeApp(App[None]):
             self.session_selector = None
         self.query_one("#chat-input", ChatInput).focus()
 
+    @on(RewindSelector.Selected)
+    async def rewind_selected(self, event: RewindSelector.Selected) -> None:
+        if self.handle is not None and not self.handle.done:
+            return
+        if self.rewind_selector is not None:
+            await self.rewind_selector.remove()
+            self.rewind_selector = None
+        if self.session_id is None:
+            return
+        self.client.rewind_session(self.session_id, event.record_id)
+        await self._restore_session(self.session_id, announce=False)
+        await self._show_system_message(f"已回退到记录 {event.record_id[:12]}")
+
+    @on(RewindSelector.Cancelled)
+    async def rewind_cancelled(self) -> None:
+        if self.rewind_selector is not None:
+            await self.rewind_selector.remove()
+            self.rewind_selector = None
+        self.query_one("#chat-input", ChatInput).focus()
+
     @on(ModelManager.Use)
     async def model_use(self, event: ModelManager.Use) -> None:
         await self._select_model(event.alias)
@@ -763,6 +786,24 @@ class WindcodeApp(App[None]):
     async def memory_manager_closed(self) -> None:
         await self._close_memory_manager()
 
+    @on(ExtensionManager.Closed)
+    async def extension_manager_closed(self) -> None:
+        await self._close_extension_manager()
+
+    @on(ExtensionManager.Toggle)
+    async def extension_manager_toggle(self, event: ExtensionManager.Toggle) -> None:
+        try:
+            await self.client.set_extension_enabled(event.identifier, event.enabled)
+            await self.client.reload_extensions()
+        except Exception as exc:
+            if self.extension_manager is not None:
+                self.extension_manager.query_one("#extension-details", Static).update(
+                    f"更新失败: {exc}"
+                )
+            return
+        if self.extension_manager is not None:
+            self.extension_manager.refresh_records(self.client.extension_snapshot.capabilities)
+
     async def _command(self, command: SlashCommand) -> None:
         messages = self.query_one("#chat-area", MessageStream)
         active = self.handle is not None and not self.handle.done
@@ -795,6 +836,9 @@ class WindcodeApp(App[None]):
             if active:
                 raise ValueError("任务运行期间不能恢复会话")
             if not command.arguments:
+                if self.rewind_selector is not None:
+                    await self.rewind_selector.remove()
+                    self.rewind_selector = None
                 if self.session_selector is not None:
                     await self.session_selector.remove()
                 self.session_selector = SessionSelector(self.client.list_sessions())
@@ -808,45 +852,21 @@ class WindcodeApp(App[None]):
                 raise ValueError("用法: /resume 会话ID")
             session_id = self._resolve_session_id(command.arguments[0])
             await self._restore_session(session_id)
-        elif command.name == "history":
-            if command.arguments:
-                raise ValueError("用法: /history")
-            if self.session_id is None:
-                raise ValueError("请先选择会话")
-            lines = ["当前会话历史节点:"]
-            for record in self.client.load_session_records(self.session_id):
-                if record.record_type != "conversation_message":
-                    continue
-                message = message_from_dict(record.payload)
-                text = " ".join(
-                    block.text for block in message.content if isinstance(block, TextBlock)
-                )
-                preview = " ".join(text.split())[:48]
-                lines.append(
-                    f"{record.sequence}. {record.record_id[:12]}  {message.role.value}  {preview}"
-                )
-            await self._show_system_message("\n".join(lines))
         elif command.name == "rewind":
             if active:
                 raise ValueError("任务运行期间不能回退会话")
-            if len(command.arguments) != 1:
-                raise ValueError("用法: /rewind 记录ID")
-            record_id = self._resolve_record_id(command.arguments[0])
-            assert self.session_id is not None
-            self.client.rewind_session(self.session_id, record_id)
-            await self._restore_session(self.session_id, announce=False)
-            await self._show_system_message(f"已回退到记录 {record_id[:12]}")
-        elif command.name == "mode":
-            if len(command.arguments) != 1:
-                raise ValueError("用法: /mode 模式")
-            try:
-                self.permission_mode = PermissionMode(command.arguments[0]).value
-            except ValueError as exc:
-                raise ValueError(f"未知权限模式: {command.arguments[0]}") from exc
-            if active:
-                assert self.handle is not None
-                self.handle.set_permission_mode(self.permission_mode)
-            self._update_status("running" if active else "idle")
+            if command.arguments:
+                raise ValueError("用法: /rewind")
+            if self.session_id is None:
+                raise ValueError("回退前请先选择会话")
+            if self.rewind_selector is not None:
+                await self.rewind_selector.remove()
+            self.rewind_selector = RewindSelector(self.client.load_session_records(self.session_id))
+            await self.query_one("#input-area", Vertical).mount(
+                self.rewind_selector, before="#chat-input"
+            )
+            self.rewind_selector.focus()
+            await self._show_system_message("请选择要回退到的历史记录")
         elif command.name == "model":
             if active:
                 raise ValueError("任务运行期间不能切换模型")
@@ -1003,6 +1023,11 @@ class WindcodeApp(App[None]):
             if active and action in mutations:
                 raise ValueError("任务运行期间不能修改扩展状态")
             mutation = (action, target)
+            if action == "list":
+                if active:
+                    raise ValueError("任务运行期间不能管理扩展")
+                await self._open_extension_manager()
+                return
             if action in mutations and self.pending_extension_mutation != mutation:
                 self.pending_extension_mutation = mutation
                 target_label = "" if target is None else f" {target}"
@@ -1012,9 +1037,7 @@ class WindcodeApp(App[None]):
                 return
             if action in mutations:
                 self.pending_extension_mutation = None
-            if action == "list":
-                records = await self.client.list_extensions()
-            elif action == "inspect":
+            if action == "inspect":
                 if target is None:
                     raise ValueError("用法: /extensions inspect 目标")
                 records = await self.client.inspect_extension(target)

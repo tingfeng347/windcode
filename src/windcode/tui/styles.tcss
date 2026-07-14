@@ -31,8 +31,9 @@ Screen {
 
 #welcome-logo {
     width: 100%;
-    height: 5;
+    height: auto;
     content-align: center middle;
+    text-align: center;
     color: #5fa8e8;
 }
 
@@ -55,6 +56,13 @@ Screen {
 
 #welcome-notice.welcome-notice-error {
     color: #e36d6d;
+}
+
+#welcome-notice.welcome-notice-list {
+    width: 68%;
+    padding: 0 2;
+    text-align: left;
+    color: #cbd3d8;
 }
 
 #chat-area {
@@ -173,7 +181,7 @@ Screen {
 }
 
 .welcome-mode #input-area {
-    width: 68%;
+    width: 80%;
     offset-x: 0;
     padding: 0 1;
 }
@@ -254,7 +262,8 @@ Screen {
     color: #aab3ba;
 }
 
-#sessions {
+#sessions,
+#rewind-history {
     width: 100%;
     height: 3;
     background: #20262b;
@@ -269,6 +278,62 @@ ProviderManager {
 MemoryManager {
     align: center middle;
     background: #151719 80%;
+}
+
+ExtensionManager {
+    align: center middle;
+    background: #151719 80%;
+}
+
+#extension-dialog {
+    width: 72;
+    max-width: 92%;
+    height: auto;
+    max-height: 82%;
+    padding: 1 2;
+    background: #20262b;
+    border: round #39434a;
+}
+
+#extension-manager-header {
+    width: 100%;
+    height: 2;
+}
+
+#extension-manager-title {
+    width: 1fr;
+    color: #e4e9ed;
+    text-style: bold;
+}
+
+#extension-manager-close {
+    color: #88939b;
+    text-align: right;
+}
+
+#extension-help {
+    height: 1;
+    color: #88939b;
+}
+
+#extension-list {
+    width: 100%;
+    height: auto;
+    min-height: 6;
+    max-height: 16;
+    margin-top: 1;
+    background: #1b2024;
+    color: #d7dde2;
+}
+
+#extension-details {
+    width: 100%;
+    height: auto;
+    min-height: 5;
+    margin-top: 1;
+    padding: 1;
+    background: #1b2024;
+    color: #aab3ba;
 }
 
 #memory-dialog {
@@ -582,6 +647,11 @@ MemoryManager {
 
 .narrow #welcome-context {
     margin-top: 0;
+}
+
+.narrow #welcome-notice.welcome-notice-list {
+    width: 100%;
+    padding: 0 1;
 }
 
 .narrow #input-area,

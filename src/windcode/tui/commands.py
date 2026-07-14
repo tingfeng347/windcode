@@ -30,20 +30,14 @@ CompletionDefinition = CommandDefinition | SkillDefinition
 
 COMMAND_CATALOG = (
     CommandDefinition("new", "新建会话"),
-    CommandDefinition("resume", "恢复已有会话", "[会话ID]"),
-    CommandDefinition("history", "显示当前会话历史节点"),
-    CommandDefinition("rewind", "回退到历史记录", "<记录ID>"),
-    CommandDefinition("mode", "切换权限模式", "<模式>"),
-    CommandDefinition("model", "配置或切换当前模型", "[配置别名]"),
+    CommandDefinition("resume", "恢复已有会话"),
+    CommandDefinition("rewind", "选择历史记录并回退"),
+    CommandDefinition("model", "配置或切换当前模型"),
     CommandDefinition("compact", "压缩当前上下文"),
     CommandDefinition("clear", "清空当前消息显示"),
     CommandDefinition("status", "显示会话状态"),
     CommandDefinition("agents", "显示子智能体状态"),
-    CommandDefinition(
-        "extensions",
-        "管理扩展",
-        "[目标]",
-    ),
+    CommandDefinition("extensions", "查看扩展"),
     CommandDefinition(
         "memory",
         "管理长期记忆",

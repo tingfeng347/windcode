@@ -11,15 +11,26 @@ from textual.widgets import Static
 
 from windcode.tui.permission_display import permission_label, permission_style
 
-WIDE_LOGO = r"""
-             _           _
-__      _____(_)_ __   __| | ___ ___   ___  ___
-\ \ /\ / / _ \ | '_ \ / _` |/ __/ _ \ / _ \/ _ \
- \ V  V /  __/ | | | | (_| | (_| (_) |  __/  __/
-  \_/\_/ \___|_|_| |_|\__,_|\___\___/ \___|\___|
+WIDE_LOGO = r"""                                          
+                           __                     __            
+            __            /\ \                   /\ \           
+ __  __  __/\_\    ___    \_\ \    ___    ___    \_\ \     __   
+/\ \/\ \/\ \/\ \ /' _ `\  /'_` \  /'___\ / __`\  /'_` \  /'__`\ 
+\ \ \_/ \_/ \ \ \/\ \/\ \/\ \L\ \/\ \__//\ \L\ \/\ \L\ \/\  __/ 
+ \ \___x___/'\ \_\ \_\ \_\ \___,_\ \____\ \____/\ \___,_\ \____\
+  \/__//__/   \/_/\/_/\/_/\/__,_ /\/____/\/___/  \/__,_ /\/____/
+                                                                                                                                                                                          
 """.strip("\n")
 
 COMPACT_LOGO = "[ windcode ]"
+SMALL_LOGO = r"""
+            _             _                  _       
+ __      __(_) _ __    __| |  ___  ___    __| |  ___ 
+ \ \ /\ / /| || '_ \  / _` | / __|/ _ \  / _` | / _ \
+  \ V  V / | || | | || (_| || (__| (_) || (_| ||  __/
+   \_/\_/  |_||_| |_| \__,_| \___|\___/  \__,_| \___|
+                                                      
+""".strip("\n")
 MCP_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 LOGO_PALETTE = ("#59c7d6", "#5fa8e8", "#8b8fe8", "#d9a557", "#63c28d")
 
@@ -43,8 +54,6 @@ class WelcomeView(Vertical):
         self._workspace = workspace
         self._mcp_spinner_timer: Timer | None = None
         self._mcp_spinner_index = 0
-        self._logo_timer: Timer | None = None
-        self._logo_frame = 0
 
     def compose(self) -> ComposeResult:
         yield Static(self._logo(), id="welcome-logo")
@@ -52,18 +61,8 @@ class WelcomeView(Vertical):
         yield Static(self._context_content(), id="welcome-context")
         yield Static("", id="welcome-notice")
 
-    def on_mount(self) -> None:
-        self._logo_timer = self.set_interval(0.12, self._tick_logo)
-
     def on_unmount(self) -> None:
-        if self._logo_timer is not None:
-            self._logo_timer.stop()
-            self._logo_timer = None
         self.stop_mcp_loading()
-
-    def _tick_logo(self) -> None:
-        self._logo_frame = (self._logo_frame + 1) % 10_000
-        self.query_one("#welcome-logo", Static).update(self._logo())
 
     def set_context(
         self,
@@ -120,19 +119,11 @@ class WelcomeView(Vertical):
         self.query_one("#welcome-logo", Static).update(self._logo())
 
     def _logo(self) -> RichText:
-        logo = COMPACT_LOGO if self.size.width and self.size.width < 64 else WIDE_LOGO
+        logo = COMPACT_LOGO if self.size.width and self.size.width < 64 else SMALL_LOGO
         output = RichText(justify="center")
         lines = logo.splitlines()
         for row, line in enumerate(lines):
-            for column, char in enumerate(line):
-                if char.isspace():
-                    output.append(char)
-                    continue
-                wave = (column + row * 2 + self._logo_frame) // 3
-                color = LOGO_PALETTE[wave % len(LOGO_PALETTE)]
-                highlight = (column + row + self._logo_frame) % 17 in {0, 1}
-                style = f"bold {color}" + (" on #26343d" if highlight else "")
-                output.append(char, style=style)
+            output.append(line, style=f"bold {LOGO_PALETTE[row % len(LOGO_PALETTE)]}")
             if row < len(lines) - 1:
                 output.append("\n")
         return output

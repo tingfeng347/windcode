@@ -137,7 +137,13 @@ class ExtensionService:
             if not isinstance(definition, PluginManifest):
                 continue
             source_id = f"plugin:{definition.plugin_id}"
-            commands.extend((source_id, command) for command in definition.commands)
+            commands.extend(
+                (source_id, command)
+                for command in definition.commands
+                # Skills are selected through the $ menu. A slash alias would
+                # duplicate that entry and make skills look like built-in commands.
+                if not command.target.startswith("skill:")
+            )
         return build_command_catalog(tuple(commands), reserved=reserved)
 
     async def set_enabled(self, extension_id: str, enabled: bool) -> ManagementResult:
