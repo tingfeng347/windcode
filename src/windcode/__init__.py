@@ -3,4 +3,4 @@
 from windcode.sdk import Windcode
 
 __all__ = ["Windcode"]
-__version__ = "0.1.3"
+__version__ = "0.1.4"
