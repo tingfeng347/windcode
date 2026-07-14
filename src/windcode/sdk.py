@@ -8,10 +8,13 @@ from types import TracebackType
 from typing import Any, Self, cast
 from uuid import uuid4
 
-from platformdirs import user_state_path
-
 from windcode.auth import CredentialStore, FileCredentialStore
-from windcode.config import AppConfig, PermissionMode, save_memory_config, save_model_config
+from windcode.config import (
+    AppConfig,
+    PermissionMode,
+    save_memory_config,
+    save_model_config,
+)
 from windcode.context import TokenEstimator
 from windcode.domain.events import (
     AgentEventType,
@@ -230,9 +233,7 @@ class Windcode:
         if configured_project_root is not None:
             return self._configured_state_path(configured_project_root)
         configured_user_root = self.config.storage.user_storage_root
-        if configured_user_root is not None:
-            return self._configured_state_path(configured_user_root)
-        return user_state_path("windcode").expanduser().resolve()
+        return self._configured_state_path(configured_user_root)
 
     def _configured_state_path(self, value: str) -> Path:
         project_root = Path(value).expanduser()
@@ -242,9 +243,7 @@ class Windcode:
 
     def _user_storage_root(self) -> Path:
         configured = self.config.storage.user_storage_root
-        if configured is not None:
-            return self._configured_state_path(configured)
-        return user_state_path("windcode").expanduser().resolve()
+        return self._configured_state_path(configured)
 
     @classmethod
     def open(
@@ -291,6 +290,7 @@ class Windcode:
             self.workspace,
             ExtensionStateStore(extension_root / "state.json"),
             extension_root / "plugins",
+            user_skill_root=self._user_storage_root() / "skill",
         )
         await self.extension_service.reload()
         self._client_extensions = self._create_client_extensions()

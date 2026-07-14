@@ -345,6 +345,7 @@ MemoryManager {
 #provider-dialog {
     width: 92;
     max-height: 94%;
+    align: center middle;
 }
 
 #model-manager-title,
@@ -353,6 +354,10 @@ MemoryManager {
     height: 2;
     color: #e4e9ed;
     text-style: bold;
+}
+
+#provider-manager-title {
+    text-align: center;
 }
 
 #model-search,
@@ -433,11 +438,20 @@ MemoryManager {
     max-height: 1fr;
     overflow-y: auto;
     scrollbar-size-vertical: 1;
+    align: center middle;
+}
+
+#provider-form {
+    width: 84;
+    max-width: 100%;
+    height: auto;
+    align-horizontal: center;
 }
 
 .provider-field {
     width: 100%;
     height: 3;
+    align-vertical: middle;
 }
 
 .provider-field-label {
@@ -445,11 +459,46 @@ MemoryManager {
     height: 3;
     padding: 0 1;
     color: #aab3ba;
+    content-align: left middle;
 }
 
 .provider-field Input,
 .provider-field Select {
     width: 1fr;
+}
+
+#provider-model-controls {
+    width: 1fr;
+    height: 3;
+    align-vertical: middle;
+}
+
+#provider-model-controls Input,
+#provider-model-controls Select {
+    width: 1fr;
+}
+
+#provider-load-models {
+    width: 10;
+    min-width: 8;
+}
+
+#provider-editor-actions {
+    width: 52;
+    max-width: 100%;
+    height: 3;
+    align-horizontal: center;
+}
+
+#provider-editor-actions-wrap {
+    width: 100%;
+    height: 3;
+}
+
+#provider-editor-actions Button {
+    width: 1fr;
+    min-width: 0;
+    margin: 0 1;
 }
 
 .interaction {
@@ -563,6 +612,15 @@ MemoryManager {
 .narrow .provider-field Input,
 .narrow .provider-field Select {
     width: 1fr;
+}
+
+.narrow #provider-form {
+    width: 100%;
+}
+
+.narrow #provider-editor-actions {
+    width: 100%;
+    max-width: 100%;
 }
 
 .narrow #chat-area {

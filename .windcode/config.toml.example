@@ -42,20 +42,15 @@ max_total_mb = 100
 [extensions]
 enabled = true
 
-[extensions.mcp_servers.tavily-mcp]
-transport = "streamable_http"
-enable = false
-url = 
-
 [extensions.mcp_servers.gaodemap-mcp]
 transport = "streamable_http"
-enable = true
-url = 
+enable = false
+url = "https://mcp.api-inference.modelscope.net/6eea030bc1684a/mcp"
 required = true
 
 [storage]
 project_state_root = ".windcode"
-user_storage_root = "~/.local/state/windcode"
+user_storage_root = "~/.windcode"
 
 [memory]
 enabled = true

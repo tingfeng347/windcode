@@ -8,7 +8,7 @@ from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Center, Horizontal, Vertical
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, OptionList, Select, Static
@@ -297,6 +297,18 @@ class ProviderManager(ModalScreen[None]):
             super().__init__()
             self.alias = alias
 
+    class LoadModels(Message):
+        def __init__(
+            self,
+            alias: str,
+            provider: ProviderConfig,
+            secret: str | None,
+        ) -> None:
+            super().__init__()
+            self.alias = alias
+            self.provider = provider
+            self.secret = secret
+
     class Closed(Message):
         pass
 
@@ -332,46 +344,54 @@ class ProviderManager(ModalScreen[None]):
                 yield Button("确认断开", id="provider-confirm-delete", variant="error")
                 yield Button("完成", id="provider-close")
             with Vertical(id="provider-editor"):
-                with Horizontal(classes="provider-field"):
-                    yield _field_label("厂商模板", "预填协议、地址和变量")
-                    yield Select(
-                        (
-                            ("自定义 Provider", "custom"),
-                            *((preset.name, preset.id) for preset in PROVIDER_PRESETS),
-                        ),
-                        allow_blank=False,
-                        value="openai",
-                        id="provider-preset",
-                    )
-                with Horizontal(classes="provider-field"):
-                    yield _field_label("配置别名", "用于 /model 和配置引用")
-                    yield Input(placeholder="Provider 别名", id="provider-alias")
-                with Horizontal(classes="provider-field"):
-                    yield _field_label("接口协议", "服务端请求格式")
-                    yield Select(
-                        tuple(
-                            (label, protocol.value) for protocol, label in PROTOCOL_LABELS.items()
-                        ),
-                        allow_blank=False,
-                        value=ProviderProtocol.OPENAI_RESPONSES.value,
-                        id="provider-protocol",
-                    )
-                with Horizontal(classes="provider-field"):
-                    yield _field_label("模型 ID", "API 接受的模型标识")
-                    yield Input(placeholder="例如 deepseek-chat", id="provider-model")
-                with Horizontal(classes="provider-field"):
-                    yield _field_label("Base URL", "API 根地址; 模板已预填")
-                    yield Input(placeholder="https://api.example.com/v1", id="provider-base-url")
-                with Horizontal(classes="provider-field"):
-                    yield _field_label("API Key", "存入密钥库; 留空保留")
-                    yield Input(placeholder="API Key", password=True, id="provider-api-key")
-                with Horizontal(classes="provider-field"):
-                    yield _field_label("环境变量", "变量名; 其值优先于密钥库")
-                    yield Input(placeholder="例如 DEEPSEEK_API_KEY", id="provider-api-key-env")
-                yield Static("", id="provider-editor-error")
-                with Horizontal(classes="dialog-actions"):
-                    yield Button("保存连接", id="provider-save", variant="primary")
-                    yield Button("取消", id="provider-cancel")
+                with Vertical(id="provider-form"):
+                    with Horizontal(classes="provider-field"):
+                        yield _field_label("厂商模板", "预填协议、地址和变量")
+                        yield Select(
+                            (
+                                ("自定义 Provider", "custom"),
+                                *((preset.name, preset.id) for preset in PROVIDER_PRESETS),
+                            ),
+                            allow_blank=False,
+                            value="openai",
+                            id="provider-preset",
+                        )
+                    with Horizontal(classes="provider-field"):
+                        yield _field_label("配置别名", "用于 /model 和配置引用")
+                        yield Input(placeholder="Provider 别名", id="provider-alias")
+                    with Horizontal(classes="provider-field"):
+                        yield _field_label("接口协议", "服务端请求格式")
+                        yield Select(
+                            tuple(
+                                (label, protocol.value)
+                                for protocol, label in PROTOCOL_LABELS.items()
+                            ),
+                            allow_blank=False,
+                            value=ProviderProtocol.OPENAI_RESPONSES.value,
+                            id="provider-protocol",
+                        )
+                    with Horizontal(classes="provider-field"):
+                        yield _field_label("模型 ID", "可填写或从 Provider 加载")
+                        with Horizontal(id="provider-model-controls"):
+                            yield Input(placeholder="例如 deepseek-chat", id="provider-model")
+                            yield Select[str]((), prompt="选择模型", id="provider-model-options")
+                            yield Button("加载", id="provider-load-models")
+                    with Horizontal(classes="provider-field"):
+                        yield _field_label("Base URL", "API 根地址; 模板已预填")
+                        yield Input(
+                            placeholder="https://api.example.com/v1", id="provider-base-url"
+                        )
+                    with Horizontal(classes="provider-field"):
+                        yield _field_label("API Key", "存入密钥库; 留空保留")
+                        yield Input(placeholder="API Key", password=True, id="provider-api-key")
+                    with Horizontal(classes="provider-field"):
+                        yield _field_label("环境变量", "变量名; 其值优先于密钥库")
+                        yield Input(placeholder="例如 DEEPSEEK_API_KEY", id="provider-api-key-env")
+                    yield Static("", id="provider-editor-error")
+                    with Center(id="provider-editor-actions-wrap"):
+                        with Horizontal(id="provider-editor-actions"):
+                            yield Button("保存连接", id="provider-save", variant="primary")
+                            yield Button("取消", id="provider-cancel")
 
     def on_mount(self) -> None:
         self.query_one("#provider-editor", Vertical).display = False
@@ -443,6 +463,15 @@ class ProviderManager(ModalScreen[None]):
         if preset is not None:
             self._apply_preset(preset)
 
+    @on(Select.Changed, "#provider-model-options")
+    def model_option_changed(self, event: Select.Changed) -> None:
+        if isinstance(event.value, str):
+            self.query_one("#provider-model", Input).value = event.value
+
+    @on(Input.Submitted, "#provider-api-key")
+    def api_key_submitted(self) -> None:
+        self._request_models()
+
     @on(Button.Pressed)
     def button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
@@ -466,6 +495,8 @@ class ProviderManager(ModalScreen[None]):
             self.post_message(self.Closed())
         elif button_id == "provider-save":
             self._save_editor()
+        elif button_id == "provider-load-models":
+            self._request_models()
         elif button_id == "provider-cancel":
             self._close_editor()
 
@@ -501,17 +532,62 @@ class ProviderManager(ModalScreen[None]):
             "新 API Key (留空则保留)" if provider else "API Key (也可只使用环境变量)"
         )
         self.query_one("#provider-editor-error", Static).update("")
+        model_options = cast(Select[str], self.query_one("#provider-model-options", Select))
+        model_options.set_options(())
+        model_options.clear()
         self.query_one("#provider-list", OptionList).display = False
         self.query_one("#provider-details", Static).display = False
         self.query_one("#provider-actions", Horizontal).display = False
         self.query_one("#provider-editor", Vertical).display = True
         alias_input.focus()
+        self.call_after_refresh(self._request_models)
 
     def _apply_preset(self, preset: ProviderPreset) -> None:
         self.query_one("#provider-alias", Input).value = preset.id
         self.query_one("#provider-protocol", Select).value = preset.protocol.value
         self.query_one("#provider-base-url", Input).value = preset.base_url
         self.query_one("#provider-api-key-env", Input).value = preset.api_key_env
+        self.query_one("#provider-model", Input).value = ""
+        model_options = cast(Select[str], self.query_one("#provider-model-options", Select))
+        model_options.set_options(())
+        model_options.clear()
+        self.call_after_refresh(self._request_models)
+
+    def _request_models(self) -> None:
+        alias = self.query_one("#provider-alias", Input).value.strip()
+        api_key_env = self.query_one("#provider-api-key-env", Input).value.strip() or None
+        secret = self.query_one("#provider-api-key", Input).value.strip() or None
+        base_url = self.query_one("#provider-base-url", Input).value.strip() or None
+        protocol_value = cast(Select[str], self.query_one("#provider-protocol", Select)).value
+        if not _ALIAS_PATTERN.fullmatch(alias) or not isinstance(protocol_value, str):
+            return
+        preset_value = cast(Select[str], self.query_one("#provider-preset", Select)).value
+        try:
+            provider = ProviderConfig(
+                protocol=ProviderProtocol(protocol_value),
+                model=self.query_one("#provider-model", Input).value.strip() or "pending",
+                provider_id=(
+                    preset_value
+                    if isinstance(preset_value, str) and preset_value in PRESETS_BY_ID
+                    else None
+                ),
+                api_key_env=api_key_env,
+                credential_id=alias,
+                base_url=base_url,
+            )
+        except (TypeError, ValueError):
+            return
+        self.query_one("#provider-editor-error", Static).update("正在加载模型列表…")
+        self.post_message(self.LoadModels(alias, provider, secret))
+
+    def show_model_ids(self, model_ids: tuple[str, ...]) -> None:
+        model_select = cast(Select[str], self.query_one("#provider-model-options", Select))
+        model_select.set_options(tuple((model_id, model_id) for model_id in model_ids))
+        current = self.query_one("#provider-model", Input).value.strip()
+        selected = current if current in model_ids else model_ids[0]
+        model_select.value = selected
+        self.query_one("#provider-model", Input).value = selected
+        self.query_one("#provider-editor-error", Static).update(f"已加载 {len(model_ids)} 个模型")
 
     def _close_editor(self) -> None:
         self.query_one("#provider-editor", Vertical).display = False
@@ -533,6 +609,9 @@ class ProviderManager(ModalScreen[None]):
             return
         if self._editing_alias is None and alias in self.profiles:
             self.show_error(f"Provider 已存在: {alias}")
+            return
+        if not model:
+            self.show_error("请填写模型 ID, 或先加载并选择可用模型")
             return
         if not isinstance(protocol_value, str):
             self.show_error("请选择协议")

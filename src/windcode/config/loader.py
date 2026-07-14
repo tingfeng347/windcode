@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Any, cast
 
 import tomli_w
-from platformdirs import user_config_path
 from pydantic import ValidationError
 
 from windcode.config.models import AppConfig
+from windcode.config.paths import default_user_config_path
 
 
 class ConfigError(ValueError):
@@ -20,17 +20,15 @@ class ConfigError(ValueError):
         super().__init__(f"{source}: {message}")
 
 
-def default_user_config_path() -> Path:
-    return user_config_path("windcode") / "config.toml"
-
-
 def ensure_user_config(path: Path | None = None) -> Path:
     """Create the default user configuration once without overwriting an existing file."""
     target = (path or default_user_config_path()).expanduser().resolve()
     if target.exists():
         return target
 
-    content = tomli_w.dumps(AppConfig().model_dump(mode="json", exclude_none=True)).encode()
+    content = tomli_w.dumps(
+        AppConfig().model_dump(mode="json", exclude_none=True, by_alias=True)
+    ).encode()
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
         descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -80,28 +78,27 @@ def load_config(
     workspace = workspace.expanduser().resolve()
     default_user = default_user_config_path()
     default_project = workspace / ".windcode" / "config.toml"
-    layers: list[tuple[Path | str, dict[str, Any]]] = [
-        (
-            user_file or default_user,
-            _read_toml(user_file or default_user, required=user_file is not None),
-        ),
+    selected_user = user_file or default_user
+    layers: list[tuple[Path | str, dict[str, Any], bool]] = [
+        (selected_user, _read_toml(selected_user, required=user_file is not None), False),
         (
             project_file or default_project,
             _read_toml(project_file or default_project, required=project_file is not None),
+            True,
         ),
     ]
     if explicit_file is not None:
-        layers.append((explicit_file, _read_toml(explicit_file, required=True)))
+        layers.append((explicit_file, _read_toml(explicit_file, required=True), False))
     if overrides is not None:
-        layers.append(("explicit overrides", dict(overrides)))
+        layers.append(("explicit overrides", dict(overrides), False))
 
     merged: dict[str, Any] = {}
     project_mcp_servers: set[str] = set()
     disabled_aliases: set[str] = set()
     last_source: Path | str = "built-in defaults"
-    for layer_index, (source, layer) in enumerate(layers):
+    for source, layer, is_project_layer in layers:
         if layer:
-            if layer_index == 1:
+            if is_project_layer:
                 raw_extensions = layer.get("extensions")
                 if isinstance(raw_extensions, Mapping):
                     extension_values = cast(Mapping[object, object], raw_extensions)

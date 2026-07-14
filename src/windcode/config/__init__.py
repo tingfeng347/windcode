@@ -1,6 +1,5 @@
 from windcode.config.loader import (
     ConfigError,
-    default_user_config_path,
     ensure_user_config,
     load_config,
 )
@@ -21,6 +20,7 @@ from windcode.config.models import (
     SubagentConfig,
     TraceConfig,
 )
+from windcode.config.paths import default_user_config_path, default_user_storage_root
 from windcode.config.writer import save_memory_config, save_model_config
 
 __all__ = [
@@ -41,6 +41,7 @@ __all__ = [
     "SubagentConfig",
     "TraceConfig",
     "default_user_config_path",
+    "default_user_storage_root",
     "ensure_user_config",
     "load_config",
     "save_memory_config",

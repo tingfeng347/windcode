@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import cast
 from uuid import uuid4
 
-from platformdirs import user_state_path
 from pydantic import TypeAdapter, ValidationError
 
 from windcode.config.models import (
@@ -17,6 +16,7 @@ from windcode.config.models import (
     McpServerConfig,
     McpStdioConfig,
 )
+from windcode.config.paths import default_user_storage_root
 from windcode.extensions.commands import CommandRoute, build_command_catalog
 from windcode.extensions.discovery import DiscoveryResult, DiscoveryRoot, discover_skills
 from windcode.extensions.hooks.loader import load_hook_definition
@@ -65,7 +65,7 @@ class ExtensionService:
         self.workspace = workspace.expanduser().resolve()
         self.state_store = state_store
         self.plugins_root = plugins_root
-        default_user_skill_root = user_skill_root or user_state_path("windcode") / "skill"
+        default_user_skill_root = user_skill_root or default_user_storage_root() / "skill"
         self._user_skill_roots = tuple(
             dict.fromkeys(
                 (
@@ -86,7 +86,11 @@ class ExtensionService:
         return self._snapshots.current
 
     async def list_capabilities(self) -> tuple[CapabilityRecord, ...]:
-        return self.snapshot.capabilities
+        return tuple(
+            record
+            for record in self.snapshot.capabilities
+            if record.kind is not CapabilityKind.MCP_SERVER or record.enabled
+        )
 
     @property
     def audit_records(self) -> tuple[ManagementAuditRecord, ...]:
@@ -189,7 +193,7 @@ class ExtensionService:
                 result = discover_skills(
                     tuple(roots), max_metadata_bytes=self.config.max_metadata_bytes
                 )
-                result = self._with_configured_mcp(result, project_trusted=trusted)
+                result = self._with_configured_mcp(result)
                 result = self._with_installed_plugins(result)
             candidate = build_candidate(
                 result,
@@ -211,9 +215,7 @@ class ExtensionService:
             published = self._snapshots.publish(candidate)
             return ManagementResult(published, False, candidate.snapshot.diagnostics)
 
-    def _with_configured_mcp(
-        self, result: DiscoveryResult, *, project_trusted: bool
-    ) -> DiscoveryResult:
+    def _with_configured_mcp(self, result: DiscoveryResult) -> DiscoveryResult:
         records = list(result.records)
         definitions = dict(result.definitions)
         for server_id, definition in sorted(self.config.mcp_servers.items()):
@@ -230,16 +232,12 @@ class ExtensionService:
                     CapabilityKind.MCP_SERVER,
                     source,
                     enabled=definition.enabled,
-                    trusted=not project_source or project_trusted,
+                    trusted=True,
                     required=definition.required,
                     activation=(
                         ActivationState.INACTIVE
                         if not definition.enabled
-                        else (
-                            ActivationState.AVAILABLE
-                            if not project_source or project_trusted
-                            else ActivationState.UNTRUSTED
-                        )
+                        else ActivationState.AVAILABLE
                     ),
                     permissions=PermissionRequirement(
                         network=definition.transport == "streamable_http",

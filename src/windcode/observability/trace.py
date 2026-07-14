@@ -7,8 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
-from platformdirs import user_state_path
-
+from windcode.config.paths import default_user_storage_root
 from windcode.domain.events import AgentEvent, AgentEventType, event_to_dict
 from windcode.observability.redaction import redact
 
@@ -31,7 +30,7 @@ class TraceStore:
         max_total_mb: int = 100,
     ) -> None:
         self.run_id = run_id
-        self.root = (root or user_state_path("windcode") / "traces").expanduser().resolve()
+        self.root = (root or default_user_storage_root() / "traces").expanduser().resolve()
         self.path = self.root / f"{run_id}.jsonl"
         self.secrets = tuple(secrets)
         self.enabled = enabled

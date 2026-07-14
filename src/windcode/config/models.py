@@ -103,7 +103,7 @@ class TraceConfig(StrictModel):
 
 class StorageConfig(StrictModel):
     project_state_root: str | None = None
-    user_storage_root: str | None = None
+    user_storage_root: str = "~/.windcode"
 
 
 class MemoryConfig(StrictModel):
@@ -139,7 +139,11 @@ SecretReference = Annotated[
 
 class McpStdioConfig(StrictModel):
     transport: Literal["stdio"] = "stdio"
-    enabled: bool = Field(default=True, validation_alias=AliasChoices("enable", "enabled"))
+    enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("enable", "enabled"),
+        serialization_alias="enable",
+    )
     command: str = Field(min_length=1)
     args: tuple[str, ...] = ()
     cwd: str | None = Field(default=None, min_length=1)
@@ -149,7 +153,11 @@ class McpStdioConfig(StrictModel):
 
 class McpHttpConfig(StrictModel):
     transport: Literal["streamable_http"]
-    enabled: bool = Field(default=True, validation_alias=AliasChoices("enable", "enabled"))
+    enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("enable", "enabled"),
+        serialization_alias="enable",
+    )
     url: str = Field(min_length=1, pattern=r"^https?://")
     headers: dict[str, SecretReference] = Field(default_factory=dict[str, SecretReference])
     required: bool = False
@@ -158,8 +166,19 @@ class McpHttpConfig(StrictModel):
 McpServerConfig = Annotated[McpStdioConfig | McpHttpConfig, Field(union_mode="left_to_right")]
 
 
+def _default_mcp_servers() -> dict[str, McpServerConfig]:
+    return {
+        "gaodemap-mcp": McpHttpConfig(
+            transport="streamable_http",
+            enabled=False,
+            url="https://mcp.api-inference.modelscope.net/6eea030bc1684a/mcp",
+            required=True,
+        )
+    }
+
+
 class ExtensionConfig(StrictModel):
-    enabled: bool = False
+    enabled: bool = True
     direct_tool_limit: int = Field(default=24, ge=0, le=256)
     connect_timeout_seconds: float = Field(default=10.0, gt=0, le=300)
     call_timeout_seconds: float = Field(default=60.0, gt=0, le=3600)
@@ -169,7 +188,7 @@ class ExtensionConfig(StrictModel):
     max_scan_depth: int = Field(default=8, ge=1, le=32)
     max_scan_entries: int = Field(default=10_000, ge=1, le=100_000)
     skill_roots: tuple[str, ...] = ()
-    mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict[str, McpServerConfig])
+    mcp_servers: dict[str, McpServerConfig] = Field(default_factory=_default_mcp_servers)
     project_mcp_servers: frozenset[str] = Field(default_factory=frozenset, exclude=True)
 
 

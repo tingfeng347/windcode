@@ -29,6 +29,7 @@ from windcode.domain.events import (
 )
 from windcode.domain.messages import TextBlock, message_from_dict
 from windcode.memory import MemoryStatus
+from windcode.providers import fetch_model_ids
 from windcode.sdk import RunHandle, Windcode
 from windcode.tui.commands import (
     COMMANDS,
@@ -634,6 +635,36 @@ class WindcodeApp(App[None]):
                 self.client.credential_store.delete(event.provider.credential_id)
             else:
                 self.client.credential_store.set(event.provider.credential_id, previous_secret)
+
+    @on(ProviderManager.LoadModels)
+    async def provider_load_models(self, event: ProviderManager.LoadModels) -> None:
+        manager = self.provider_manager
+        if manager is None:
+            return
+        api_key = event.secret
+        if not api_key and event.provider.api_key_env:
+            api_key = os.environ.get(event.provider.api_key_env)
+        if not api_key and event.provider.credential_id:
+            try:
+                api_key = self.client.credential_store.get(event.provider.credential_id)
+            except CredentialStoreError as exc:
+                manager.show_error(str(exc))
+                return
+        if not api_key:
+            manager.show_error("填写 API Key 或配置对应环境变量后即可加载模型")
+            return
+        try:
+            model_ids = await fetch_model_ids(event.provider, api_key)
+        except (OSError, RuntimeError, TimeoutError) as exc:
+            if self.provider_manager is manager:
+                manager.show_error(str(exc))
+            return
+        if self.provider_manager is not manager:
+            return
+        if not model_ids:
+            manager.show_error("Provider 未返回可用模型 ID, 请手动填写")
+            return
+        manager.show_model_ids(model_ids)
 
     @on(ProviderManager.Delete)
     async def provider_delete(self, event: ProviderManager.Delete) -> None:

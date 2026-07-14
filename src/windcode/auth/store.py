@@ -9,6 +9,8 @@ from uuid import uuid4
 
 from platformdirs import user_data_path
 
+from windcode.config.paths import default_user_storage_root
+
 
 class CredentialStoreError(RuntimeError):
     """Raised when credentials cannot be persisted safely."""
@@ -31,11 +33,19 @@ class FileCredentialStore:
     """OpenCode-style API credentials stored in the user's data directory."""
 
     def __init__(self, path: Path | None = None) -> None:
-        self.path = (path or user_data_path("windcode") / "auth.json").expanduser().resolve()
+        self.path = (path or default_user_storage_root() / "auth.json").expanduser().resolve()
+        self._fallback_path = (
+            None
+            if path is not None
+            else (user_data_path("windcode") / "auth.json").expanduser().resolve()
+        )
 
     def _read(self) -> dict[str, ApiCredential]:
+        source = self.path
+        if not source.exists() and self._fallback_path is not None:
+            source = self._fallback_path
         try:
-            raw: object = json.loads(self.path.read_text(encoding="utf-8"))
+            raw: object = json.loads(source.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return {}
         except (OSError, json.JSONDecodeError) as exc:
