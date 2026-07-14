@@ -528,9 +528,15 @@ class WindcodeApp(App[None]):
                         await messages.mount_in_ai_row(self.subagent_group)
                     await self.subagent_group.apply_event(event)
                 messages.scroll_end(animate=False)
-            result = await handle.result()
-            self._escape_interrupt_deadline = 0.0
-            self._update_status(result.status)
+            try:
+                result = await handle.result()
+            except Exception as exc:
+                await messages.finish_run()
+                await messages.add_system_message(f"运行失败: {exc}", error=True)
+                self._update_status("failed")
+            else:
+                self._escape_interrupt_deadline = 0.0
+                self._update_status(result.status)
         finally:
             try:
                 self.query_one("#chat-input", ChatInput).focus()

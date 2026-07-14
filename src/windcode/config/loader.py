@@ -25,12 +25,16 @@ def ensure_user_config(path: Path | None = None) -> Path:
     """Create the user config or add newly introduced defaults to an existing one."""
     target = (path or default_user_config_path()).expanduser().resolve()
     if target.exists():
-        _ensure_user_extension_defaults(target)
+        _ensure_user_defaults(target)
         return target
 
-    content = tomli_w.dumps(
-        AppConfig().model_dump(mode="json", exclude_none=True, by_alias=True)
-    ).encode()
+    data = AppConfig().model_dump(mode="json", exclude_none=True, by_alias=True)
+    extensions = cast(dict[str, Any], data["extensions"])
+    servers = cast(dict[str, Any], extensions["mcp_servers"])
+    cast(dict[str, Any], servers["gaodemap-mcp"])["enable"] = True
+    cast(dict[str, Any], data["memory"])["enabled"] = True
+    cast(dict[str, Any], data["sandbox"])["network_enabled"] = True
+    content = tomli_w.dumps(data).encode()
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
         descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -44,8 +48,8 @@ def ensure_user_config(path: Path | None = None) -> Path:
     return target
 
 
-def _ensure_user_extension_defaults(path: Path) -> None:
-    """Add new user-level extension defaults without replacing explicit settings."""
+def _ensure_user_defaults(path: Path) -> None:
+    """Add new user-level defaults without replacing explicit settings."""
     try:
         with path.open("rb") as stream:
             data = tomllib.load(stream)
@@ -72,6 +76,16 @@ def _ensure_user_extension_defaults(path: Path) -> None:
             "url": "https://mcp.api-inference.modelscope.net/6eea030bc1684a/mcp",
             "required": True,
         }
+        changed = True
+
+    memory_value = data.setdefault("memory", {})
+    if isinstance(memory_value, dict) and "enabled" not in memory_value:
+        cast(dict[str, Any], memory_value)["enabled"] = True
+        changed = True
+
+    sandbox_value = data.setdefault("sandbox", {})
+    if isinstance(sandbox_value, dict) and "network_enabled" not in sandbox_value:
+        cast(dict[str, Any], sandbox_value)["network_enabled"] = True
         changed = True
     if not changed:
         return

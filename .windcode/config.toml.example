@@ -44,7 +44,7 @@ enabled = true
 
 [extensions.mcp_servers.gaodemap-mcp]
 transport = "streamable_http"
-enable = false
+enable = true
 url = "https://mcp.api-inference.modelscope.net/6eea030bc1684a/mcp"
 required = true
 
