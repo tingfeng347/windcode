@@ -4,7 +4,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 from uuid import uuid4
 
 from windcode.context import TokenEstimator, compact_context, truncate_context
@@ -36,6 +36,7 @@ from windcode.domain.messages import (
     TextBlock,
     ToolCallBlock,
     ToolResultBlock,
+    heal_dangling_tool_calls,
     message_to_dict,
 )
 from windcode.domain.models import (
@@ -64,6 +65,12 @@ from windcode.sessions import ArtifactStore, SessionStatus
 
 class AgentBlocked(RuntimeError):
     pass
+
+
+class InboundMessageSource(Protocol):
+    async def drain_inbound(self) -> tuple[Message, ...]: ...
+
+    async def drain_or_close_inbound(self) -> tuple[Message, ...]: ...
 
 
 def _add_usage(left: Usage, right: Usage) -> Usage:
@@ -95,6 +102,7 @@ class AgentLoop:
         sourced_context_provider: Callable[[], tuple[SourcedContextMessage, ...]] | None = None,
         compact_observer: Callable[[str], Awaitable[None]] | None = None,
         completion_observer: Callable[[RunResult], Awaitable[None]] | None = None,
+        inbound_message_source: InboundMessageSource | None = None,
     ) -> None:
         if not model_chain:
             raise ValueError("model_chain cannot be empty")
@@ -114,6 +122,7 @@ class AgentLoop:
         self.sourced_context_provider = sourced_context_provider
         self.compact_observer = compact_observer
         self.completion_observer = completion_observer
+        self.inbound_message_source = inbound_message_source
         self._turn = 0
         self.scheduler.approval_handler = self._approval_handler
         self.scheduler.before_execute = self._before_tool_execute
@@ -286,23 +295,32 @@ class AgentLoop:
         await self.event_bus.publish(RunStarted(**self._common(0), prompt=prompt), durable=True)
         try:
             while True:
+                if self.inbound_message_source is not None:
+                    inbound = await self.inbound_message_source.drain_inbound()
+                    if inbound:
+                        messages = (*messages, *inbound)
+                        for message in inbound:
+                            self.event_bus.session_store.append(
+                                "conversation_message",
+                                message_to_dict(message),
+                                durable=True,
+                            )
                 self._turn = self.control.start_model_step()
                 primary = self.model_chain[0]
                 await self.event_bus.publish(ModelStarted(**self._common(), model=primary.model))
                 sourced = (
                     () if self.sourced_context_provider is None else self.sourced_context_provider()
                 )
-                request_messages = (
-                    *messages,
-                    *(
-                        Message(
-                            Role.SYSTEM,
-                            (TextBlock(f"[extension source: {item.source_id}]\n{item.content}"),),
-                            provider_metadata={"extension_source": item.source_id},
-                        )
-                        for item in sourced
-                    ),
+                messages = heal_dangling_tool_calls(messages)
+                extension_messages = tuple(
+                    Message(
+                        Role.SYSTEM,
+                        (TextBlock(f"[extension source: {item.source_id}]\n{item.content}"),),
+                        provider_metadata={"extension_source": item.source_id},
+                    )
+                    for item in sourced
                 )
+                request_messages = (*messages, *extension_messages)
                 request = ModelRequest(
                     model=primary.model,
                     messages=request_messages,
@@ -332,9 +350,10 @@ class AgentLoop:
                         )
                         if compacted.compacted:
                             messages = compacted.messages
+                            request_messages = (*messages, *extension_messages)
                             request = ModelRequest(
                                 model=primary.model,
-                                messages=(*messages, *request_messages[len(messages) :]),
+                                messages=request_messages,
                                 system_prompt=self.system_prompt,
                                 tools=self.scheduler.registry.schemas(),
                                 max_output_tokens=self.max_output_tokens,
@@ -426,6 +445,17 @@ class AgentLoop:
                 pending_calls = tuple(scheduled)
 
                 if not scheduled:
+                    if self.inbound_message_source is not None:
+                        inbound = await self.inbound_message_source.drain_or_close_inbound()
+                        if inbound:
+                            messages = (*messages, *inbound)
+                            for message in inbound:
+                                self.event_bus.session_store.append(
+                                    "conversation_message",
+                                    message_to_dict(message),
+                                    durable=True,
+                                )
+                            continue
                     result = build_run_result(final_text, tuple(records), usage=total_usage)
                     if self.completion_observer is not None:
                         try:

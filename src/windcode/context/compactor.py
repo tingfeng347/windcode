@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from windcode.domain.messages import Message, Role, TextBlock
+from windcode.domain.messages import Message, Role, TextBlock, heal_dangling_tool_calls
 from windcode.domain.models import ModelRequest, TextDelta
 from windcode.providers.base import ModelTransport
 
@@ -46,9 +46,10 @@ async def compact_context(
     system_prompt: str,
     preserve_recent_turns: int = 8,
 ) -> CompactionResult:
+    normalized = heal_dangling_tool_calls(messages)
     request = ModelRequest(
         model=model,
-        messages=(*messages, Message(Role.USER, (TextBlock(checkpoint_prompt()),))),
+        messages=(*normalized, Message(Role.USER, (TextBlock(checkpoint_prompt()),))),
         system_prompt=system_prompt,
     )
     parts: list[str] = []
@@ -62,11 +63,12 @@ async def compact_context(
     if not _valid_checkpoint(checkpoint):
         return CompactionResult(messages, None, "checkpoint response is missing required sections")
 
-    system_messages = tuple(message for message in messages if message.role is Role.SYSTEM)
-    non_system = tuple(message for message in messages if message.role is not Role.SYSTEM)
+    system_messages = tuple(message for message in normalized if message.role is Role.SYSTEM)
+    non_system = tuple(message for message in normalized if message.role is not Role.SYSTEM)
     recent = non_system[-preserve_recent_turns * 2 :]
     checkpoint_message = Message(
         Role.SYSTEM,
         (TextBlock(f"上下文检查点:\n{checkpoint}"),),
     )
-    return CompactionResult((*system_messages, checkpoint_message, *recent), checkpoint)
+    compacted = (*system_messages, checkpoint_message, *recent)
+    return CompactionResult(heal_dangling_tool_calls(compacted), checkpoint)

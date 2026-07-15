@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, cast
@@ -111,12 +111,13 @@ def message_to_dict(message: Message) -> dict[str, Any]:
 
 
 def heal_dangling_tool_calls(messages: tuple[Message, ...]) -> tuple[Message, ...]:
-    """Ensure every assistant tool_call is answered by a tool result.
+    """Normalize assistant tool calls and tool results into provider-safe groups.
 
     A run that is cancelled or fails after the assistant tool_calls message is
     persisted but before tool results are recorded leaves a dangling tool call.
-    OpenAI-compatible providers reject such transcripts, so synthesize a
-    cancelled tool result for any call id that has no matching result.
+    Context compaction can also retain a tool result after dropping its assistant
+    call. OpenAI-compatible providers reject both shapes, so discard orphan or
+    duplicate results and synthesize an error result for every unanswered call.
     """
 
     healed: list[Message] = []
@@ -124,21 +125,27 @@ def heal_dangling_tool_calls(messages: tuple[Message, ...]) -> tuple[Message, ..
     total = len(messages)
     while index < total:
         message = messages[index]
-        healed.append(message)
         call_blocks = [block for block in message.content if isinstance(block, ToolCallBlock)]
         if message.role is not Role.ASSISTANT or not call_blocks:
+            if message.role is not Role.TOOL:
+                healed.append(message)
             index += 1
             continue
+        healed.append(message)
         required = {block.call_id: block.name for block in call_blocks}
         answered: set[str] = set()
         cursor = index + 1
         while cursor < total and messages[cursor].role is Role.TOOL:
-            healed.append(messages[cursor])
-            answered.update(
-                block.call_id
+            valid_results = tuple(
+                block
                 for block in messages[cursor].content
                 if isinstance(block, ToolResultBlock)
+                and block.call_id in required
+                and block.call_id not in answered
             )
+            if valid_results:
+                healed.append(replace(messages[cursor], content=valid_results))
+                answered.update(block.call_id for block in valid_results)
             cursor += 1
         missing = [call_id for call_id in required if call_id not in answered]
         if missing:
