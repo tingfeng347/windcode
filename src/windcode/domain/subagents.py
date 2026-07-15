@@ -81,6 +81,10 @@ class SubagentTaskSpec:
     allowed_tools: frozenset[str] | None = None
     model: str | None = None
     requires_network: bool = False
+    peer_collaboration: bool = True
+    coordination_id: str | None = None
+    coordination_participant: str | None = None
+    coordination_rounds: int = 0
 
     def __post_init__(self) -> None:
         if not _TASK_NAME.fullmatch(self.task_name):
@@ -98,6 +102,13 @@ class SubagentTaskSpec:
             raise ValueError(f"role {self.role.value} does not allow write tasks")
         if self.allowed_tools is not None and any(not name for name in self.allowed_tools):
             raise ValueError("allowed_tools cannot contain empty names")
+        coordinated = self.coordination_id is not None
+        if coordinated != (self.coordination_participant is not None):
+            raise ValueError("coordination id and participant must be set together")
+        if coordinated and not 1 <= self.coordination_rounds <= 3:
+            raise ValueError("coordinated tasks require between one and three rounds")
+        if not coordinated and self.coordination_rounds != 0:
+            raise ValueError("uncoordinated tasks cannot declare coordination rounds")
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +129,18 @@ class SubagentRecord:
     finished_at: datetime | None = None
     error_category: str | None = None
     error_message: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SubagentMessage:
+    message_id: str
+    sender_subagent_id: str
+    sender_task_name: str
+    recipient_subagent_id: str
+    recipient_task_name: str
+    content: str
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    delivered_at: datetime | None = None
 
 
 def transition_subagent(
@@ -167,6 +190,82 @@ class SubagentResult:
     error_message: str | None = None
 
 
+class CollaborationMode(StrEnum):
+    AUTO = "auto"
+    NEGOTIATION = "negotiation"
+    DIVISION = "division"
+    HYBRID = "hybrid"
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationParticipant:
+    name: str
+    assignment: str
+    role: SubagentRole = SubagentRole.RESEARCHER
+    kind: SubagentTaskKind = SubagentTaskKind.READ
+    allowed_tools: frozenset[str] | None = None
+    model: str | None = None
+    requires_network: bool = False
+
+    def __post_init__(self) -> None:
+        if not _TASK_NAME.fullmatch(self.name):
+            raise ValueError(
+                "participant name must contain lowercase letters, numbers, and underscores"
+            )
+        if not self.assignment.strip():
+            raise ValueError("participant assignment must not be empty")
+        if self.kind is SubagentTaskKind.WRITE and self.role is not SubagentRole.WORKER:
+            raise ValueError("write collaboration participants must use the worker role")
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationRequest:
+    request: str
+    context: str
+    participants: tuple[CollaborationParticipant, ...]
+    mode: CollaborationMode = CollaborationMode.AUTO
+    rounds: int = 2
+    synthesis_instructions: str = (
+        "Attribute contributions, identify consensus and unresolved conflicts, check dependencies, "
+        "and provide an integrated recommendation or delivery plan."
+    )
+
+    def __post_init__(self) -> None:
+        if not self.request.strip():
+            raise ValueError("collaboration request must not be empty")
+        if not 2 <= len(self.participants) <= 8:
+            raise ValueError("collaboration requires between two and eight participants")
+        if len({participant.name for participant in self.participants}) != len(self.participants):
+            raise ValueError("collaboration participant names must be unique")
+        if not 1 <= self.rounds <= 3:
+            raise ValueError("collaboration rounds must be between 1 and 3")
+        if not self.synthesis_instructions.strip():
+            raise ValueError("synthesis instructions must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationContribution:
+    participant_name: str
+    phase: str
+    round_index: int
+    subagent_id: str
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationResult:
+    collaboration_id: str
+    request: str
+    mode: CollaborationMode
+    status: str
+    contributions: tuple[CollaborationContribution, ...] = ()
+    participant_results: tuple[SubagentResult, ...] = ()
+    synthesis: str = ""
+    synthesizer_subagent_id: str | None = None
+    error_category: str | None = None
+    error_message: str | None = None
+
+
 def sort_subagent_records(records: tuple[SubagentRecord, ...]) -> tuple[SubagentRecord, ...]:
     return tuple(sorted(records, key=lambda record: record.task_index))
 
@@ -190,6 +289,10 @@ def subagent_record_to_dict(record: SubagentRecord) -> dict[str, Any]:
             "allowed_tools": None if spec.allowed_tools is None else sorted(spec.allowed_tools),
             "model": spec.model,
             "requires_network": spec.requires_network,
+            "peer_collaboration": spec.peer_collaboration,
+            "coordination_id": spec.coordination_id,
+            "coordination_participant": spec.coordination_participant,
+            "coordination_rounds": spec.coordination_rounds,
         },
         "status": record.status.value,
         "base_commit": record.base_commit,
@@ -232,6 +335,18 @@ def subagent_record_from_dict(value: Mapping[str, object]) -> SubagentRecord:
         ),
         model=None if spec_values.get("model") is None else str(spec_values.get("model")),
         requires_network=bool(spec_values.get("requires_network", False)),
+        peer_collaboration=bool(spec_values.get("peer_collaboration", True)),
+        coordination_id=(
+            None
+            if spec_values.get("coordination_id") is None
+            else str(spec_values.get("coordination_id"))
+        ),
+        coordination_participant=(
+            None
+            if spec_values.get("coordination_participant") is None
+            else str(spec_values.get("coordination_participant"))
+        ),
+        coordination_rounds=int(str(spec_values.get("coordination_rounds", 0))),
     )
 
     def optional_time(name: str) -> datetime | None:

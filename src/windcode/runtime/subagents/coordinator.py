@@ -4,6 +4,7 @@ import asyncio
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
 from typing import Any, cast
@@ -22,6 +23,8 @@ from windcode.domain.events import (
     SubagentEvent,
     SubagentFailed,
     SubagentIntegrated,
+    SubagentMessageDelivered,
+    SubagentMessageSent,
     SubagentProgress,
     SubagentQueued,
     SubagentStarted,
@@ -30,6 +33,9 @@ from windcode.domain.events import (
 )
 from windcode.domain.models import Usage
 from windcode.domain.subagents import (
+    CollaborationContribution,
+    CollaborationMode,
+    SubagentMessage,
     SubagentRecord,
     SubagentResult,
     SubagentStatus,
@@ -44,15 +50,19 @@ from windcode.domain.subagents import (
 from windcode.runtime.event_bus import EventBus
 from windcode.runtime.subagents.approvals import ApprovalRouter
 from windcode.runtime.subagents.budgets import AggregateBudget
+from windcode.runtime.subagents.collaboration import (
+    BoundSubagentCollaboration,
+    CoordinationSession,
+    SubagentCollaborationError,
+)
 from windcode.runtime.subagents.factory import ChildRuntime, ChildRuntimeFactory
 from windcode.runtime.subagents.verification import VerificationRunner
 from windcode.worktrees import GitBaseline, WorktreeError, WorktreeLease, WorktreeManager
 
 
-class SubagentCoordinatorError(RuntimeError):
+class SubagentCoordinatorError(SubagentCollaborationError):
     def __init__(self, category: str, message: str) -> None:
-        self.category = category
-        super().__init__(message)
+        super().__init__(category, message)
 
 
 class SubagentCoordinator:
@@ -104,6 +114,11 @@ class SubagentCoordinator:
         self._active = 0
         self._closed = False
         self._lock = asyncio.Lock()
+        self._message_condition = asyncio.Condition()
+        self._inboxes: dict[str, deque[SubagentMessage]] = {}
+        self._closed_inboxes: set[str] = set()
+        self._coordination_condition = asyncio.Condition()
+        self._coordination_sessions: dict[str, CoordinationSession] = {}
 
     def set_permission_mode(self, mode: PermissionMode) -> None:
         previous = self.permission_mode
@@ -127,6 +142,320 @@ class SubagentCoordinator:
 
     def list(self) -> tuple[SubagentRecord, ...]:
         return sort_subagent_records(tuple(self._records.values()))
+
+    def collaboration(self, subagent_id: str) -> BoundSubagentCollaboration:
+        return BoundSubagentCollaboration(self, subagent_id)
+
+    def available_concurrency(self) -> int:
+        return max(0, self.config.max_concurrent - self._active)
+
+    async def register_coordination_session(
+        self,
+        collaboration_id: str,
+        mode: CollaborationMode,
+        participant_names: tuple[str, ...],
+        rounds: int,
+    ) -> None:
+        async with self._coordination_condition:
+            if collaboration_id in self._coordination_sessions:
+                raise SubagentCoordinatorError(
+                    "duplicate_collaboration", "collaboration id already exists"
+                )
+            self._coordination_sessions[collaboration_id] = CoordinationSession(
+                collaboration_id,
+                mode,
+                participant_names,
+                rounds,
+            )
+            self.event_bus.session_store.append(
+                "collaboration_session",
+                {
+                    "collaboration_id": collaboration_id,
+                    "mode": mode.value,
+                    "participant_names": list(participant_names),
+                    "rounds": rounds,
+                },
+                durable=True,
+            )
+
+    def coordination_contributions(
+        self, collaboration_id: str
+    ) -> tuple[CollaborationContribution, ...]:
+        try:
+            session = self._coordination_sessions[collaboration_id]
+        except KeyError as exc:
+            raise SubagentCoordinatorError("unknown_collaboration", collaboration_id) from exc
+        return tuple(
+            session.contributions[round_index][participant]
+            for round_index in sorted(session.contributions)
+            for participant in session.participant_names
+            if participant in session.contributions[round_index]
+        )
+
+    async def exchange_coordination_round(
+        self,
+        subagent_id: str,
+        round_index: int,
+        contribution: str,
+        timeout_seconds: float,
+    ) -> tuple[CollaborationContribution, ...]:
+        record = self._records.get(subagent_id)
+        if record is None:
+            raise SubagentCoordinatorError("unknown_subagent", subagent_id)
+        collaboration_id = record.spec.coordination_id
+        participant = record.spec.coordination_participant
+        if collaboration_id is None or participant is None:
+            raise SubagentCoordinatorError(
+                "not_coordinated", "subagent is not part of a coordinated collaboration"
+            )
+        if not contribution.strip() or len(contribution) > 12_000:
+            raise SubagentCoordinatorError(
+                "invalid_contribution", "contribution must contain 1 to 12000 characters"
+            )
+        async with self._coordination_condition:
+            session = self._coordination_sessions.get(collaboration_id)
+            if session is None:
+                raise SubagentCoordinatorError("unknown_collaboration", collaboration_id)
+            if record.status is not SubagentStatus.RUNNING:
+                raise SubagentCoordinatorError(
+                    "participant_not_running", "only a running participant can exchange a round"
+                )
+            if participant not in session.participant_names:
+                raise SubagentCoordinatorError(
+                    "unknown_participant", "participant is not registered in this collaboration"
+                )
+            if not 0 <= round_index <= session.rounds:
+                raise SubagentCoordinatorError(
+                    "invalid_round", f"round must be between 0 and {session.rounds}"
+                )
+            if round_index > 0 and len(session.contributions.get(round_index - 1, {})) != len(
+                session.participant_names
+            ):
+                raise SubagentCoordinatorError(
+                    "round_not_ready", "the previous coordination round is not complete"
+                )
+            round_values = session.contributions.setdefault(round_index, {})
+            if participant in round_values:
+                raise SubagentCoordinatorError(
+                    "duplicate_contribution", "participant already submitted this round"
+                )
+            item = CollaborationContribution(
+                participant_name=participant,
+                phase="opening" if round_index == 0 else "coordination",
+                round_index=round_index,
+                subagent_id=subagent_id,
+                content=contribution,
+            )
+            round_values[participant] = item
+            self.event_bus.session_store.append(
+                "collaboration_contribution",
+                {
+                    "collaboration_id": collaboration_id,
+                    "mode": session.mode.value,
+                    "participant_name": participant,
+                    "round_index": round_index,
+                    "subagent_id": subagent_id,
+                    "content": contribution,
+                },
+                durable=True,
+            )
+            self._coordination_condition.notify_all()
+        await self._publish_record_event(
+            record,
+            SubagentProgress,
+            summary=f"submitted collaboration round {round_index}",
+            activity=f"collaboration round {round_index}",
+        )
+        async with self._coordination_condition:
+            session = self._coordination_sessions[collaboration_id]
+            try:
+                async with asyncio.timeout(timeout_seconds):
+                    await self._coordination_condition.wait_for(
+                        lambda: (
+                            len(session.contributions.get(round_index, {}))
+                            == len(session.participant_names)
+                            or session.aborted_reason is not None
+                        )
+                    )
+            except TimeoutError as exc:
+                session.aborted_reason = f"round {round_index} timed out"
+                self._coordination_condition.notify_all()
+                raise SubagentCoordinatorError(
+                    "coordination_timeout", session.aborted_reason
+                ) from exc
+            if session.aborted_reason is not None:
+                raise SubagentCoordinatorError("coordination_aborted", session.aborted_reason)
+            values = session.contributions[round_index]
+            return tuple(values[name] for name in session.participant_names)
+
+    async def _finish_coordination_member(self, result: SubagentResult) -> None:
+        record = self._records[result.subagent_id]
+        collaboration_id = record.spec.coordination_id
+        participant = record.spec.coordination_participant
+        if collaboration_id is None or participant is None:
+            return
+        should_cancel_siblings = False
+        async with self._coordination_condition:
+            session = self._coordination_sessions.get(collaboration_id)
+            if session is None or session.aborted_reason is not None:
+                return
+            submitted = all(
+                participant in session.contributions.get(round_index, {})
+                for round_index in range(session.rounds + 1)
+            )
+            if result.status is not SubagentStatus.COMPLETED or not submitted:
+                session.aborted_reason = (
+                    f"participant {participant} ended with {result.status.value}"
+                    if result.status is not SubagentStatus.COMPLETED
+                    else f"participant {participant} finished before all rounds"
+                )
+                self._coordination_condition.notify_all()
+                should_cancel_siblings = True
+        if should_cancel_siblings:
+            self._cancel_coordination_members(collaboration_id, exclude=result.subagent_id)
+
+    def _cancel_coordination_members(
+        self,
+        collaboration_id: str,
+        *,
+        exclude: str | None = None,
+    ) -> None:
+        for record in self._records.values():
+            if (
+                record.subagent_id == exclude
+                or record.spec.coordination_id != collaboration_id
+                or record.status is not SubagentStatus.RUNNING
+            ):
+                continue
+            runtime = self._runtimes.get(record.subagent_id)
+            if runtime is not None:
+                runtime.control.cancel()
+            self.approvals.cancel(record.subagent_id)
+            task = self._tasks.get(record.subagent_id)
+            if task is not None:
+                task.cancel()
+
+    def list_peers(self, sender_subagent_id: str) -> tuple[SubagentRecord, ...]:
+        if sender_subagent_id not in self._records:
+            raise SubagentCoordinatorError("unknown_subagent", sender_subagent_id)
+        return self.list()
+
+    def _resolve_message_target(self, target: str) -> SubagentRecord:
+        by_id = self._records.get(target)
+        if by_id is not None:
+            return by_id
+        matches = [record for record in self._records.values() if record.spec.task_name == target]
+        if len(matches) != 1:
+            raise SubagentCoordinatorError("unknown_recipient", target)
+        return matches[0]
+
+    async def send_message(
+        self,
+        sender_subagent_id: str,
+        target: str,
+        content: str,
+    ) -> SubagentMessage:
+        if len(content) > 8_000:
+            raise SubagentCoordinatorError("message_too_long", "message exceeds 8000 characters")
+        if not content.strip():
+            raise SubagentCoordinatorError("invalid_message", "message must not be empty")
+        async with self._message_condition:
+            sender = self._records.get(sender_subagent_id)
+            if sender is None:
+                raise SubagentCoordinatorError("unknown_subagent", sender_subagent_id)
+            if sender.status is not SubagentStatus.RUNNING:
+                raise SubagentCoordinatorError(
+                    "sender_not_running", "only a running subagent can send messages"
+                )
+            recipient = self._resolve_message_target(target)
+            if recipient.subagent_id == sender_subagent_id:
+                raise SubagentCoordinatorError("self_recipient", "cannot send a message to self")
+            if recipient.status not in {SubagentStatus.QUEUED, SubagentStatus.RUNNING}:
+                raise SubagentCoordinatorError(
+                    "recipient_terminal", "recipient is no longer accepting messages"
+                )
+            if recipient.subagent_id in self._closed_inboxes:
+                raise SubagentCoordinatorError(
+                    "recipient_closing", "recipient is no longer accepting messages"
+                )
+            inbox = self._inboxes.setdefault(recipient.subagent_id, deque())
+            if len(inbox) >= 100:
+                raise SubagentCoordinatorError("inbox_full", "recipient inbox is full")
+            message = SubagentMessage(
+                message_id=uuid4().hex,
+                sender_subagent_id=sender.subagent_id,
+                sender_task_name=sender.spec.task_name,
+                recipient_subagent_id=recipient.subagent_id,
+                recipient_task_name=recipient.spec.task_name,
+                content=content,
+            )
+            inbox.append(message)
+            self._message_condition.notify_all()
+        await self._publish_record_event(
+            sender,
+            SubagentMessageSent,
+            summary=f"message sent to {recipient.spec.task_name}",
+            message_id=message.message_id,
+            sender_subagent_id=message.sender_subagent_id,
+            sender_task_name=message.sender_task_name,
+            recipient_subagent_id=message.recipient_subagent_id,
+            recipient_task_name=message.recipient_task_name,
+            content=message.content,
+        )
+        return message
+
+    async def receive_messages(
+        self,
+        recipient_subagent_id: str,
+        *,
+        max_messages: int,
+        timeout_seconds: float | None = None,
+        close_if_empty: bool = False,
+    ) -> tuple[SubagentMessage, ...]:
+        if not 1 <= max_messages <= 100:
+            raise ValueError("max_messages must be between 1 and 100")
+        async with self._message_condition:
+            if recipient_subagent_id not in self._records:
+                raise SubagentCoordinatorError("unknown_subagent", recipient_subagent_id)
+            inbox = self._inboxes.setdefault(recipient_subagent_id, deque())
+            if timeout_seconds is not None and not inbox:
+                try:
+                    async with asyncio.timeout(timeout_seconds):
+                        await self._message_condition.wait_for(
+                            lambda: bool(inbox) or recipient_subagent_id in self._closed_inboxes
+                        )
+                except TimeoutError:
+                    return ()
+            if not inbox:
+                if close_if_empty:
+                    self._closed_inboxes.add(recipient_subagent_id)
+                    self._message_condition.notify_all()
+                return ()
+            delivered_at = datetime.now(UTC)
+            messages = tuple(
+                replace(inbox.popleft(), delivered_at=delivered_at)
+                for _ in range(min(max_messages, len(inbox)))
+            )
+        recipient = self._records[recipient_subagent_id]
+        for message in messages:
+            await self._publish_record_event(
+                recipient,
+                SubagentMessageDelivered,
+                summary=f"message received from {message.sender_task_name}",
+                message_id=message.message_id,
+                sender_subagent_id=message.sender_subagent_id,
+                sender_task_name=message.sender_task_name,
+                recipient_subagent_id=message.recipient_subagent_id,
+                recipient_task_name=message.recipient_task_name,
+                content=message.content,
+            )
+        return messages
+
+    async def _close_inbox(self, subagent_id: str) -> None:
+        async with self._message_condition:
+            self._closed_inboxes.add(subagent_id)
+            self._inboxes.pop(subagent_id, None)
+            self._message_condition.notify_all()
 
     def result(self, subagent_id: str) -> SubagentResult | None:
         return self._results.get(subagent_id)
@@ -347,6 +676,7 @@ class SubagentCoordinator:
                 parent_permission=self.permission_mode,
                 aggregate_budget=self.aggregate_budget,
                 approval_router=self.approvals,
+                collaboration=self.collaboration(subagent_id),
             )
             self._runtimes[subagent_id] = runtime
             record = await self._transition(runtime.record, SubagentStatus.RUNNING)
@@ -460,6 +790,8 @@ class SubagentCoordinator:
                 self._schedule_locked()
 
     async def _complete(self, result: SubagentResult) -> None:
+        await self._finish_coordination_member(result)
+        await self._close_inbox(result.subagent_id)
         self._results[result.subagent_id] = result
         await self._persist_result(result)
         future = self._completion[result.subagent_id]

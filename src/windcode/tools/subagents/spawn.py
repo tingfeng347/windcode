@@ -39,6 +39,10 @@ class SubagentTaskInput(BaseModel):
         default=False,
         description="Whether the task requires external network access.",
     )
+    peer_collaboration: bool = Field(
+        default=True,
+        description="Whether this child may use sibling communication tools.",
+    )
 
     def to_spec(self) -> SubagentTaskSpec:
         return SubagentTaskSpec(
@@ -52,6 +56,7 @@ class SubagentTaskInput(BaseModel):
             self.allowed_tools,
             self.model,
             self.requires_network,
+            self.peer_collaboration,
         )
 
 
@@ -66,7 +71,10 @@ class SpawnSubagentsTool:
     description = (
         "Create bounded temporary subagents. Researchers and verifiers are read-only and return "
         "their findings to the parent; use a worker/write task only when that child must edit "
-        "files. Write tasks use an isolated Git Worktree based on the current parent HEAD, so "
+        "files. This tool creates independent tasks, not coordinated teamwork; use "
+        "collaborate_subagents when multiple participants must divide work, exchange multi-round "
+        "feedback or rebuttals, and receive an independent synthesis. "
+        "Write tasks use an isolated Git Worktree based on the current parent HEAD, so "
         "never stash, commit, revert, move, or discard parent workspace changes before spawning; "
         "uncommitted parent changes are intentionally not copied into the child Worktree. Omit "
         "allowed_tools unless a narrower tool set is required. Declare "

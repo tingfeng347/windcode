@@ -18,6 +18,8 @@ from windcode.domain.events import (
     SubagentEvent,
     SubagentFailed,
     SubagentIntegrated,
+    SubagentMessageDelivered,
+    SubagentMessageSent,
     SubagentProgress,
     SubagentQueued,
     SubagentStarted,
@@ -158,6 +160,12 @@ class SubagentGroup(Vertical):
             state.activity = event.activity or "运行中"
             if event.usage != Usage():
                 state.usage = event.usage
+        elif isinstance(event, SubagentMessageSent):
+            state.status = "running"
+            state.activity = f"已发送消息给 {event.recipient_task_name}"
+        elif isinstance(event, SubagentMessageDelivered):
+            state.status = "running"
+            state.activity = f"收到 {event.sender_task_name} 的消息"
         elif isinstance(event, SubagentBlocked):
             state.status = "blocked"
             state.activity = event.reason or "需要父智能体处理"

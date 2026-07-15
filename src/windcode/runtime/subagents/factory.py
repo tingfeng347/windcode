@@ -30,10 +30,15 @@ from windcode.runtime.prompts import build_system_prompt
 from windcode.runtime.scheduler import ScheduledCall, ScheduledResult, ToolScheduler
 from windcode.runtime.subagents.approvals import ApprovalRouter
 from windcode.runtime.subagents.budgets import AggregateBudget, AggregateBudgetExceeded
+from windcode.runtime.subagents.collaboration import BoundSubagentCollaboration
 from windcode.runtime.subagents.roles import ROLE_POLICIES, resolve_role_tools
 from windcode.sandbox import BubblewrapSandbox, detect_bubblewrap
 from windcode.sessions import ArtifactStore, SessionStore
 from windcode.tools import ToolRegistry
+from windcode.tools.agent_collaboration import (
+    register_collaboration_tools,
+    register_coordination_tool,
+)
 from windcode.tools.shell import ShellTool
 
 
@@ -141,6 +146,20 @@ def build_child_prompt(record: SubagentRecord) -> str:
         if spec.kind is SubagentTaskKind.READ
         else "Complete file changes in the assigned worktree and commit them before responding."
     )
+    collaboration_instructions = (
+        "This is a synchronized team task. Follow the exchange_round protocol in the task "
+        "context exactly; generic peer messaging is disabled."
+        if spec.coordination_id is not None
+        else (
+            "You may collaborate with sibling subagents using list_agents, send_message, and "
+            "wait_for_messages. Share progress in bounded messages and check for replies before "
+            "finishing. Worktrees are isolated, so communicate through text or file references "
+            "rather than assuming uncommitted files are shared."
+            if spec.peer_collaboration
+            else "Peer communication is disabled for this task. Return only to the parent "
+            "coordinator."
+        )
+    )
     return (
         f"Task: {spec.task_name}\n"
         f"Goal: {spec.goal}\n\n"
@@ -148,7 +167,8 @@ def build_child_prompt(record: SubagentRecord) -> str:
         f"Expected output:\n{spec.expected_output}\n\n"
         f"Verification requirements:\n{verification}\n\n"
         f"Delivery constraint:\n{delivery}\n\n"
-        "Complete only this task. Do not delegate and do not ask the user questions."
+        "Complete only this task. Do not create or manage other subagents and do not ask the "
+        f"user questions. {collaboration_instructions}"
     )
 
 
@@ -176,6 +196,7 @@ class ChildRuntimeFactory:
         parent_permission: PermissionMode,
         aggregate_budget: AggregateBudget,
         approval_router: ApprovalRouter,
+        collaboration: BoundSubagentCollaboration | None = None,
     ) -> ChildRuntime:
         spec = record.spec
         policy = ROLE_POLICIES[spec.role]
@@ -189,6 +210,10 @@ class ChildRuntimeFactory:
         for name in self.parent_tools.names():
             if name in names and name != "ask_user" and not name.endswith("_subagent"):
                 registry.register(self.parent_tools.get(name))
+        if collaboration is not None and spec.peer_collaboration:
+            register_collaboration_tools(registry, collaboration)
+        if collaboration is not None and spec.coordination_id is not None:
+            register_coordination_tool(registry, collaboration)
 
         sandbox_status = detect_bubblewrap()
         git_common = (
@@ -285,9 +310,22 @@ class ChildRuntimeFactory:
                 name.split("__", 1)[0] for name in registry.names() if "__" in name
             ),
         )
+        collaboration_instructions = (
+            "This is synchronized team work. You must use exchange_round for every round required "
+            "by the task before finishing; generic peer messaging is disabled."
+            if spec.coordination_id is not None
+            else (
+                "You can communicate with sibling subagents through the dedicated collaboration "
+                "tools. Messages are asynchronous and arrive at model-step boundaries; do not "
+                "poll or create unbounded chat loops."
+                if spec.peer_collaboration
+                else "Peer communication tools are disabled for this task."
+            )
+        )
         system_prompt += (
             f"\n\n## Temporary subagent role\n{policy.system_instructions}\n"
-            "You are a temporary child agent. You cannot delegate or directly ask the user."
+            "You are a temporary child agent. You cannot create or manage subagents or directly "
+            f"ask the user. {collaboration_instructions}"
         )
         loop = ChildAgentLoop(
             record=child_record,
@@ -307,6 +345,7 @@ class ChildRuntimeFactory:
             preserve_recent_turns=self.config.context.preserve_recent_turns,
             max_tool_result_chars=self.config.context.max_tool_result_chars,
             sourced_context_provider=skill_runtime.drain_context,
+            inbound_message_source=(collaboration if spec.peer_collaboration else None),
         )
         return ChildRuntime(
             child_record,

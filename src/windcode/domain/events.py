@@ -224,6 +224,28 @@ class SubagentProgress(SubagentEvent):
 
 
 @dataclass(frozen=True, slots=True)
+class SubagentMessageSent(SubagentEvent):
+    kind: ClassVar[str] = "subagent_message_sent"
+    message_id: str = ""
+    sender_subagent_id: str = ""
+    sender_task_name: str = ""
+    recipient_subagent_id: str = ""
+    recipient_task_name: str = ""
+    content: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class SubagentMessageDelivered(SubagentEvent):
+    kind: ClassVar[str] = "subagent_message_delivered"
+    message_id: str = ""
+    sender_subagent_id: str = ""
+    sender_task_name: str = ""
+    recipient_subagent_id: str = ""
+    recipient_task_name: str = ""
+    content: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class SubagentBlocked(SubagentEvent):
     kind: ClassVar[str] = "subagent_blocked"
     reason: str = ""
@@ -297,6 +319,8 @@ AgentEventType = (
     | SubagentQueued
     | SubagentStarted
     | SubagentProgress
+    | SubagentMessageSent
+    | SubagentMessageDelivered
     | SubagentBlocked
     | SubagentCompleted
     | SubagentFailed
@@ -537,6 +561,19 @@ def event_from_dict(value: Mapping[str, object]) -> AgentEventType:
             **_subagent_common(raw),
             activity=str(raw.get("activity", "")),
             usage=_usage(raw.get("usage")),
+        )
+    if kind in {SubagentMessageSent.kind, SubagentMessageDelivered.kind}:
+        event_type = (
+            SubagentMessageSent if kind == SubagentMessageSent.kind else SubagentMessageDelivered
+        )
+        return event_type(
+            **_subagent_common(raw),
+            message_id=str(raw.get("message_id", "")),
+            sender_subagent_id=str(raw.get("sender_subagent_id", "")),
+            sender_task_name=str(raw.get("sender_task_name", "")),
+            recipient_subagent_id=str(raw.get("recipient_subagent_id", "")),
+            recipient_task_name=str(raw.get("recipient_task_name", "")),
+            content=str(raw.get("content", "")),
         )
     if kind == SubagentBlocked.kind:
         return SubagentBlocked(**_subagent_common(raw), reason=str(raw.get("reason", "")))

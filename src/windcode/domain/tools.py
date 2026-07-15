@@ -16,6 +16,7 @@ class ToolEffect(StrEnum):
     NETWORK = "network"
     OUTSIDE_WORKSPACE = "outside_workspace"
     USER_INTERACTION = "user_interaction"
+    AGENT_COMMUNICATION = "agent_communication"
 
 
 @dataclass(frozen=True, slots=True)
