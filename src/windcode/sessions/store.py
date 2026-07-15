@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
+from windcode._fsync import fsync_directory
 from windcode.sessions.models import EventRecord, SessionMetadata, SessionStatus, utc_now
 
 
@@ -62,11 +63,7 @@ class SessionStore:
                     os.fsync(stream.fileno())
             temporary.replace(self.meta_path)
             if durable:
-                directory_fd = os.open(self.session_dir, os.O_RDONLY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
+                fsync_directory(self.session_dir)
         finally:
             temporary.unlink(missing_ok=True)
 

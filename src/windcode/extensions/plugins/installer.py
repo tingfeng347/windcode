@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+from windcode._fsync import fsync_directory
 from windcode.extensions.paths import PathBoundaryError, scan_bounded
 from windcode.extensions.plugins.manifest import PluginManifest, parse_plugin_manifest
 
@@ -83,11 +84,7 @@ def install_local_plugin(source: Path, plugins_root: Path) -> InstallResult:
                 finally:
                     os.close(descriptor)
         os.replace(temporary, destination)
-        directory_fd = os.open(plugin_root, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        fsync_directory(plugin_root)
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
     return InstallResult(manifest, digest, destination, True)

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+from windcode._fsync import fsync_directory
+
 
 @dataclass(frozen=True, slots=True)
 class ResolvedPath:
@@ -68,10 +70,6 @@ def atomic_write_text(path: Path, content: str) -> None:
         if previous_mode is not None:
             temporary.chmod(previous_mode)
         temporary.replace(path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)

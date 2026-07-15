@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
+from windcode._fsync import fsync_directory
 from windcode.extensions.models import Diagnostic, DiagnosticSeverity, DiagnosticStage
 
 
@@ -122,11 +123,7 @@ class ExtensionStateStore:
                 os.fsync(stream.fileno())
             os.replace(temporary, self.path)
             os.chmod(self.path, 0o600)
-            directory_fd = os.open(self.path.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            fsync_directory(self.path.parent)
         finally:
             temporary.unlink(missing_ok=True)
 
