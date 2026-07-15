@@ -3,7 +3,7 @@ name = "windcode"
 version = "0.1.6"
 description = "A safe, extensible terminal coding agent"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE*"]
 authors = [
@@ -17,7 +17,9 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Natural Language :: Chinese (Simplified)",
     "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development",
     "Topic :: Terminals",
@@ -62,14 +64,14 @@ dev = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
 
 [tool.pyright]
 typeCheckingMode = "strict"
-pythonVersion = "3.12"
+pythonVersion = "3.11"
 include = ["src", "tests"]
 
 [tool.pytest.ini_options]

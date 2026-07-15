@@ -24,7 +24,7 @@ Windcode 是一个Coding Agent。它可以在本地
 
 ## 快速开始
 
-环境要求：Linux、Python 3.12+、[uv](https://docs.astral.sh/uv/)。bubblewrap 可选。
+环境要求：Linux 或 Windows、Python 3.11+、[uv](https://docs.astral.sh/uv/)。bubblewrap 仅在 Linux 上可选。
 
 从 PyPI 安装命令行工具：
 

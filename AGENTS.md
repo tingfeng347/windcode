@@ -8,7 +8,7 @@
 
 ## Project Structure
 
-Windcode is a Python 3.12 terminal coding agent. Production code lives under `src/windcode/`:
+Windcode is a Python 3.11+ terminal coding agent. Production code lives under `src/windcode/`:
 
 - `domain/`: core messages, events, models, errors, and tool contracts.
 - `runtime/`: agent loop, scheduling, budgets, subagents, prompts, and orchestration.
@@ -36,7 +36,7 @@ intentionally Git-ignored and must not be force-added unless the user explicitly
 
 ## Engineering Conventions
 
-Use four-space indentation, Python 3.12 syntax, and type annotations for public APIs and non-trivial
+Use four-space indentation, Python 3.11-compatible syntax, and type annotations for public APIs and non-trivial
 internals. Ruff enforces a 100-character line length and the `E`, `F`, `I`, `UP`, `B`, `ASYNC`, and
 `RUF` rule sets. Use `snake_case` for modules and functions, `PascalCase` for classes, and
 `UPPER_SNAKE_CASE` for constants.
