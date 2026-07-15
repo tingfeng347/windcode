@@ -70,6 +70,7 @@ from windcode.memory import (
     assess_experience,
     classify_memory_intent,
     explicitly_always_project_fact,
+    has_explicit_memory_intent,
     is_project_fact,
     refine_memory,
     should_assess_experience,
@@ -959,7 +960,11 @@ class Windcode:
                     if intent_kind is MemoryKind.EXPERIENCE:
                         explicit_experience_id = saved.memory_id
                     action = "activated"
-                    policy = "explicit_or_stable_fact"
+                    policy = (
+                        "explicit_memory_intent"
+                        if has_explicit_memory_intent(request.prompt)
+                        else "stable_user_fact"
+                    )
                 await bus.publish(
                     MemoryEvent(
                         event_id=uuid4().hex,
@@ -1193,11 +1198,31 @@ class Windcode:
             sessions.append(self._ensure_session_summary(store))
         return tuple(sorted(sessions, key=lambda item: item.updated_at, reverse=True))
 
-    def rewind_session(self, session_id: str, record_id: str) -> EventRecord:
+    def rewind_session(
+        self,
+        session_id: str,
+        record_id: str,
+        *,
+        include_selected: bool = False,
+    ) -> EventRecord:
         store = SessionStore.open(self.state_root / "sessions", session_id)
+        parent_id = record_id
+        if include_selected:
+            records = {record.record_id: record for record in store.load_records()}
+            try:
+                parent_id = records[record_id].parent_id
+            except KeyError as exc:
+                raise ValueError(f"unknown session record id: {record_id}") from exc
+            if parent_id is None:
+                return store.append(
+                    "branch_point",
+                    {"source_record_id": record_id},
+                    root=True,
+                    durable=True,
+                )
         return create_branch(
             store,
-            record_id,
+            parent_id,
             "branch_point",
             {"source_record_id": record_id},
         )

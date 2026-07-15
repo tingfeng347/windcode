@@ -231,19 +231,23 @@ class ExtensionService:
                 component_id=server_id,
             )
             stable_id = capability_id(CapabilityKind.MCP_SERVER, server_id)
+            enabled = (
+                definition.enabled
+                if self._state is None
+                else self._state.enabled.get(stable_id, definition.enabled)
+            )
+            effective_definition = definition.model_copy(update={"enabled": enabled})
             records.append(
                 CapabilityRecord(
                     stable_id,
                     server_id,
                     CapabilityKind.MCP_SERVER,
                     source,
-                    enabled=definition.enabled,
+                    enabled=enabled,
                     trusted=True,
                     required=definition.required,
                     activation=(
-                        ActivationState.INACTIVE
-                        if not definition.enabled
-                        else ActivationState.AVAILABLE
+                        ActivationState.INACTIVE if not enabled else ActivationState.AVAILABLE
                     ),
                     permissions=PermissionRequirement(
                         network=definition.transport == "streamable_http",
@@ -251,7 +255,7 @@ class ExtensionService:
                     ),
                 )
             )
-            definitions[stable_id] = definition
+            definitions[stable_id] = effective_definition
         return DiscoveryResult(tuple(records), definitions, result.diagnostics)
 
     def _with_installed_plugins(self, result: DiscoveryResult) -> DiscoveryResult:

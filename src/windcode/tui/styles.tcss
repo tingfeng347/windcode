@@ -288,8 +288,8 @@ ExtensionManager {
 #extension-dialog {
     width: 72;
     max-width: 92%;
-    height: auto;
-    max-height: 82%;
+    height: 88%;
+    max-height: 92%;
     padding: 1 2;
     background: #20262b;
     border: round #39434a;
@@ -318,9 +318,8 @@ ExtensionManager {
 
 #extension-list {
     width: 100%;
-    height: auto;
+    height: 1fr;
     min-height: 6;
-    max-height: 16;
     margin-top: 1;
     background: #1b2024;
     color: #d7dde2;
@@ -328,12 +327,13 @@ ExtensionManager {
 
 #extension-details {
     width: 100%;
-    height: auto;
+    height: 7;
     min-height: 5;
     margin-top: 1;
     padding: 1;
     background: #1b2024;
     color: #aab3ba;
+    overflow-y: auto;
 }
 
 #memory-dialog {

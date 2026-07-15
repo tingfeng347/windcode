@@ -76,13 +76,17 @@ class SessionStore:
         payload: dict[str, Any],
         *,
         parent_id: str | None = None,
+        root: bool = False,
         durable: bool = False,
     ) -> EventRecord:
         with self._lock:
+            resolved_parent_id = None if root else self.metadata.head_record_id
+            if parent_id is not None:
+                resolved_parent_id = parent_id
             record = EventRecord(
                 sequence=self.metadata.next_sequence,
                 record_id=uuid4().hex,
-                parent_id=self.metadata.head_record_id if parent_id is None else parent_id,
+                parent_id=resolved_parent_id,
                 record_type=record_type,
                 payload=payload,
             )

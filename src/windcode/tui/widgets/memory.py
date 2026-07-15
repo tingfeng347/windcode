@@ -72,14 +72,7 @@ class MemoryManager(ModalScreen[None]):
     def _options(self) -> tuple[Option, ...]:
         options: list[Option] = []
         for record in self.records:
-            text = Text()
-            text.append("● " if record.status.value == "active" else "○ ", style="cyan")
-            text.append(record.title, style="bold")
-            text.append(
-                f"  {record.kind.value} · {record.scope.value} · {record.status.value} · "
-                f"{record.activation.value}",
-                style="dim",
-            )
+            text = Text(" ".join(record.summary.split()), style="bold")
             options.append(Option(text, id=record.memory_id))
         return tuple(options)
 

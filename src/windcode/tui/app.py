@@ -27,6 +27,7 @@ from windcode.domain.events import (
     UserInputRequested,
     UserResponse,
 )
+from windcode.domain.messages import TextBlock, message_from_dict
 from windcode.memory import MemoryStatus
 from windcode.providers import fetch_model_ids
 from windcode.sdk import RunHandle, Windcode
@@ -609,9 +610,22 @@ class WindcodeApp(App[None]):
             self.rewind_selector = None
         if self.session_id is None:
             return
-        self.client.rewind_session(self.session_id, event.record_id)
+        selected = next(
+            record
+            for record in self.client.load_session_records(self.session_id)
+            if record.record_id == event.record_id
+        )
+        message = message_from_dict(selected.payload)
+        prompt = "".join(
+            block.text for block in message.content if isinstance(block, TextBlock)
+        ).strip()
+        self.client.rewind_session(self.session_id, event.record_id, include_selected=True)
         await self._restore_session(self.session_id, announce=False)
-        await self._show_system_message(f"已回退到记录 {event.record_id[:12]}")
+        chat_input = self.query_one("#chat-input", ChatInput)
+        chat_input.clear()
+        chat_input.insert(prompt)
+        chat_input.focus()
+        await self._show_system_message("已回退所选记录; 原输入已回填, 可修改后重新发送")
 
     @on(RewindSelector.Cancelled)
     async def rewind_cancelled(self) -> None:

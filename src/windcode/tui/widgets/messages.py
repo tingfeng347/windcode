@@ -11,6 +11,7 @@ from textual.widgets import Markdown, Static
 
 from windcode.domain.events import (
     AgentEventType,
+    MemoryEvent,
     ModelFallback,
     ModelRetrying,
     ModelStarted,
@@ -289,6 +290,12 @@ class MessageStream(VerticalScroll):
         elif isinstance(event, ToolStarted):
             await self.begin_block()
             self._waiting_for_next_model = True
+        elif (
+            isinstance(event, MemoryEvent)
+            and event.action == "activated"
+            and event.details.get("policy") == "stable_user_fact"
+        ):
+            await self.add_system_message("已自动保存长期记忆")
         elif isinstance(event, RunCompleted):
             await self.finish_run()
         elif isinstance(event, RunFailed):

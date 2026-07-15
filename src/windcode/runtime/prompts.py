@@ -96,7 +96,8 @@ def build_system_prompt(
             "当用户明确要求记住、写入长期记忆或表达等价意图时, 必须调用 "
             "memory_write。只有工具返回 stored 或 already_exists 后才能声称已经记住; "
             "工具失败、未调用或仅计划保存时不得声称写入成功。不得擅自保存普通对话、"
-            "临时状态、推测或工具输出。"
+            "临时状态、推测或工具输出。稳定的用户身份和长期偏好会在本轮结束后由系统自动"
+            "提取并保存; 不要为此调用 memory_write, 也不要在系统确认前声称已经记住。"
             "当用户明确要求查看、列出、搜索、核对或回忆长期记忆时, 必须调用 memory_list、"
             "memory_search 或 memory_get, 并基于工具实际结果回答。宽泛的‘看看长期记忆’调用 "  # noqa: RUF001
             "memory_list; 带主题的请求调用 memory_search; 查看单条详情调用 memory_get。"

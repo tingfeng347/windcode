@@ -5,8 +5,11 @@ import re
 from windcode.memory.models import MemoryKind
 
 _USER_FACT_PATTERNS = (
+    re.compile(r"(?:^|[，,。\s])我(?:叫|的名字(?:是|叫))\s*[^，,。！？!?\s]+"),  # noqa: RUF001
+    re.compile(r"(?:^|[，,。\s])请叫我\s*[^，,。！？!?\s]+"),  # noqa: RUF001
     re.compile(r"(?:^|[，,。\s])我(?:喜欢|偏好|习惯|希望|通常|总是|不喜欢|不希望).+"),  # noqa: RUF001
     re.compile(r"(?:^|[，,。\s])我的(?:偏好|习惯|常用|工作方式|沟通方式).+(?:是|为).+"),  # noqa: RUF001
+    re.compile(r"(?i)(?:^|[,.\s])(?:my\s+name\s+is|call\s+me)\s+[^,.!?\s]+"),
     re.compile(r"(?i)(?:^|[,.\s])I\s+(?:like|prefer|usually|always|dislike|want).+"),
     re.compile(r"(?i)(?:^|[,.\s])my\s+(?:preference|workflow|habit).+\s+is\s+.+"),
 )
