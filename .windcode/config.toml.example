@@ -22,7 +22,8 @@ shell_timeout_seconds = 120
 mode = "default"
 
 [sandbox]
-enabled = true
+preset = "workspace_write"
+writable_roots = []
 network_enabled = true
 
 [context]

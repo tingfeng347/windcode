@@ -19,12 +19,29 @@ Windcode 是一个Coding Agent。它可以在本地
 - 多子智能体并行执行与独立 Worktree
 - 项目级长期记忆：用户画像、项目事实、经验、SOP 与主动查询
 - MCP Server、Skills、Hooks 和本地插件扩展
-- 四种权限模式与可选 bubblewrap 沙箱
+- 四种权限模式与 Linux Bubblewrap、macOS Seatbelt、Windows helper 沙箱后端
 
 
 ## 快速开始
 
-环境要求：Linux 或 Windows、Python 3.11+、[uv](https://docs.astral.sh/uv/)。bubblewrap 仅在 Linux 上可选。
+环境要求：Linux、macOS 或 Windows，Python 3.11+、[uv](https://docs.astral.sh/uv/)。
+
+Linux 使用 Bubblewrap，macOS 使用 Seatbelt。Windows wheel 随包携带 Rust helper，使用按
+读写与网络能力分离的 AppContainer 身份、workspace ACL、SID 绑定的 WFP/Windows Firewall
+规则和 kill-on-close Job Object。首次使用需在“以管理员身份运行”的终端执行：
+
+```powershell
+windcode sandbox setup --json
+windcode sandbox status --json
+```
+
+只有 helper 同时报告文件、网络和进程隔离已就绪时才自动执行；初始化缺失、规则被删除或
+协议版本不匹配都会 fail closed，并要求显式批准单次沙箱外运行。
+
+沙箱 preset 为 `read_only`、默认的 `workspace_write` 和显式的
+`danger_full_access`。旧配置 `enabled=true/false` 仍可读取，并分别映射到
+`workspace_write/danger_full_access`。命令联网和沙箱外运行单独审批；项目级命令前缀规则保存
+在 state root 的 `permissions/projects/`，不会写入仓库。
 
 从 PyPI 安装命令行工具：
 
