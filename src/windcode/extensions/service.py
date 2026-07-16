@@ -149,15 +149,34 @@ class ExtensionService:
     async def set_enabled(self, extension_id: str, enabled: bool) -> ManagementResult:
         if self._state is None:
             return ManagementResult(False, False, self._state_diagnostics)
-        previous = self._state.enabled.get(extension_id)
+        plugin_id: str | None = None
+        if extension_id.startswith("plugin:"):
+            plugin_target = extension_id.removeprefix("plugin:")
+            plugin_id, separator, component_target = plugin_target.partition("/")
+            if separator and not component_target.startswith("plugin/"):
+                raise ValueError(
+                    "plugin components cannot be enabled independently; "
+                    f"toggle plugin:{plugin_id} instead"
+                )
+        previous = (
+            self._state.plugins[plugin_id].enabled
+            if plugin_id in self._state.plugins
+            else self._state.enabled.get(extension_id)
+        )
         if previous is enabled:
             return ManagementResult(False, False)
         values = dict(self._state.enabled)
-        values[extension_id] = enabled
         plugins = dict(self._state.plugins)
-        plugin_id = extension_id.removeprefix("plugin:").split("/", 1)[0]
         if plugin_id in plugins:
             plugins[plugin_id] = replace(plugins[plugin_id], enabled=enabled)
+            child_prefix = f"plugin:{plugin_id}/"
+            values = {
+                key: value
+                for key, value in values.items()
+                if key != f"plugin:{plugin_id}" and not key.startswith(child_prefix)
+            }
+        else:
+            values[extension_id] = enabled
         self._state = self._audited(
             replace(self._state, enabled=values, plugins=plugins),
             "plugin_state_changed",

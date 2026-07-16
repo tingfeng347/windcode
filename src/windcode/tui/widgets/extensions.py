@@ -58,7 +58,14 @@ class ExtensionManager(ModalScreen[None]):
         )
         for label, kind, prefix in groups:
             records = sorted(
-                (record for record in self.records if record.kind is kind),
+                (
+                    record
+                    for record in self.records
+                    if record.kind is kind
+                    and (
+                        kind is CapabilityKind.PLUGIN or record.source.plugin_id is None
+                    )
+                ),
                 key=lambda record: (record.public_name, record.capability_id),
             )
             if not records:
@@ -130,6 +137,23 @@ class ExtensionManager(ModalScreen[None]):
             f"权限: {'、'.join(permissions) or '无'}",
             f"标识: {record.capability_id}",
         ]
+        if record.kind is CapabilityKind.PLUGIN and record.source.plugin_id is not None:
+            components = [
+                item
+                for item in self.records
+                if item.source.plugin_id == record.source.plugin_id
+                and item.kind is not CapabilityKind.PLUGIN
+            ]
+            for kind, label, prefix in (
+                (CapabilityKind.SKILL, "技能", "$"),
+                (CapabilityKind.MCP_SERVER, "MCP", ""),
+                (CapabilityKind.HOOK, "Hook", ""),
+            ):
+                names = sorted(
+                    prefix + item.public_name for item in components if item.kind is kind
+                )
+                if names:
+                    lines.append(f"{label}: {', '.join(names)}")
         if record.diagnostics:
             lines.append("诊断: " + "; ".join(item.message for item in record.diagnostics))
         self.query_one("#extension-details", Static).update("\n".join(lines))
