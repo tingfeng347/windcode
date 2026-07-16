@@ -76,7 +76,8 @@ from windcode.memory import (
     should_assess_experience,
 )
 from windcode.observability import DynamicRedactor, TraceStore
-from windcode.policy import PolicyEngine, PolicyRequest
+from windcode.policy import CommandRule, PolicyEngine, PolicyRequest
+from windcode.policy.rules import CommandRuleStore
 from windcode.providers import ModelTarget, ModelTransport, TransportRegistry
 from windcode.runtime.control import RunBudgets, RunControl
 from windcode.runtime.event_bus import EventBus
@@ -88,7 +89,7 @@ from windcode.runtime.subagents import (
     SubagentCoordinator,
     VerificationRunner,
 )
-from windcode.sandbox import BubblewrapSandbox, detect_bubblewrap
+from windcode.sandbox import SandboxPreset, create_sandbox_backend
 from windcode.sessions import (
     ArtifactStore,
     EventRecord,
@@ -245,6 +246,14 @@ class Windcode:
     def _user_storage_root(self) -> Path:
         configured = self.config.storage.user_storage_root
         return self._configured_state_path(configured)
+
+    def sandbox_status(self, workspace: Path | None = None) -> str:
+        selected_workspace = (workspace or self.workspace).expanduser().resolve()
+        preset = SandboxPreset(self.config.sandbox.preset)
+        backend, _ = create_sandbox_backend(selected_workspace, preset=preset)
+        if backend is None:
+            return f"none/{preset.value}"
+        return f"{backend.status.backend}/{preset.value}/{backend.status.state.value}"
 
     @classmethod
     def open(
@@ -673,11 +682,18 @@ class Windcode:
             if request.permission_mode is not None
             else self.config.permission.mode
         )
-        sandbox_status = detect_bubblewrap()
-        sandbox = (
-            BubblewrapSandbox(workspace, sandbox_status)
-            if self.config.sandbox.enabled and sandbox_status.available
-            else None
+        preset = SandboxPreset(self.config.sandbox.preset)
+        writable_roots = tuple(
+            (workspace / value).resolve()
+            if not Path(value).is_absolute()
+            else Path(value).resolve()
+            for value in self.config.sandbox.writable_roots
+        )
+        sandbox, sandbox_policy = create_sandbox_backend(
+            workspace,
+            preset=preset,
+            writable_roots=writable_roots,
+            network_enabled=self.config.sandbox.network_enabled,
         )
         run_registry = self.tool_registry.clone()
         register_skill_tools(run_registry, run_extensions.skills, run_extensions.activate_skill)
@@ -694,14 +710,16 @@ class Windcode:
         run_registry.register(
             ShellTool(
                 sandbox=sandbox,
+                sandbox_policy=sandbox_policy,
                 default_timeout=self.config.budgets.shell_timeout_seconds,
             ),
             replace=True,
         )
         policy = PolicyEngine(
             mode,
-            sandbox_enabled=self.config.sandbox.enabled,
-            sandbox_available=sandbox_status.available,
+            sandbox_enabled=preset is not SandboxPreset.DANGER_FULL_ACCESS,
+            sandbox_available=sandbox is not None and sandbox.status.available,
+            rule_store=CommandRuleStore(self.state_root, workspace),
         )
         for record in session.load_records():
             if record.record_type != "session_approval":
@@ -709,6 +727,13 @@ class Windcode:
             if record.payload.get("workspace") != str(workspace):
                 continue
             tool_name = record.payload.get("tool_name")
+            raw_rule = record.payload.get("rule")
+            if isinstance(raw_rule, Mapping):
+                try:
+                    policy.restore_session_rule(CommandRule.model_validate(raw_rule))
+                except ValueError:
+                    pass
+                continue
             raw_effects = record.payload.get("effects")
             if not isinstance(tool_name, str) or not isinstance(raw_effects, list):
                 continue
@@ -811,6 +836,7 @@ class Windcode:
             ),
             verification=VerificationRunner(
                 sandbox=sandbox,
+                sandbox_policy=sandbox_policy,
                 timeout_seconds=self.config.budgets.shell_timeout_seconds,
             ),
             network_enabled=self.config.sandbox.network_enabled,
@@ -852,13 +878,19 @@ class Windcode:
         system_prompt = make_system_prompt((), run_extensions.mcp.server_ids)
 
         def record_session_approval(request: PolicyRequest) -> None:
+            payload: dict[str, object] = {
+                "workspace": str(workspace),
+                "tool_name": request.tool_name,
+            }
+            if request.proposed_rule is not None:
+                payload["rule"] = request.proposed_rule.model_copy(
+                    update={"source": "session"}
+                ).model_dump(mode="json")
+            else:
+                payload["effects"] = sorted(effect.value for effect in request.effects)
             session.append(
                 "session_approval",
-                {
-                    "workspace": str(workspace),
-                    "tool_name": request.tool_name,
-                    "effects": sorted(effect.value for effect in request.effects),
-                },
+                payload,
                 durable=True,
             )
 
