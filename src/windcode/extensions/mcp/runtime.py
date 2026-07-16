@@ -43,6 +43,7 @@ class McpRuntime:
             for server_id, (factory, required) in sorted(servers.items())
         }
         self._closed = False
+        self._retirements: set[asyncio.Task[None]] = set()
         self.observer = observer
 
     async def _observe(self, action: str, server_id: str, status: str) -> None:
@@ -66,7 +67,12 @@ class McpRuntime:
             if self._closed:
                 raise RuntimeError("MCP runtime is closed")
             if slot.state is McpServerState.READY and slot.client is not None:
-                return slot.client
+                if slot.client.connected:
+                    return slot.client
+                stale = slot.client
+                slot.client = None
+                slot.state = McpServerState.DISCOVERED
+                self._schedule_retirement(server_id, stale)
             slot.state = McpServerState.CONNECTING
             await self._observe("mcp_connecting", server_id, "connecting")
             client: McpClient | None = None
@@ -86,31 +92,68 @@ class McpRuntime:
             await self._observe("mcp_connected", server_id, "ready")
             return client
 
+    def _schedule_retirement(self, server_id: str, client: McpClient) -> None:
+        async def retire() -> None:
+            try:
+                await client.aclose()
+                if client.close_error is not None:
+                    await self._observe("diagnostic", server_id, "close_failed")
+            except Exception:
+                await self._observe("diagnostic", server_id, "close_failed")
+
+        task = asyncio.create_task(retire())
+        self._retirements.add(task)
+        task.add_done_callback(self._retirement_done)
+
+    def _retirement_done(self, task: asyncio.Task[None]) -> None:
+        self._retirements.discard(task)
+        if not task.cancelled():
+            task.exception()
+
+    async def _invalidate(self, server_id: str, client: McpClient) -> None:
+        slot = self._servers[server_id]
+        async with slot.lock:
+            if slot.client is not client:
+                return
+            slot.client = None
+            slot.state = McpServerState.CLOSED if self._closed else McpServerState.DISCOVERED
+            self._schedule_retirement(server_id, client)
+
+    @staticmethod
+    def _connection_failed(exc: BaseException, client: McpClient) -> bool:
+        return (
+            not client.connected
+            or isinstance(exc, (ConnectionError, EOFError, BrokenPipeError))
+            or (isinstance(exc, RuntimeError) and str(exc) == "MCP client is not connected")
+        )
+
     async def call(
         self, server_id: str, operation: Callable[[McpClient], Awaitable[object]]
     ) -> object:
-        client = await self.activate(server_id)
-        try:
-            result = await operation(client)
-            await self._observe("mcp_called", server_id, "success")
-            return result
-        except (ConnectionError, EOFError, BrokenPipeError):
-            slot = self._servers[server_id]
-            async with slot.lock:
-                if slot.reconnects >= 1:
-                    raise
-                slot.reconnects += 1
-                if slot.client is not None:
-                    await slot.client.aclose()
-                slot.client = None
-                slot.state = McpServerState.DISCOVERED
+        for attempt in range(2):
             client = await self.activate(server_id)
-            result = await operation(client)
-            await self._observe("mcp_called", server_id, "success")
-            return result
-        except BaseException:
-            await self._observe("diagnostic", server_id, "call_failed")
-            raise
+            try:
+                result = await operation(client)
+                await self._observe("mcp_called", server_id, "success")
+                return result
+            except asyncio.CancelledError:
+                # Cancelling an in-flight MCP request can close or desynchronize the SDK session.
+                # Retire it without delaying UI cancellation; the next turn gets a fresh client.
+                await self._invalidate(server_id, client)
+                raise
+            except TimeoutError:
+                # The remote operation may still have happened, so never retry a timed-out tool.
+                await self._invalidate(server_id, client)
+                await self._observe("diagnostic", server_id, "call_failed")
+                raise
+            except BaseException as exc:
+                if attempt == 0 and self._connection_failed(exc, client):
+                    self._servers[server_id].reconnects += 1
+                    await self._invalidate(server_id, client)
+                    continue
+                await self._observe("diagnostic", server_id, "call_failed")
+                raise
+        raise RuntimeError("MCP call retry loop exhausted")
 
     async def activate_required(self, *, concurrency: int = 4) -> None:
         semaphore = asyncio.Semaphore(concurrency)
@@ -142,3 +185,5 @@ class McpRuntime:
                     slot.client = None
                     slot.state = McpServerState.CLOSED
                     await self._observe("mcp_closed", server_id, "closed")
+        while self._retirements:
+            await asyncio.gather(*tuple(self._retirements), return_exceptions=True)
