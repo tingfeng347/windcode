@@ -46,6 +46,13 @@ from windcode.extensions.models import (
 )
 from windcode.extensions.plugins.installer import InstallResult
 from windcode.extensions.state import ManagementAuditRecord
+from windcode.policy import CommandAction, CommandRule
+from windcode.sandbox import (
+    SandboxCapabilities,
+    SandboxPermissions,
+    SandboxPreset,
+    SandboxStatus,
+)
 
 AgentEvent = AgentEventType
 
@@ -59,6 +66,8 @@ __all__ = [
     "CollaborationParticipant",
     "CollaborationRequest",
     "CollaborationResult",
+    "CommandAction",
+    "CommandRule",
     "Diagnostic",
     "ExtensionSnapshot",
     "InstallResult",
@@ -67,6 +76,10 @@ __all__ = [
     "RunRequest",
     "RunResponse",
     "RunResult",
+    "SandboxCapabilities",
+    "SandboxPermissions",
+    "SandboxPreset",
+    "SandboxStatus",
     "SubagentBlocked",
     "SubagentCancelled",
     "SubagentCleanup",

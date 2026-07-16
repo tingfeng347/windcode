@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from windcode.config.models import PermissionMode
 from windcode.domain.tools import ToolEffect
+from windcode.policy.commands import CommandAnalysis, CommandRule
 
 
 class PolicyModel(BaseModel):
@@ -28,7 +29,9 @@ class PolicyAction(StrEnum):
 class ApprovalChoice(StrEnum):
     ALLOW_ONCE = "allow_once"
     ALLOW_SESSION = "allow_session"
+    ALLOW_PROJECT = "allow_project"
     DENY = "deny"
+    CANCEL = "cancel"
 
 
 class PolicyRequest(PolicyModel):
@@ -39,6 +42,13 @@ class PolicyRequest(PolicyModel):
     summary: str = Field(min_length=1)
     path: str | None = None
     command: str | None = None
+    cwd: str | None = None
+    network: bool = False
+    sandbox_backend: str | None = None
+    sandbox_preset: str | None = None
+    escalation_reason: str | None = None
+    command_analysis: CommandAnalysis | None = None
+    proposed_rule: CommandRule | None = None
 
 
 class PolicyDecision(PolicyModel):
