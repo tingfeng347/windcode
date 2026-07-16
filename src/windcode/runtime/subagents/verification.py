@@ -6,7 +6,7 @@ from pathlib import Path
 
 from windcode.domain.subagents import VerificationResult
 from windcode.domain.tools import ToolContext
-from windcode.sandbox import BubblewrapSandbox
+from windcode.sandbox import SandboxBackend, SandboxPolicy
 from windcode.tools.shell import ShellInput, ShellTool
 
 
@@ -18,12 +18,14 @@ class VerificationRunner:
     def __init__(
         self,
         *,
-        sandbox: BubblewrapSandbox | None = None,
+        sandbox: SandboxBackend | None = None,
+        sandbox_policy: SandboxPolicy | None = None,
         timeout_seconds: float = 120.0,
         output_limit: int = 20_000,
     ) -> None:
         self.shell = ShellTool(
             sandbox=sandbox,
+            sandbox_policy=sandbox_policy,
             default_timeout=timeout_seconds,
             output_limit=output_limit,
         )

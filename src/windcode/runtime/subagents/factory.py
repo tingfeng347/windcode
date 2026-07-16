@@ -22,6 +22,7 @@ from windcode.extensions.skills.tools import (
 from windcode.instructions import load_instructions
 from windcode.observability import TraceStore
 from windcode.policy import ApprovalChoice, PolicyDecision, PolicyEngine, PolicyRequest
+from windcode.policy.rules import CommandRuleStore
 from windcode.providers import ModelTarget
 from windcode.runtime.control import BudgetExceeded, RunBudgets, RunControl
 from windcode.runtime.event_bus import EventBus
@@ -32,7 +33,7 @@ from windcode.runtime.subagents.approvals import ApprovalRouter
 from windcode.runtime.subagents.budgets import AggregateBudget, AggregateBudgetExceeded
 from windcode.runtime.subagents.collaboration import BoundSubagentCollaboration
 from windcode.runtime.subagents.roles import ROLE_POLICIES, resolve_role_tools
-from windcode.sandbox import BubblewrapSandbox, detect_bubblewrap
+from windcode.sandbox import SandboxPreset, create_sandbox_backend
 from windcode.sessions import ArtifactStore, SessionStore
 from windcode.tools import ToolRegistry
 from windcode.tools.agent_collaboration import (
@@ -215,24 +216,35 @@ class ChildRuntimeFactory:
         if collaboration is not None and spec.coordination_id is not None:
             register_coordination_tool(registry, collaboration)
 
-        sandbox_status = detect_bubblewrap()
         git_common = (
             _git_common_directory(workspace) if spec.kind is SubagentTaskKind.WRITE else None
         )
-        sandbox = (
-            BubblewrapSandbox(
-                workspace,
-                sandbox_status,
-                read_only_workspace=spec.kind is SubagentTaskKind.READ,
-                writable_paths=() if git_common is None else (git_common,),
-            )
-            if self.config.sandbox.enabled and sandbox_status.available
-            else None
+        configured_preset = SandboxPreset(self.config.sandbox.preset)
+        preset = configured_preset
+        if (
+            spec.kind is SubagentTaskKind.READ
+            and configured_preset is not SandboxPreset.DANGER_FULL_ACCESS
+        ):
+            preset = SandboxPreset.READ_ONLY
+        writable_roots = tuple(
+            (workspace / value).resolve()
+            if not Path(value).is_absolute()
+            else Path(value).resolve()
+            for value in self.config.sandbox.writable_roots
+        )
+        if git_common is not None:
+            writable_roots = (*writable_roots, git_common)
+        sandbox, sandbox_policy = create_sandbox_backend(
+            workspace,
+            preset=preset,
+            writable_roots=writable_roots,
+            network_enabled=self.config.sandbox.network_enabled,
         )
         if "shell" in registry.names():
             registry.register(
                 ShellTool(
                     sandbox=sandbox,
+                    sandbox_policy=sandbox_policy,
                     default_timeout=self.config.budgets.shell_timeout_seconds,
                 ),
                 replace=True,
@@ -288,8 +300,9 @@ class ChildRuntimeFactory:
             registry,
             PolicyEngine(
                 effective_permission,
-                sandbox_enabled=self.config.sandbox.enabled,
-                sandbox_available=sandbox_status.available,
+                sandbox_enabled=preset is not SandboxPreset.DANGER_FULL_ACCESS,
+                sandbox_available=sandbox is not None and sandbox.status.available,
+                rule_store=CommandRuleStore(self.state_root, workspace),
             ),
         )
         budgets = RunBudgets(

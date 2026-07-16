@@ -26,6 +26,7 @@ class ToolContext:
     cancelled: Callable[[], bool]
     progress: Callable[[str], Awaitable[None]] | None = None
     request_user: Callable[[object], Awaitable[object]] | None = None
+    granted_effects: frozenset[ToolEffect] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)

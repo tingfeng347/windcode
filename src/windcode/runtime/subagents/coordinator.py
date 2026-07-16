@@ -126,7 +126,8 @@ class SubagentCoordinator:
         for runtime in self._runtimes.values():
             policy = runtime.loop.scheduler.policy
             if runtime.record.spec.kind is SubagentTaskKind.READ and (
-                not self.factory.config.sandbox.enabled or not policy.sandbox_available
+                self.factory.config.sandbox.preset == "danger_full_access"
+                or not policy.sandbox_available
             ):
                 effective = PermissionMode.PLAN
             else:

@@ -113,6 +113,13 @@ class ApprovalRequested(AgentEvent):
     subagent_role: str | None = None
     tool_name: str | None = None
     arguments_summary: str | None = None
+    command_actions: tuple[dict[str, Any], ...] = ()
+    cwd: str | None = None
+    network: bool = False
+    sandbox_backend: str | None = None
+    sandbox_preset: str | None = None
+    escalation_reason: str | None = None
+    proposed_rule: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
