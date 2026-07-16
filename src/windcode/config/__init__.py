@@ -22,6 +22,7 @@ from windcode.config.models import (
 )
 from windcode.config.paths import default_user_config_path, default_user_storage_root
 from windcode.config.writer import save_memory_config, save_model_config
+from windcode.sandbox import SandboxPreset
 
 __all__ = [
     "HARD_MAX_CONCURRENT_SUBAGENTS",
@@ -37,6 +38,7 @@ __all__ = [
     "ProviderConfig",
     "ProviderProtocol",
     "SandboxConfig",
+    "SandboxPreset",
     "StorageConfig",
     "SubagentConfig",
     "TraceConfig",

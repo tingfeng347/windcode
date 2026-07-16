@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import warnings
+from collections.abc import Mapping
 from enum import StrEnum
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self, cast
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
@@ -82,8 +84,27 @@ class PermissionConfig(StrictModel):
 
 
 class SandboxConfig(StrictModel):
+    preset: Literal["read_only", "workspace_write", "danger_full_access"] = "workspace_write"
+    writable_roots: tuple[str, ...] = ()
     enabled: bool = True
     network_enabled: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_enabled(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            return value
+        data = dict(cast(Mapping[str, Any], value))
+        if "enabled" in data and "preset" not in data:
+            warnings.warn(
+                "sandbox.enabled is deprecated; use sandbox.preset",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            data["preset"] = "workspace_write" if bool(data["enabled"]) else "danger_full_access"
+        if "preset" in data and "enabled" not in data:
+            data["enabled"] = data["preset"] != "danger_full_access"
+        return data
 
 
 class ContextConfig(StrictModel):
