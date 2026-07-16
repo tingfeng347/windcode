@@ -1,0 +1,76 @@
+name: Cross-platform sandbox
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python-contracts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --frozen --all-groups
+      - name: Verify public sandbox and command contracts
+        run: >-
+          uv run python -c "from pathlib import Path;
+          from windcode.policy import analyze_bash;
+          from windcode.sandbox import SandboxPreset, create_sandbox_backend;
+          a=analyze_bash('git status && rm -rf build');
+          assert a.trusted and a.critical and len(a.actions)==2;
+          backend, policy=create_sandbox_backend(Path.cwd(), preset=SandboxPreset.WORKSPACE_WRITE);
+          assert policy.preset is SandboxPreset.WORKSPACE_WRITE;
+          assert backend is not None"
+
+  windows-helper:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --manifest-path native/windows-sandbox/Cargo.toml
+      - run: cargo build --release --manifest-path native/windows-sandbox/Cargo.toml
+      - shell: pwsh
+        run: |
+          $status = & native/windows-sandbox/target/release/windcode-sandbox.exe status --json | ConvertFrom-Json
+          if ($status.version -ne 1) { throw "unexpected helper protocol version" }
+          if ($status.ready) { throw "an uninitialized helper must not advertise ready" }
+          if (-not $status.remediation) { throw "missing administrator remediation" }
+      - name: Run Windows isolation contracts
+        run: python native/windows-sandbox/ci/contract.py native/windows-sandbox/target/release/windcode-sandbox.exe
+
+  windows-wheel:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rust_target: x86_64-pc-windows-msvc
+            wheel_tag: py3-none-win_amd64
+          - rust_target: aarch64-pc-windows-msvc
+            wheel_tag: py3-none-win_arm64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - run: uv python install 3.12
+      - run: uv sync --frozen --all-groups
+      - run: cargo build --release --target ${{ matrix.rust_target }} --manifest-path native/windows-sandbox/Cargo.toml
+      - name: Build native Windows wheel
+        shell: pwsh
+        env:
+          WINDCODE_WINDOWS_HELPER: native/windows-sandbox/target/${{ matrix.rust_target }}/release/windcode-sandbox.exe
+          WINDCODE_WINDOWS_WHEEL_TAG: ${{ matrix.wheel_tag }}
+        run: uv build --wheel --no-sources
+      - name: Verify bundled helper
+        shell: pwsh
+        run: |
+          uv run --no-project python -c "import pathlib,zipfile; w=next(pathlib.Path('dist').glob('*.whl')); z=zipfile.ZipFile(w); assert any(n.endswith('windcode/sandbox/bin/windcode-sandbox.exe') for n in z.namelist())"
