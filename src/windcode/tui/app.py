@@ -917,7 +917,8 @@ class WindcodeApp(App[None]):
         elif command.name == "status":
             await self._show_system_message(
                 f"会话: {self.session_id or '新会话'}  模型: {self._display_model()}  "
-                f"权限: {self.permission_mode}  委派: {self.config.subagents.mode.value}"
+                f"权限: {self.permission_mode}  委派: {self.config.subagents.mode.value}  "
+                f"沙箱: {self.client.sandbox_status(self.workspace)}"
             )
         elif command.name == "agents":
             if command.arguments:

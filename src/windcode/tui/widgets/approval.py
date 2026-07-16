@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from rich.markup import escape
 from textual.app import ComposeResult
@@ -14,7 +14,9 @@ from windcode.domain.events import ApprovalRequested
 CHOICE_LABELS = {
     "allow_once": "仅本次允许",
     "allow_session": "会话内允许",
+    "allow_project": "此项目始终允许",
     "deny": "拒绝",
+    "cancel": "取消命令",
 }
 
 
@@ -62,12 +64,28 @@ class ApprovalWidget(Vertical, can_focus=True):
                 else escape(self.request.arguments_summary)
             )
             if self.request.tool_name == "shell" and arguments:
-                lines.append(f"  [bold cyan]bash:[/bold cyan] {arguments}")
+                shell = "PowerShell" if self.request.sandbox_backend == "windows-helper" else "bash"
+                lines.append(f"  [bold cyan]{shell}:[/bold cyan] {arguments}")
             elif arguments:
                 lines.append(f"  [bold cyan]{tool_name}:[/bold cyan] {arguments}")
             else:
                 lines.append(f"  工具: {tool_name}")
         summary = escape(self.request.summary)
+        if self.request.cwd:
+            lines.append(f"  cwd: {escape(self.request.cwd)}")
+        sandbox = self.request.sandbox_backend or "none"
+        preset = self.request.sandbox_preset or "none"
+        lines.append(
+            f"  沙箱: {escape(sandbox)} / {escape(preset)} · "
+            f"网络: {'允许' if self.request.network else '禁用'}"
+        )
+        if self.request.escalation_reason:
+            lines.append(f"  提权原因: {escape(self.request.escalation_reason)}")
+        if self.request.proposed_rule:
+            prefix = self.request.proposed_rule.get("argv_prefix", ())
+            if isinstance(prefix, (tuple, list)):
+                values = cast(tuple[object, ...] | list[object], prefix)
+                lines.append(f"  建议规则: {escape(' '.join(str(item) for item in values))}")
         lines.extend((f"    {summary}\n", "  [dim]是否继续执行?[/dim]\n"))
         for index, choice in enumerate(self.request.choices):
             label = CHOICE_LABELS.get(choice, choice)
