@@ -149,6 +149,24 @@ class AgentLoop:
                 choices=tuple(choice.value for choice in decision.choices),
                 tool_name=request.tool_name,
                 arguments_summary=summarize_policy_arguments(request),
+                command_actions=(
+                    ()
+                    if request.command_analysis is None
+                    else tuple(
+                        action.model_dump(mode="json")
+                        for action in request.command_analysis.actions
+                    )
+                ),
+                cwd=request.cwd,
+                network=request.network,
+                sandbox_backend=request.sandbox_backend,
+                sandbox_preset=request.sandbox_preset,
+                escalation_reason=request.escalation_reason,
+                proposed_rule=(
+                    None
+                    if request.proposed_rule is None
+                    else request.proposed_rule.model_dump(mode="json")
+                ),
             ),
             durable=True,
         )
