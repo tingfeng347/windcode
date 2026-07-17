@@ -42,7 +42,7 @@ class ExtensionManager(ModalScreen[None]):
             with Horizontal(id="extension-manager-header"):
                 yield Static("扩展", id="extension-manager-title")
                 yield Static("Esc 关闭", id="extension-manager-close")
-            yield Static("方向键选择 · Enter 查看状态 · Space 启用或禁用", id="extension-help")
+            yield Static("方向键选择 ·查看状态 · Space 启用或禁用", id="extension-help")
             yield OptionList(*self._options(), id="extension-list")
             yield Static("选择扩展查看状态", id="extension-details")
 
@@ -62,9 +62,7 @@ class ExtensionManager(ModalScreen[None]):
                     record
                     for record in self.records
                     if record.kind is kind
-                    and (
-                        kind is CapabilityKind.PLUGIN or record.source.plugin_id is None
-                    )
+                    and (kind is CapabilityKind.PLUGIN or record.source.plugin_id is None)
                 ),
                 key=lambda record: (record.public_name, record.capability_id),
             )

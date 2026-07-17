@@ -14,7 +14,7 @@ tests/
 
 .windcode/config.toml
 .windcode/state/
-.windcode/skill/
+.windcode/skills/
 .windcode/memory/
 .windcode/sessions/
 .windcode/traces/

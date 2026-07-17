@@ -56,7 +56,7 @@ explicit SDK state_root
 -> user_storage_root
 ```
 
-The root contains `skill/`, `memory/`, `sessions/`, `traces/`, `extensions/`, and `worktrees/`.
+The root contains `skills/`, `memory/`, `sessions/`, `traces/`, `extensions/`, and `worktrees/`.
 `.windcode/config.toml`, runtime directories under `.windcode/`, `tests/`, and `spec/` are local-only
 ignored paths.
 Never remove, rewrite, force-add, or commit them without an explicit user request.

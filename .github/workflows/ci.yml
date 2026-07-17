@@ -1,0 +1,44 @@
+name: Cross-platform CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python-contracts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --frozen --all-groups
+      - name: Check formatting
+        run: uv run ruff format --check .
+      - name: Lint
+        run: uv run ruff check .
+      - name: Type check
+        run: uv run pyright
+      - name: Run tests when present
+        shell: bash
+        run: |
+          if [ -d tests ] && find tests -type f -name 'test_*.py' -print -quit | grep -q .; then
+            uv run pytest -q
+          else
+            echo "No tracked tests are present in this checkout; skipping pytest."
+          fi
+      - name: Verify public sandbox and command contracts
+        run: >-
+          uv run python -c "import sys; from pathlib import Path;
+          from windcode.policy import analyze_bash;
+          from windcode.sandbox import SandboxPreset, create_sandbox_backend;
+          a=analyze_bash('git status && rm -rf build');
+          assert a.trusted and a.critical and len(a.actions)==2;
+          backend, policy=create_sandbox_backend(Path.cwd(), preset=SandboxPreset.WORKSPACE_WRITE);
+          assert policy.preset is SandboxPreset.WORKSPACE_WRITE;
+          assert (backend is None) == sys.platform.startswith('win')"

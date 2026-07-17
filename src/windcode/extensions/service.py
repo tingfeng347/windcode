@@ -65,7 +65,7 @@ class ExtensionService:
         self.workspace = workspace.expanduser().resolve()
         self.state_store = state_store
         self.plugins_root = plugins_root
-        default_user_skill_root = user_skill_root or default_user_storage_root() / "skill"
+        default_user_skill_root = user_skill_root or default_user_storage_root() / "skills"
         self._user_skill_roots = tuple(
             dict.fromkeys(
                 (
@@ -74,7 +74,7 @@ class ExtensionService:
                 )
             )
         )
-        self._project_skill_root = self.workspace / ".windcode" / "skill"
+        self._project_skill_root = self.workspace / ".windcode" / "skills"
         loaded = state_store.load()
         self._state = loaded.state
         self._state_diagnostics = loaded.diagnostics
