@@ -61,6 +61,22 @@ class McpRuntime:
     def required_server_ids(self) -> tuple[str, ...]:
         return tuple(server_id for server_id, slot in self._servers.items() if slot.required)
 
+    @property
+    def ready_server_ids(self) -> tuple[str, ...]:
+        return tuple(
+            server_id
+            for server_id, slot in self._servers.items()
+            if slot.state is McpServerState.READY
+        )
+
+    @property
+    def failed_server_ids(self) -> tuple[str, ...]:
+        return tuple(
+            server_id
+            for server_id, slot in self._servers.items()
+            if slot.state is McpServerState.FAILED
+        )
+
     async def activate(self, server_id: str) -> McpClient:
         slot = self._servers[server_id]
         async with slot.lock:
@@ -155,15 +171,22 @@ class McpRuntime:
                 raise
         raise RuntimeError("MCP call retry loop exhausted")
 
-    async def activate_required(self, *, concurrency: int = 4) -> None:
+    async def activate_required(self, *, concurrency: int = 4) -> tuple[str, ...]:
         semaphore = asyncio.Semaphore(concurrency)
 
         async def activate_one(server_id: str) -> None:
             async with semaphore:
                 await self.activate(server_id)
 
+        required = self.required_server_ids
         await asyncio.gather(
-            *(activate_one(server_id) for server_id, slot in self._servers.items() if slot.required)
+            *(activate_one(server_id) for server_id in required),
+            return_exceptions=True,
+        )
+        return tuple(
+            server_id
+            for server_id in required
+            if self._servers[server_id].state is McpServerState.READY
         )
 
     async def aclose(self) -> None:

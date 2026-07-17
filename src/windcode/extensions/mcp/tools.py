@@ -215,7 +215,13 @@ class McpCapabilityService:
             return catalog.tools
 
     async def search_tools(self, query: str = "") -> tuple[McpToolDefinition, ...]:
-        tool_lists = [await self.tool_catalog(server_id) for server_id in self.runtime.server_ids]
+        tool_lists: list[tuple[McpToolDefinition, ...]] = []
+        for server_id in self.runtime.server_ids:
+            try:
+                tool_lists.append(await self.tool_catalog(server_id))
+            except Exception:
+                # One unavailable MCP server must not hide tools from healthy servers.
+                continue
         needle = query.casefold().strip()
         return tuple(
             tool
@@ -250,17 +256,29 @@ class McpCapabilityService:
             except KeyError:
                 stale.append(stable_id)
                 continue
+            except Exception:
+                # Keep transient selections for a later reconnect, but do not fail this run.
+                continue
             registry.register(adapter, replace=True)
             registered.append(adapter.name)
         stable_ids.difference_update(stale)
         return tuple(registered)
 
     async def register_direct_tools(
-        self, registry: ToolRegistry, *, direct_tool_limit: int
+        self,
+        registry: ToolRegistry,
+        *,
+        direct_tool_limit: int,
+        server_ids: tuple[str, ...] | None = None,
     ) -> tuple[str, ...]:
-        tool_lists = [
-            await self.tool_catalog(server_id) for server_id in self.runtime.required_server_ids
-        ]
+        selected_servers = self.runtime.required_server_ids if server_ids is None else server_ids
+        tool_lists: list[tuple[McpToolDefinition, ...]] = []
+        for server_id in selected_servers:
+            try:
+                tool_lists.append(await self.tool_catalog(server_id))
+            except Exception:
+                # Direct registration is best-effort across independent MCP servers.
+                continue
         definitions = tuple(tool for tools in tool_lists for tool in tools)
         if len(definitions) > direct_tool_limit:
             return ()

@@ -184,8 +184,9 @@ class WindcodeApp(App[None]):
         self._update_status("loading MCP" if self.client.required_mcp_loading else "idle")
         if setup_message := self._model_setup_message():
             self.query_one("#welcome-view", WelcomeView).show_notice(setup_message)
-        if self.client.required_mcp_loading:
-            self.query_one("#welcome-view", WelcomeView).start_mcp_loading()
+        if self.client.mcp_startup_status.total:
+            if self.client.required_mcp_loading:
+                self.query_one("#welcome-view", WelcomeView).start_mcp_loading()
             self.run_worker(self._load_required_mcp(), group="mcp-startup", exclusive=True)
         if self.session_id is not None and self.client.session_exists(self.session_id):
             await self._restore_session(self.session_id, announce=False)
@@ -195,12 +196,23 @@ class WindcodeApp(App[None]):
             await self.client.wait_for_required_mcp()
         except Exception as exc:
             self.query_one("#welcome-view", WelcomeView).stop_mcp_loading()
-            self._update_status("MCP 加载失败")
-            await self._show_system_message(f"MCP 服务加载失败: {exc}", error=True)
+            self._update_status("idle")
+            await self._show_system_message(f"MCP 启动状态读取失败: {exc}", error=True)
             return
         self.query_one("#welcome-view", WelcomeView).stop_mcp_loading()
         self._update_status("idle")
-        await self._show_system_message(self._model_setup_message() or "MCP 服务已加载")
+        status = self.client.mcp_startup_status
+        parts = [f"MCP 服务已加载 {status.loaded} 个"]
+        if status.failed_servers:
+            parts.append(
+                f"{len(status.failed_servers)} 个加载失败 ({', '.join(status.failed_servers)})"
+            )
+        if status.lazy:
+            parts.append(f"{status.lazy} 个按需加载")
+        message = ", ".join(parts)
+        if setup_message := self._model_setup_message():
+            message = f"{setup_message}\n{message}"
+        await self._show_system_message(message)
 
     def on_resize(self, event: events.Resize) -> None:
         self.set_class(event.size.width < 60, "narrow")

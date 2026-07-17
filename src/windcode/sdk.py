@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self, cast
@@ -35,6 +35,7 @@ from windcode.domain.subagents import SubagentRecord, SubagentResult
 from windcode.domain.tools import Tool, ToolContext, ToolEffect
 from windcode.extensions.commands import CommandRoute
 from windcode.extensions.hooks.models import HookContext, HookEvent
+from windcode.extensions.mcp import McpServerState
 from windcode.extensions.mcp.catalog import McpToolDefinition
 from windcode.extensions.mcp.tools import (
     SearchMcpToolsTool,
@@ -106,6 +107,14 @@ from windcode.tools import (
 )
 from windcode.tools.shell import ShellTool
 from windcode.worktrees import WorktreeManager
+
+
+@dataclass(frozen=True, slots=True)
+class McpStartupStatus:
+    total: int = 0
+    loaded: int = 0
+    failed_servers: tuple[str, ...] = ()
+    lazy: int = 0
 
 
 class RunHandle:
@@ -224,6 +233,7 @@ class Windcode:
         self._mcp_tool_catalogs: dict[str, tuple[McpToolDefinition, ...]] = {}
         self._mcp_selected_tools: set[str] = set()
         self._mcp_direct_servers: tuple[str, ...] = ()
+        self._mcp_ready_required_servers: tuple[str, ...] = ()
         self._mcp_start_task: asyncio.Task[None] | None = None
         self._mcp_retirement_tasks: set[asyncio.Task[None]] = set()
         self.memory_service: MemoryService | None = None
@@ -300,7 +310,7 @@ class Windcode:
             self.workspace,
             ExtensionStateStore(extension_root / "state.json"),
             extension_root / "plugins",
-            user_skill_root=self._user_storage_root() / "skill",
+            user_skill_root=self._user_storage_root() / "skills",
         )
         await self.extension_service.reload()
         self._client_extensions = self._create_client_extensions()
@@ -339,13 +349,14 @@ class Windcode:
     async def _start_required_mcp(self) -> None:
         if self._client_extensions is None or self.tool_registry is None:
             return
-        await self._client_extensions.mcp.activate_required()
+        self._mcp_ready_required_servers = await self._client_extensions.mcp.activate_required()
         registered = await self._client_extensions.mcp_capabilities.register_direct_tools(
             self.tool_registry,
             direct_tool_limit=self.config.extensions.direct_tool_limit,
+            server_ids=self._mcp_ready_required_servers,
         )
         if registered:
-            self._mcp_direct_servers = self._client_extensions.mcp.required_server_ids
+            self._mcp_direct_servers = self._mcp_ready_required_servers
 
     async def wait_for_required_mcp(self) -> None:
         """Wait for the single client-level MCP startup task."""
@@ -355,6 +366,19 @@ class Windcode:
     @property
     def required_mcp_loading(self) -> bool:
         return self._mcp_start_task is not None and not self._mcp_start_task.done()
+
+    @property
+    def mcp_startup_status(self) -> McpStartupStatus:
+        if self._client_extensions is None:
+            return McpStartupStatus()
+        runtime = self._client_extensions.mcp
+        loaded = len(runtime.ready_server_ids)
+        failed = runtime.failed_server_ids
+        lazy = sum(
+            runtime.state(server_id) is McpServerState.DISCOVERED
+            for server_id in runtime.server_ids
+        )
+        return McpStartupStatus(len(runtime.server_ids), loaded, failed, lazy)
 
     def _extensions(self) -> ExtensionService:
         if not self._entered or self.extension_service is None:
@@ -390,6 +414,7 @@ class Windcode:
         self._mcp_tool_catalogs.clear()
         self._mcp_selected_tools.clear()
         self._mcp_direct_servers = ()
+        self._mcp_ready_required_servers = ()
         self._client_extensions = self._create_client_extensions()
         self._mcp_start_task = asyncio.create_task(self._start_required_mcp())
         if previous is not None:
@@ -856,6 +881,10 @@ class Windcode:
         def make_system_prompt(
             direct_servers: tuple[str, ...], search_servers: tuple[str, ...]
         ) -> str:
+            startup_unavailable = tuple(
+                (server_id, "启动连接失败, 本轮已降级且不会阻断普通消息")
+                for server_id in self.mcp_startup_status.failed_servers
+            )
             prompt = build_system_prompt(
                 workspace=workspace,
                 permission_mode=policy.mode,
@@ -865,7 +894,7 @@ class Windcode:
                 skills=run_extensions.skills.search(),
                 mcp_direct_servers=direct_servers,
                 mcp_search_servers=search_servers,
-                mcp_unavailable_servers=unavailable_mcp_servers,
+                mcp_unavailable_servers=(*unavailable_mcp_servers, *startup_unavailable),
                 memory_enabled=run_memory is not None,
             )
             if memory_context:
@@ -1142,14 +1171,22 @@ class Windcode:
 
         async def run_with_subagents() -> RunResult:
             try:
-                await self.wait_for_required_mcp()
+                # MCP startup is intentionally background work. A normal model turn must not wait
+                # for every required server; expose only the servers that were ready when this run
+                # started, while the remaining servers stay available through on-demand search.
+                startup_finished = not self.required_mcp_loading
+                ready_required_servers = (
+                    self._mcp_ready_required_servers if startup_finished else ()
+                )
                 await run_extensions.mcp_capabilities.register_direct_tools(
                     run_registry,
                     direct_tool_limit=self.config.extensions.direct_tool_limit,
+                    server_ids=ready_required_servers,
                 )
                 await run_extensions.mcp_capabilities.register_direct_tools(
                     child_tools,
                     direct_tool_limit=self.config.extensions.direct_tool_limit,
+                    server_ids=ready_required_servers,
                 )
                 await run_extensions.mcp_capabilities.register_selected_tools(
                     run_registry, self._mcp_selected_tools
@@ -1157,11 +1194,12 @@ class Windcode:
                 await run_extensions.mcp_capabilities.register_selected_tools(
                     child_tools, self._mcp_selected_tools
                 )
-                direct_servers = self._mcp_direct_servers
+                direct_servers = self._mcp_direct_servers if startup_finished else ()
+                failed_servers = set(self.mcp_startup_status.failed_servers)
                 search_servers = tuple(
                     server_id
                     for server_id in run_extensions.mcp.server_ids
-                    if server_id not in set(direct_servers)
+                    if server_id not in set(direct_servers) and server_id not in failed_servers
                 )
                 loop.system_prompt = make_system_prompt(direct_servers, search_servers)
                 if memory_context:
