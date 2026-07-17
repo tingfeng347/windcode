@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import ClassVar, cast
 
 from rich.markup import escape
@@ -64,7 +65,7 @@ class ApprovalWidget(Vertical, can_focus=True):
                 else escape(self.request.arguments_summary)
             )
             if self.request.tool_name == "shell" and arguments:
-                shell = "PowerShell" if self.request.sandbox_backend == "windows-helper" else "bash"
+                shell = "PowerShell" if os.name == "nt" else "bash"
                 lines.append(f"  [bold cyan]{shell}:[/bold cyan] {arguments}")
             elif arguments:
                 lines.append(f"  [bold cyan]{tool_name}:[/bold cyan] {arguments}")

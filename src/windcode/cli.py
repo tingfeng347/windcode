@@ -81,41 +81,6 @@ def build_extensions_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def build_sandbox_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="windcode sandbox")
-    parser.add_argument("action", choices=("setup", "status"))
-    parser.add_argument("--workspace", type=Path, default=Path.cwd())
-    parser.add_argument("--json", action="store_true", dest="json_output")
-    return parser
-
-
-def _run_sandbox(argv: Sequence[str]) -> int:
-    namespace = build_sandbox_parser().parse_args(argv)
-    from windcode.sandbox import WindowsSandbox, setup_windows_sandbox
-
-    workspace: Path = namespace.workspace.expanduser().resolve()
-    if str(namespace.action) == "setup":
-        payload: object = setup_windows_sandbox()
-    else:
-        status = WindowsSandbox(workspace).status
-        payload = {
-            "backend": status.backend,
-            "state": status.state.value,
-            "capabilities": {
-                "filesystem_isolation": status.capabilities.filesystem_isolation,
-                "network_isolation": status.capabilities.network_isolation,
-                "process_isolation": status.capabilities.process_isolation,
-            },
-            "warning": status.warning,
-            "remediation": status.remediation,
-        }
-    if namespace.json_output:
-        print(json.dumps(payload, default=str, sort_keys=True))
-    else:
-        print(payload)
-    return 0
-
-
 async def _run_extensions(argv: Sequence[str]) -> int:
     namespace = build_extensions_parser().parse_args(argv)
     workspace: Path = namespace.workspace.expanduser().resolve()
@@ -185,12 +150,6 @@ def run(argv: Sequence[str] | None = None) -> int:
             print(f"windcode: {exc}", file=sys.stderr)
             return 4
         except OSError as exc:
-            print(f"windcode: {exc}", file=sys.stderr)
-            return 5
-    if arguments and arguments[0] == "sandbox":
-        try:
-            return _run_sandbox(arguments[1:])
-        except (OSError, RuntimeError, json.JSONDecodeError) as exc:
             print(f"windcode: {exc}", file=sys.stderr)
             return 5
     try:

@@ -18,11 +18,10 @@ def detect_bubblewrap(executable: str = "bwrap", *, platform: str | None = None)
         return SandboxStatus(
             False,
             None,
-            "native Windows filesystem sandbox is unavailable; PowerShell commands require "
-            "explicit approval",
+            "Windows system sandbox is unavailable; PowerShell commands require explicit approval",
             "bubblewrap",
             capabilities,
-            "Install the Windcode Windows sandbox helper.",
+            "Approve each PowerShell command explicitly or select full_access mode.",
         )
     located = shutil.which(executable)
     if located is None:

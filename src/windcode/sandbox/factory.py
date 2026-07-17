@@ -7,7 +7,6 @@ from windcode.sandbox.base import SandboxBackend
 from windcode.sandbox.bwrap import BubblewrapSandbox
 from windcode.sandbox.models import SandboxPolicy, SandboxPreset
 from windcode.sandbox.seatbelt import SeatbeltSandbox
-from windcode.sandbox.windows import WindowsSandbox
 
 
 def create_sandbox_backend(
@@ -26,6 +25,4 @@ def create_sandbox_backend(
         return BubblewrapSandbox(workspace, writable_paths=writable_roots), policy
     if selected == "darwin":
         return SeatbeltSandbox(workspace), policy
-    if selected in {"win32", "cygwin"}:
-        return WindowsSandbox(workspace), policy
     return None, policy

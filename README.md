@@ -19,24 +19,15 @@ Windcode 是一个Coding Agent。它可以在本地
 - 多子智能体并行执行与独立 Worktree
 - 项目级长期记忆：用户画像、项目事实、经验、SOP 与主动查询
 - MCP Server、Skills、Hooks 和本地插件扩展
-- 四种权限模式与 Linux Bubblewrap、macOS Seatbelt、Windows helper 沙箱后端
+- 四种权限模式与 Linux Bubblewrap、macOS Seatbelt 沙箱后端
 
 
 ## 快速开始
 
 环境要求：Linux、macOS 或 Windows，Python 3.11+、[uv](https://docs.astral.sh/uv/)。
 
-Linux 使用 Bubblewrap，macOS 使用 Seatbelt。Windows wheel 随包携带 Rust helper，使用按
-读写与网络能力分离的 AppContainer 身份、workspace ACL、SID 绑定的 WFP/Windows Firewall
-规则和 kill-on-close Job Object。首次使用需在“以管理员身份运行”的终端执行：
-
-```powershell
-windcode sandbox setup --json
-windcode sandbox status --json
-```
-
-只有 helper 同时报告文件、网络和进程隔离已就绪时才自动执行；初始化缺失、规则被删除或
-协议版本不匹配都会 fail closed，并要求显式批准单次沙箱外运行。
+Linux 使用 Bubblewrap，macOS 使用 Seatbelt。Windows 暂不提供系统级进程沙箱，PowerShell
+命令通过权限策略逐次授权；`full_access` 模式下可按配置直接执行。
 
 沙箱 preset 为 `read_only`、默认的 `workspace_write` 和显式的
 `danger_full_access`。旧配置 `enabled=true/false` 仍可读取，并分别映射到
@@ -123,7 +114,8 @@ required = false
 ```
 
 `enable = false` 的服务器不会连接、不会参与工具搜索，也不会注入模型上下文。`required` 只在
-服务器启用时表示启动阶段必须连接成功。扩展系统和内置的 `gaodemap-mcp` 默认开启。
+服务器启用时表示启动阶段主动连接；连接失败会显示降级状态，但不会阻断普通消息。扩展系统和
+内置的 `gaodemap-mcp` 默认开启。
 
 ## 本地状态
 
@@ -137,7 +129,7 @@ user_storage_root = "~/.windcode"
 
 用户级配置固定读取 `~/.windcode/config.toml`；项目中的 `.windcode/config.toml` 优先级更高。
 配置项目状态根时优先使用项目目录；未配置时使用 `~/.windcode`。Skill 会同时扫描两边的
-`skill/`，同名时项目级覆盖用户级。项目 `.windcode/config.toml` 和 `.windcode/` 下的运行
+`skills/`，同名时项目级覆盖用户级。项目 `.windcode/config.toml` 和 `.windcode/` 下的运行
 状态都不应提交到 Git。
 
 ## 开发

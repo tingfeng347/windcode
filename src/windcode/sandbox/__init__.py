@@ -11,7 +11,6 @@ from windcode.sandbox.models import (
     SandboxStatus,
 )
 from windcode.sandbox.seatbelt import SeatbeltSandbox
-from windcode.sandbox.windows import WindowsSandbox, find_windows_helper, setup_windows_sandbox
 
 __all__ = [
     "BubblewrapSandbox",
@@ -24,9 +23,6 @@ __all__ = [
     "SandboxState",
     "SandboxStatus",
     "SeatbeltSandbox",
-    "WindowsSandbox",
     "create_sandbox_backend",
     "detect_bubblewrap",
-    "find_windows_helper",
-    "setup_windows_sandbox",
 ]
