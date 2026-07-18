@@ -1,26 +1,84 @@
 # Windcode
 
-Windcode 是一个Coding Agent。它可以在本地
-工作区中读取和修改代码、执行命令、运行测试、恢复会话，并通过权限策略与 Linux 沙箱控制
-高风险操作。
+Windcode 是一个面向真实代码仓库的终端 Coding Agent。它可以理解项目、修改文件、执行命令、
+运行测试，并在高风险操作前请求授权；同时提供多模型接入、多智能体协作、MCP/Skills/Plugins
+扩展、会话恢复和长期记忆。交互界面基于 Textual，核心运行时也可以作为 Python SDK 使用。
 
-![alt text](assets/image.png)
-![alt text](assets/image1.png)
-![alt text](assets/image2.png)
-![alt text](assets/image3.png)
-![alt text](assets/image4.png)
+## 演示
+![2026-07-18 23-16-58.png](https://pic1.imgdb.cn/i/033rgL8ytDrAySvBniqhgs.png)
+
+---
+
+![2026-07-19 00-21-22.png](https://pic1.imgdb.cn/i/033rhoraACOSdTMUADV8IH.png)
+
+---
+
+![2026-07-19 00-12-18.png](https://pic1.imgdb.cn/i/033rhryNejzD7nUXIJxqqT.png)
+
+---
+
+![2026-07-19 00-28-41.png](https://pic1.imgdb.cn/i/033ri07lrFD4Pt6SIu3Maz.png)
 
 ## 功能
 
-- Textual 终端工作台与 Python SDK
-- Anthropic Messages、OpenAI Responses 和 OpenAI-compatible 模型协议
-- 流式输出、工具调用、审批、取消、重试与显式模型回退
-- 会话恢复、历史回退、上下文压缩和本地 trace
-- 多子智能体并行执行与独立 Worktree
-- 项目级长期记忆：用户画像、项目事实、经验、SOP 与主动查询
-- MCP Server、Skills、Hooks 和本地插件扩展
-- 四种权限模式与 Linux Bubblewrap、macOS Seatbelt 沙箱后端
+### 代码工作台
 
+- 在同一个 TUI 中完成对话、文件读取与搜索、补丁修改、Shell 命令、测试和构建。
+- 工具调用、推理状态、耗时、Token 用量、审批请求和子智能体进度实时展示。
+- 支持任务队列、运行中取消、模型流重试以及空闲超时，网络流中断不会无限卡住界面。
+- 内置 Provider、扩展、长期记忆、会话和历史回退管理界面。
+- 提供异步 Python SDK，可订阅结构化事件、响应审批、取消运行、压缩上下文和管理子智能体。
+
+### 多模型与可靠运行
+
+- 原生支持 Anthropic Messages、OpenAI Responses 和 OpenAI-compatible 三种协议。
+- 内置 OpenAI、Anthropic、DeepSeek、Moonshot AI、SiliconFlow、OpenRouter、智谱 AI、
+  阿里云、Groq、Mistral、xAI 和 Google Gemini 配置预设，也可连接自定义兼容端点。
+- 支持主 Provider、显式 fallback chain、流式文本/推理/工具调用、网络错误重试和模型回退。
+- 模型流连续无数据时自动超时并重试，`model_stream_idle_timeout_seconds` 可配置。
+- 上下文达到阈值时自动压缩，也可以使用 `/compact` 主动请求压缩。
+
+### 多智能体协作
+
+- 支持 `explicit` 和 `proactive` 两种委派策略，以及 researcher、worker、verifier 三类角色。
+- 可以并行派发独立任务，也可以通过 `collaborate_subagents` 进行 division、negotiation 或
+  hybrid 协作，由参与者分轮交换结果，再由独立 verifier 汇总。
+- 子智能体之间支持受控消息传递、同步轮次、超时、取消和聚合预算，TUI 会持续显示每个任务状态。
+- 写任务使用独立 Git Worktree，完成后检查提交、变更文件和验证结果，再由父智能体决定是否集成。
+- 子智能体继承经过角色和任务类型过滤的工具、MCP、Skills、权限与沙箱边界，禁止递归创建子智能体。
+
+### MCP、Skills、Hooks 与插件
+
+- MCP 同时支持 stdio 和 Streamable HTTP，可调用 Tools、Resources、Resource Templates 和 Prompts。
+- `enable` 控制服务器是否可见，`required` 只控制已启用服务器是否在启动阶段主动连接；单个 MCP
+  加载失败会显示降级状态，不会阻断普通对话。
+- 少量 MCP 工具可直接注入，较大目录通过 `search_mcp_tools` 按需发现；模型调用名统一使用
+  `mcp_` 前缀，同名工具会自动消歧。
+- Skills 从项目 `.windcode/skills/<skill-name>/SKILL.md` 和用户
+  `~/.windcode/skills/<skill-name>/SKILL.md` 发现，同名时项目级覆盖用户级，并支持 `$skill-name` 激活。
+- 本地插件通过 `.windcode-plugin/plugin.toml` 组合 Skills、MCP Servers、Hooks 和自定义命令，
+  支持安装、信任、启用、禁用、检查和显式 reload。
+- Hooks 覆盖会话、运行、工具策略前后、权限申请、上下文压缩及子智能体生命周期；决策 Hook
+  可以拒绝操作或收紧工具权限。
+
+### 会话、记忆与可观测性
+
+- 会话和事件增量持久化，支持恢复已有会话、选择历史输入回退、修改原输入后重新发送。
+- 长期记忆区分用户画像、项目事实、经验、SOP 和参考资料，支持候选确认、拒绝、遗忘、搜索、
+  激活策略和索引重建。
+- 稳定用户事实可以自动激活；经验和 SOP 结合真实变更与验证结果生成，避免把未验证结论直接固化。
+- Trace 记录模型、工具、审批、扩展和子智能体事件，并提供保留天数、容量和瞬态事件配置。
+- 大型工具结果可外置为会话 Artifact，减少上下文膨胀，同时保留可追溯引用。
+
+### 权限、沙箱与跨平台
+
+- 提供 `plan`、`default`、`accept_edits` 和 `full_access` 四种权限模式，可在运行中切换。
+- 根据工具副作用、命令解析、工作目录、网络需求和沙箱状态计算风险，并支持仅本次允许、拒绝、
+  取消命令以及项目级命令前缀规则。
+- Linux 使用 Bubblewrap，macOS 使用 Seatbelt；支持 `read_only`、`workspace_write` 和
+  `danger_full_access` 三种沙箱 preset。
+- Windows 默认使用 PowerShell。当前不提供系统级文件沙箱，因此会如实显示降级状态，并继续由
+  权限策略保护高风险命令，而不会伪装成已隔离。
 
 ## 快速开始
 
@@ -84,20 +142,24 @@ uv run windcode .
 --sandbox / --no-sandbox
 ```
 
-## 常用命令
+## 常用命令与快捷键
 
 ```text
 /new                         新建会话
 /resume [SESSION_ID]         恢复会话
-/history                     查看历史节点
-/rewind RECORD_ID            回退到历史记录
-/model                       管理模型与 Provider
-/mode MODE                   切换权限模式
-/memory                      管理长期记忆
-/extensions                  管理扩展
+/rewind                      选择历史输入并回退
+/model [PROVIDER_ALIAS]      管理或切换模型与 Provider
+/memory [ACTION]             管理长期记忆
+/extensions [ACTION] [ID]    管理扩展、插件与信任状态
 /compact                     压缩当前上下文
+/clear                       清空当前消息显示
 /agents                      查看子智能体
 /status                      查看运行状态
+/help                        查看全部命令及插件命令
+/quit                        退出 Windcode
+
+Shift+Tab                    循环切换权限模式
+Esc（连续两次）              中断当前运行
 ```
 
 ## MCP Server
@@ -113,9 +175,51 @@ enable = true
 required = false
 ```
 
+stdio MCP 示例：
+
+```toml
+[extensions.mcp_servers.local-example]
+transport = "stdio"
+command = "uvx"
+args = ["example-mcp-server"]
+enable = true
+required = false
+```
+
 `enable = false` 的服务器不会连接、不会参与工具搜索，也不会注入模型上下文。`required` 只在
-服务器启用时表示启动阶段主动连接；连接失败会显示降级状态，但不会阻断普通消息。扩展系统和
-内置的 `gaodemap-mcp` 默认开启。
+服务器启用时表示启动阶段主动连接；连接失败会显示降级状态，但不会阻断普通消息。示例配置中
+包含 `gaodemap-mcp`，默认保持禁用，需要时再显式开启。
+
+## 多智能体配置
+
+```toml
+[subagents]
+mode = "explicit" # explicit | proactive
+max_tasks = 8
+max_concurrent = 4
+max_model_steps = 20
+max_tool_calls = 50
+max_runtime_seconds = 900
+max_total_model_steps = 80
+max_total_tool_calls = 200
+```
+
+`explicit` 只在用户明确要求委派、并行或使用子智能体时开放委派；`proactive` 允许模型根据任务
+复杂度主动拆分。并发数、单任务预算和聚合预算会同时生效。
+
+## 运行预算与流超时
+
+```toml
+[budgets]
+max_model_steps = 40
+max_tool_calls = 100
+max_runtime_seconds = 1800
+model_stream_idle_timeout_seconds = 60
+shell_timeout_seconds = 120
+```
+
+模型流在配置时间内没有产生任何事件时会按网络错误进入重试/回退流程；手动中断则记录为正常
+取消，不会被包装成 Provider 失败。
 
 ## 本地状态
 
@@ -131,52 +235,6 @@ user_storage_root = "~/.windcode"
 配置项目状态根时优先使用项目目录；未配置时使用 `~/.windcode`。Skill 会同时扫描两边的
 `skills/`，同名时项目级覆盖用户级。项目 `.windcode/config.toml` 和 `.windcode/` 下的运行
 状态都不应提交到 Git。
-
-## 开发
-
-```bash
-uv run ruff format --check .
-uv run ruff check .
-uv run pyright
-uv run pytest -q
-uv build
-```
-
-## 构建与发布
-
-发布前更新 `pyproject.toml` 和 `src/windcode/__init__.py` 中的版本号，并完成完整检查：
-
-```bash
-uv sync --frozen --all-groups
-uv run ruff format --check .
-uv run ruff check .
-uv run pyright
-uv run pytest -q
-uv build --no-sources
-```
-
-可以先发布到 TestPyPI 验证：
-
-```bash
-uv publish \
-  --publish-url https://test.pypi.org/legacy/ \
-  --token "$TEST_PYPI_TOKEN"
-```
-
-正式版本通过 GitHub Release 自动发布：创建与项目版本一致的标签，例如 `v0.1.0`，然后发布
-GitHub Release。`.github/workflows/publish.yml` 会验证标签、运行测试、构建发行包，并使用
-PyPI Trusted Publishing 发布。首次发布前需要在 PyPI 配置以下 Trusted Publisher：
-
-```text
-Owner: tingfeng347
-Repository: windcode
-Workflow: publish.yml
-Environment: pypi
-```
-
-PyPI 不允许覆盖已经发布的同名版本；重新发布前必须增加版本号。
-
-生产代码位于 `src/windcode/`。本地 `tests/` 与 `spec/` 目录由 Git 忽略，仅用于开发和规格管理。
 
 ## License
 
