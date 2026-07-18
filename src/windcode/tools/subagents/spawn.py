@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import cast
+from collections.abc import Mapping
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -86,6 +87,26 @@ class SpawnSubagentsTool:
 
     def __init__(self, coordinator: SubagentCoordinator) -> None:
         self.coordinator = coordinator
+
+    def approval_summary(self, arguments: Mapping[str, Any]) -> str:
+        raw_tasks = arguments.get("tasks")
+        if not isinstance(raw_tasks, (list, tuple)):
+            return "创建子智能体"
+        raw_values = cast(list[object] | tuple[object, ...], raw_tasks)
+        tasks = tuple(
+            cast(dict[str, object], item) for item in raw_values if isinstance(item, dict)
+        )
+        read_count = sum(item.get("kind") == SubagentTaskKind.READ.value for item in tasks)
+        write_count = sum(item.get("kind") == SubagentTaskKind.WRITE.value for item in tasks)
+        network_count = sum(item.get("requires_network") is True for item in tasks)
+        details = [f"创建 {len(tasks)} 个子智能体"]
+        if read_count:
+            details.append(f"只读 {read_count} 个")
+        if write_count:
+            details.append(f"写入 {write_count} 个")
+        if network_count:
+            details.append(f"联网 {network_count} 个")
+        return ", ".join(details)
 
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
         del context

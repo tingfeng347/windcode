@@ -56,6 +56,10 @@ class _CommandAnalyzer(Protocol):
     def analyze(self, arguments: Mapping[str, Any]) -> CommandAnalysis: ...
 
 
+class _ApprovalSummarizer(Protocol):
+    def approval_summary(self, arguments: Mapping[str, Any]) -> str: ...
+
+
 class ToolScheduler:
     def __init__(
         self,
@@ -98,6 +102,8 @@ class ToolScheduler:
             effects.add(ToolEffect.OUTSIDE_WORKSPACE)
         command = call.arguments.get("command")
         safe_command = command if isinstance(command, str) else None
+        raw_cwd = call.arguments.get("cwd")
+        cwd = raw_cwd if isinstance(raw_cwd, str) else "." if call.tool_name == "shell" else None
         analysis: CommandAnalysis | None = None
         analyzer = getattr(tool, "analyze", None)
         if call.tool_name == "shell" and callable(analyzer):
@@ -122,15 +128,21 @@ class ToolScheduler:
             escalation_reason = getattr(getattr(sandbox, "status", None), "warning", None)
             if escalation_reason is None and call.tool_name == "shell":
                 escalation_reason = "the system sandbox is disabled or unavailable"
+        summarizer = getattr(tool, "approval_summary", None)
+        summary = (
+            cast(_ApprovalSummarizer, tool).approval_summary(call.arguments)
+            if callable(summarizer)
+            else f"执行工具: {call.tool_name}"
+        )
         return PolicyRequest(
             request_id=uuid4().hex,
             call_id=call.call_id,
             tool_name=call.tool_name,
             effects=frozenset(effects),
-            summary=f"执行工具: {call.tool_name}",
+            summary=summary,
             path=path,
             command=safe_command,
-            cwd=str(call.arguments.get("cwd", ".")),
+            cwd=cwd,
             network=network,
             sandbox_backend=getattr(getattr(sandbox, "status", None), "backend", None),
             sandbox_preset=getattr(getattr(sandbox_policy, "preset", None), "value", None),

@@ -74,12 +74,13 @@ class ApprovalWidget(Vertical, can_focus=True):
         summary = escape(self.request.summary)
         if self.request.cwd:
             lines.append(f"  cwd: {escape(self.request.cwd)}")
-        sandbox = self.request.sandbox_backend or "none"
-        preset = self.request.sandbox_preset or "none"
-        lines.append(
-            f"  沙箱: {escape(sandbox)} / {escape(preset)} · "
-            f"网络: {'允许' if self.request.network else '禁用'}"
-        )
+        if self.request.sandbox_backend is not None or self.request.sandbox_preset is not None:
+            sandbox = self.request.sandbox_backend or "none"
+            preset = self.request.sandbox_preset or "none"
+            lines.append(
+                f"  沙箱: {escape(sandbox)} / {escape(preset)} · "
+                f"网络: {'允许' if self.request.network else '禁用'}"
+            )
         if self.request.escalation_reason:
             lines.append(f"  提权原因: {escape(self.request.escalation_reason)}")
         if self.request.proposed_rule:
