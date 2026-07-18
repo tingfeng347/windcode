@@ -4,11 +4,22 @@ import asyncio
 import os
 import signal
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from time import monotonic
+from typing import cast
 
 from windcode.domain.tools import ToolContext, ToolResult
 from windcode.sandbox import LaunchSpec, SandboxBackend
+
+
+def _kill_process_group(pid: int, signal_name: str) -> None:
+    """Send a POSIX signal without exposing platform-specific attributes to type checking."""
+    killpg = cast(Callable[[int, int], None] | None, getattr(os, "killpg", None))
+    selected_signal = cast(int | None, getattr(signal, signal_name, None))
+    if killpg is None or selected_signal is None:
+        raise RuntimeError("process-group signaling is unavailable on this platform")
+    killpg(pid, selected_signal)
 
 
 @dataclass(slots=True)
@@ -45,14 +56,14 @@ async def terminate_process_tree(process: asyncio.subprocess.Process, *, windows
         await process.wait()
         return
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        _kill_process_group(process.pid, "SIGTERM")
     except ProcessLookupError:
         return
     try:
         await asyncio.wait_for(process.wait(), timeout=0.5)
     except TimeoutError:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            _kill_process_group(process.pid, "SIGKILL")
         except ProcessLookupError:
             pass
         await process.wait()
