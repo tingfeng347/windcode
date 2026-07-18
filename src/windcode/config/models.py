@@ -39,6 +39,7 @@ class BudgetConfig(StrictModel):
     max_model_steps: int = Field(default=40, ge=1)
     max_tool_calls: int = Field(default=100, ge=1)
     max_runtime_seconds: float = Field(default=1800.0, gt=0)
+    model_stream_idle_timeout_seconds: float = Field(default=60.0, gt=0)
     shell_timeout_seconds: float = Field(default=120.0, gt=0)
 
 

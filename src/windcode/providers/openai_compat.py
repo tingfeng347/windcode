@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Callable, Mapping
 from typing import cast
@@ -227,5 +228,7 @@ class OpenAICompatibleTransport(BaseTransport):
                     "chat completion stream ended without a finish reason",
                     ErrorCategory.NETWORK,
                 )
+        except asyncio.CancelledError:
+            raise
         except BaseException as exc:
             raise map_provider_error(exc) from exc

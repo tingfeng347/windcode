@@ -16,6 +16,7 @@ base_url = "https://api.deepseek.com/v1"
 max_model_steps = 40
 max_tool_calls = 100
 max_runtime_seconds = 1800
+model_stream_idle_timeout_seconds = 60
 shell_timeout_seconds = 120
 
 [permission]

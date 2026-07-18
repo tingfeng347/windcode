@@ -151,11 +151,16 @@ class RunHandle:
             self._coordinator.approvals.respond(response)
 
     async def cancel(self) -> None:
-        await self._coordinator.shutdown("parent run cancelled")
         self._control.cancel()
         if not self._task.done():
             self._task.cancel()
-        await self.result()
+        try:
+            await self.result()
+        finally:
+            # The run wrapper normally performs this cleanup after publishing
+            # RunCancelled. Keep the explicit shutdown as an idempotent safety
+            # net for cancellation before the wrapper coroutine starts.
+            await self._coordinator.shutdown("parent run cancelled")
 
     async def result(self) -> RunResult:
         if self._result is not None:
@@ -1155,6 +1160,9 @@ class Windcode:
             control=control,
             event_bus=bus,
             system_prompt=system_prompt,
+            model_stream_idle_timeout_seconds=(
+                self.config.budgets.model_stream_idle_timeout_seconds
+            ),
             token_estimator=TokenEstimator(
                 self.config.context.window_tokens,
                 compaction_threshold=self.config.context.compaction_threshold,

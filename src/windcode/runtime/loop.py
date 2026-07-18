@@ -94,6 +94,7 @@ class AgentLoop:
         event_bus: EventBus,
         system_prompt: str,
         max_output_tokens: int | None = None,
+        model_stream_idle_timeout_seconds: float = 60.0,
         token_estimator: TokenEstimator | None = None,
         artifact_store: ArtifactStore | None = None,
         preserve_recent_turns: int = 8,
@@ -114,6 +115,7 @@ class AgentLoop:
         self.event_bus = event_bus
         self.system_prompt = system_prompt
         self.max_output_tokens = max_output_tokens
+        self.model_stream_idle_timeout_seconds = model_stream_idle_timeout_seconds
         self.token_estimator = token_estimator
         self.artifact_store = artifact_store
         self.preserve_recent_turns = preserve_recent_turns
@@ -399,6 +401,7 @@ class AgentLoop:
                     request,
                     on_retry=self._on_retry,
                     on_fallback=self._on_fallback,
+                    idle_timeout_seconds=self.model_stream_idle_timeout_seconds,
                 ):
                     self.control.check()
                     if isinstance(event, TextDelta):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
 from typing import cast
@@ -211,5 +212,7 @@ class AnthropicTransport(BaseTransport):
                     yield event
             if not completed:
                 yield ModelCompleted(StopReason.STOP, usage)
+        except asyncio.CancelledError:
+            raise
         except BaseException as exc:
             raise map_provider_error(exc) from exc

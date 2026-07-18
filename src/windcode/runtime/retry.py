@@ -17,6 +17,24 @@ FallbackCallback = Callable[[ModelTarget, ModelTarget, WindcodeError], Awaitable
 SleepCallback = Callable[[float], Awaitable[None]]
 
 
+async def _stream_with_idle_timeout(
+    stream: AsyncIterator[ModelEvent],
+    timeout_seconds: float,
+) -> AsyncIterator[ModelEvent]:
+    iterator = stream.__aiter__()
+    while True:
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                event = await anext(iterator)
+        except StopAsyncIteration:
+            return
+        except TimeoutError as exc:
+            raise TimeoutError(
+                f"model stream produced no data for {timeout_seconds:g} seconds"
+            ) from exc
+        yield event
+
+
 def portable_messages(messages: tuple[Message, ...]) -> tuple[Message, ...]:
     portable: list[Message] = []
     for message in messages:
@@ -35,6 +53,7 @@ async def stream_with_retry(
     on_retry: RetryCallback,
     on_fallback: FallbackCallback,
     max_retries: int = 2,
+    idle_timeout_seconds: float = 60.0,
     sleep: SleepCallback = asyncio.sleep,
 ) -> AsyncIterator[tuple[ModelTarget, ModelEvent]]:
     if not chain:
@@ -45,7 +64,9 @@ async def stream_with_retry(
         while True:
             provider_request = replace(current_request, model=target.model)
             try:
-                async for event in target.transport.stream(provider_request):
+                async for event in _stream_with_idle_timeout(
+                    target.transport.stream(provider_request), idle_timeout_seconds
+                ):
                     yield target, event
                 return
             except BaseException as exc:
