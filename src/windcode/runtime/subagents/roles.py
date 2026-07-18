@@ -62,7 +62,7 @@ def resolve_role_tools(
     network_tools = frozenset(
         name
         for name in parent_tools
-        if "__" in name
+        if name.startswith("mcp_")
         or name in {"list_mcp_servers", "search_mcp_tools", "read_mcp_resource", "get_mcp_prompt"}
     )
     # Task kind is an independent capability boundary. In particular, a worker

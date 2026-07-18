@@ -27,6 +27,7 @@ from windcode.extensions.mcp.catalog import (
     McpResourceDefinition,
     McpToolDefinition,
     build_catalog,
+    mcp_tool_wire_name,
 )
 from windcode.extensions.mcp.runtime import McpRuntime
 from windcode.extensions.models import CapabilityKind, CapabilityRecord
@@ -237,12 +238,33 @@ class McpCapabilityService:
         raise KeyError(f"unknown MCP tool: {stable_id}")
 
     async def adapter(self, stable_id: str) -> McpToolAdapter:
-        definition = await self.tool(stable_id)
+        definitions = await self.search_tools()
+        try:
+            definition = next(item for item in definitions if item.stable_id == stable_id)
+        except StopIteration as exc:
+            raise KeyError(f"unknown MCP tool: {stable_id}") from exc
+        wire_name = self._wire_name(definition, definitions)
         return McpToolAdapter(
             definition,
             self.runtime,
+            wire_name=wire_name,
             artifact_store=self.artifact_store,
             output_limit=self.content_limit,
+        )
+
+    @staticmethod
+    def _wire_name(
+        definition: McpToolDefinition,
+        definitions: tuple[McpToolDefinition, ...],
+    ) -> str:
+        base = mcp_tool_wire_name(definition.server_id, definition.name)
+        collides = (
+            sum(mcp_tool_wire_name(item.server_id, item.name) == base for item in definitions) > 1
+        )
+        return mcp_tool_wire_name(
+            definition.server_id,
+            definition.name,
+            disambiguate=collides,
         )
 
     async def register_selected_tools(
@@ -284,9 +306,11 @@ class McpCapabilityService:
             return ()
         registered: list[str] = []
         for definition in sorted(definitions, key=lambda item: item.stable_id):
+            wire_name = self._wire_name(definition, definitions)
             adapter = McpToolAdapter(
                 definition,
                 self.runtime,
+                wire_name=wire_name,
                 artifact_store=self.artifact_store,
                 output_limit=self.content_limit,
             )

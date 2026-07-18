@@ -12,6 +12,7 @@ from windcode.domain.subagents import SubagentRecord, SubagentTaskKind
 from windcode.domain.tools import ToolContext
 from windcode.extensions import ExtensionSnapshot
 from windcode.extensions.events import extension_event
+from windcode.extensions.mcp.adapter import McpToolAdapter
 from windcode.extensions.skills.loader import SkillLoader
 from windcode.extensions.skills.tools import (
     SkillActivationResult,
@@ -41,6 +42,18 @@ from windcode.tools.agent_collaboration import (
     register_coordination_tool,
 )
 from windcode.tools.shell import ShellTool
+
+
+def _mcp_server_ids(registry: ToolRegistry) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                tool.definition.server_id
+                for name in registry.names()
+                if isinstance((tool := registry.get(name)), McpToolAdapter)
+            }
+        )
+    )
 
 
 def _git_common_directory(workspace: Path) -> Path | None:
@@ -319,9 +332,7 @@ class ChildRuntimeFactory:
             tools=registry,
             is_subagent=True,
             skills=(skill_runtime.search() if "load_skill" in registry.names() else ()),
-            mcp_direct_servers=tuple(
-                name.split("__", 1)[0] for name in registry.names() if "__" in name
-            ),
+            mcp_direct_servers=_mcp_server_ids(registry),
         )
         collaboration_instructions = (
             "This is synchronized team work. You must use exchange_round for every round required "
@@ -350,6 +361,9 @@ class ChildRuntimeFactory:
             control=control,
             event_bus=event_bus,
             system_prompt=system_prompt,
+            model_stream_idle_timeout_seconds=(
+                self.config.budgets.model_stream_idle_timeout_seconds
+            ),
             token_estimator=TokenEstimator(
                 self.config.context.window_tokens,
                 compaction_threshold=self.config.context.compaction_threshold,

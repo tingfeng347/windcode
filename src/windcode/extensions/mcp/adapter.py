@@ -24,17 +24,21 @@ class McpToolAdapter:
         definition: McpToolDefinition,
         runtime: McpRuntime,
         *,
+        wire_name: str | None = None,
         artifact_store: ArtifactStore | None = None,
         output_limit: int = 20_000,
     ) -> None:
         self.definition = definition
         self.runtime = runtime
+        self._wire_name = wire_name
         self.artifact_store = artifact_store
         self.output_limit = output_limit
 
     @property
     def name(self) -> str:
-        return mcp_tool_wire_name(self.definition.server_id, self.definition.name)
+        return self._wire_name or mcp_tool_wire_name(
+            self.definition.server_id, self.definition.name
+        )
 
     @property
     def description(self) -> str:

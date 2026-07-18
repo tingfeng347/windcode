@@ -22,16 +22,22 @@ _WIRE_UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
 _WIRE_MAX = 64
 
 
-def mcp_tool_wire_name(server_id: str, tool_name: str) -> str:
+def mcp_tool_wire_name(
+    server_id: str,
+    tool_name: str,
+    *,
+    disambiguate: bool = False,
+) -> str:
     """Derive a provider-safe function name for an MCP tool.
 
-    Keeps the ``{server}__{tool}`` shape when it fits the provider charset
-    and length limit, falling back to a deterministic hash suffix otherwise so
-    distinct tools never collide on the wire.
+    MCP tools use the readable ``mcp_{tool}`` shape. A deterministic suffix is
+    added when the name exceeds the provider limit or when the caller detects
+    the same wire name on more than one server.
     """
 
-    base = _WIRE_UNSAFE.sub("_", f"{server_id}__{tool_name}")
-    if len(base) <= _WIRE_MAX:
+    normalized_tool = _WIRE_UNSAFE.sub("_", tool_name)
+    base = normalized_tool if normalized_tool.startswith("mcp_") else f"mcp_{normalized_tool}"
+    if len(base) <= _WIRE_MAX and not disambiguate:
         return base
     digest = hashlib.sha256(f"{server_id}\0{tool_name}".encode()).hexdigest()[:8]
     return f"{base[: _WIRE_MAX - len(digest) - 1]}_{digest}"
