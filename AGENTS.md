@@ -57,6 +57,8 @@ explicit SDK state_root
 ```
 
 The root contains `skills/`, `memory/`, `sessions/`, `traces/`, `extensions/`, and `worktrees/`.
+Project Skills live at `.windcode/skills/<skill-name>/SKILL.md`; user Skills live at
+`~/.windcode/skills/<skill-name>/SKILL.md`.
 `.windcode/config.toml`, runtime directories under `.windcode/`, `tests/`, and `spec/` are local-only
 ignored paths.
 Never remove, rewrite, force-add, or commit them without an explicit user request.
