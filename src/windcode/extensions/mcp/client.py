@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from types import TracebackType
-from typing import Self, TextIO
+from typing import Self, TextIO, cast
 
 import httpx
 from mcp import ClientSession, StdioServerParameters
@@ -116,9 +116,11 @@ class McpClient:
         try:
             async with asyncio.timeout(self.connect_timeout):
                 if isinstance(self.definition, ResolvedStdioServer):
-                    self._stderr_file = tempfile.TemporaryFile(
-                        mode="w+", encoding="utf-8", errors="replace"
+                    stderr_file = cast(
+                        TextIO,
+                        tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace"),
                     )
+                    self._stderr_file = stderr_file
                     minimum_env = {
                         key: value
                         for key in ("PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR")
@@ -133,7 +135,7 @@ class McpClient:
                                 cwd=self.definition.cwd,
                                 env=minimum_env,
                             ),
-                            errlog=self._stderr_file,
+                            errlog=stderr_file,
                         )
                     )
                     read_stream, write_stream = streams
