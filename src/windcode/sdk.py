@@ -8,7 +8,7 @@ from types import TracebackType
 from typing import Any, Self, cast
 from uuid import uuid4
 
-from windcode.auth import CredentialStore, FileCredentialStore
+from windcode.auth import CredentialStore, CredentialStoreError, FileCredentialStore
 from windcode.config import (
     AppConfig,
     PermissionMode,
@@ -79,7 +79,12 @@ from windcode.memory import (
 from windcode.observability import DynamicRedactor, TraceStore
 from windcode.policy import CommandRule, PolicyEngine, PolicyRequest
 from windcode.policy.rules import CommandRuleStore
-from windcode.providers import ModelTarget, ModelTransport, TransportRegistry
+from windcode.providers import (
+    ModelTarget,
+    ModelTransport,
+    ProviderConfigurationError,
+    TransportRegistry,
+)
 from windcode.runtime.control import RunBudgets, RunControl
 from windcode.runtime.event_bus import EventBus
 from windcode.runtime.loop import AgentLoop
@@ -229,6 +234,7 @@ class Windcode:
         self.workspace = (workspace or Path.cwd()).expanduser().resolve()
         self.state_root = self._resolve_state_root(state_root)
         self.transport_registry = TransportRegistry()
+        self.model_startup_error: str | None = None
         self.tool_registry: ToolRegistry | None = None
         self._default_chain: list[str] = []
         self._handles: set[RunHandle] = set()
@@ -295,17 +301,22 @@ class Windcode:
         if self.config.memory.enabled:
             self.memory_service = MemoryService(self.state_root, self.workspace)
         if self.config.providers:
-            self.transport_registry = TransportRegistry.from_config(
-                self.config,
-                credential_store=self.credential_store,
-                allow_missing=True,
-            )
-            if self.config.primary_provider is not None:
-                self._default_chain = [
-                    alias
-                    for alias in (self.config.primary_provider, *self.config.fallback_chain)
-                    if alias in self.transport_registry.aliases
-                ]
+            try:
+                self.transport_registry = TransportRegistry.from_config(
+                    self.config,
+                    credential_store=self.credential_store,
+                    allow_missing=True,
+                )
+            except (CredentialStoreError, ProviderConfigurationError) as exc:
+                self.transport_registry = TransportRegistry()
+                self.model_startup_error = str(exc)
+            else:
+                if self.config.primary_provider is not None:
+                    self._default_chain = [
+                        alias
+                        for alias in (self.config.primary_provider, *self.config.fallback_chain)
+                        if alias in self.transport_registry.aliases
+                    ]
         self.tool_registry = create_builtin_registry(
             shell_timeout=self.config.budgets.shell_timeout_seconds,
         )
@@ -470,6 +481,7 @@ class Windcode:
         primary: bool = False,
     ) -> None:
         self.transport_registry.register(alias, model, transport, replace=replace_existing)
+        self.model_startup_error = None
         if primary or not self._default_chain:
             self._default_chain = [alias]
 
@@ -493,6 +505,7 @@ class Windcode:
 
         previous_registry = self.transport_registry
         self.transport_registry = registry
+        self.model_startup_error = None
         self.config = config
         configured_chain = (
             (config.primary_provider, *config.fallback_chain)

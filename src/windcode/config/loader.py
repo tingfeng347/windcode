@@ -135,6 +135,7 @@ def load_config(
     project_file: Path | None = None,
     explicit_file: Path | None = None,
     overrides: Mapping[str, Any] | None = None,
+    tolerate_provider_errors: bool = False,
 ) -> AppConfig:
     workspace = workspace.expanduser().resolve()
     default_user = default_user_config_path()
@@ -202,4 +203,21 @@ def load_config(
     try:
         return AppConfig.model_validate(merged)
     except ValidationError as exc:
+        provider_fields = {"providers", "primary_provider", "fallback_chain"}
+        errors = exc.errors()
+        provider_errors_only = bool(errors) and all(
+            (detail["loc"] and detail["loc"][0] in provider_fields)
+            or (
+                not detail["loc"]
+                and any(
+                    marker in str(detail["msg"]) for marker in ("provider chain", "fallback_chain")
+                )
+            )
+            for detail in errors
+        )
+        if tolerate_provider_errors and provider_errors_only:
+            recovered = dict(merged)
+            for field in provider_fields:
+                recovered.pop(field, None)
+            return AppConfig.model_validate(recovered)
         raise ConfigError(last_source, str(exc)) from exc

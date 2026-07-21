@@ -85,6 +85,7 @@ class WindcodeApp(App[None]):
         state_root: Path | None = None,
         config_file: Path | None = None,
         credential_store: CredentialStore | None = None,
+        provider_startup_error: str | None = None,
     ) -> None:
         super().__init__()
         self.config = config
@@ -99,6 +100,7 @@ class WindcodeApp(App[None]):
             credential_store=credential_store,
             workspace=workspace,
         )
+        self.client.model_startup_error = provider_startup_error
         self.handle: RunHandle | None = None
         self.tool_blocks: dict[str, ToolBlock] = {}
         self.approval_widgets: dict[str, ApprovalWidget] = {}
@@ -128,6 +130,8 @@ class WindcodeApp(App[None]):
     def _model_setup_message(self) -> str | None:
         if self.client.transport_registry.aliases:
             return None
+        if self.client.model_startup_error is not None:
+            return f"模型 Provider 加载失败: {self.client.model_startup_error}; 请重新配置 Provider"
         if self.config.providers:
             return "模型 Provider 尚未连接, 请检查 API Key 或重新配置 Provider"
         return "尚未配置模型 Provider, 请先连接模型后再开始任务"

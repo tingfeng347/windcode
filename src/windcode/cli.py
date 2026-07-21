@@ -54,7 +54,7 @@ def parse_options(argv: Sequence[str] | None = None) -> CLIOptions:
     )
 
 
-def resolve_config(options: CLIOptions) -> AppConfig:
+def resolve_config(options: CLIOptions, *, tolerate_provider_errors: bool = False) -> AppConfig:
     overrides: dict[str, object] = {}
     if options.permission_mode is not None:
         overrides["permission"] = {"mode": options.permission_mode.value}
@@ -64,6 +64,7 @@ def resolve_config(options: CLIOptions) -> AppConfig:
         options.workspace,
         explicit_file=options.config_file,
         overrides=overrides,
+        tolerate_provider_errors=tolerate_provider_errors,
     )
 
 
@@ -152,12 +153,17 @@ def run(argv: Sequence[str] | None = None) -> int:
         except OSError as exc:
             print(f"windcode: {exc}", file=sys.stderr)
             return 5
+    provider_startup_error: str | None = None
     try:
         options = parse_options(arguments)
         if not options.workspace.is_dir():
             raise ConfigError(options.workspace, "workspace is not a directory")
         write_config_file = options.config_file or ensure_user_config()
-        config = resolve_config(options)
+        try:
+            config = resolve_config(options)
+        except ConfigError as exc:
+            config = resolve_config(options, tolerate_provider_errors=True)
+            provider_startup_error = str(exc)
     except (ConfigError, OSError) as exc:
         print(f"windcode: {exc}", file=sys.stderr)
         return 2
@@ -173,6 +179,7 @@ def run(argv: Sequence[str] | None = None) -> int:
             options.permission_mode.value if options.permission_mode is not None else None
         ),
         config_file=write_config_file,
+        provider_startup_error=provider_startup_error,
     )
     app.run()
     return 0
