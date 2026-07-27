@@ -116,6 +116,16 @@ uv sync --frozen --all-groups
 uv run windcode /path/to/project
 ```
 
+### Docker 镜像
+
+发布版本可从 GitHub Container Registry 拉取，并以交互模式挂载待处理的项目目录：
+
+```bash
+docker run --rm -it -v "$PWD:/workspace" ghcr.io/tingfeng347/windcode:0.2.2
+```
+
+完整的发布、私有镜像登录和状态持久化说明见 [GHCR 镜像说明](docs/ghcr.md)。
+
 首次运行不要求预先配置模型。进入 TUI 后输入 `/model` 即可连接 Provider。若希望使用文件配置，
 可将 `.windcode/config.toml.example` 复制到项目目录，再修改其中的模型和扩展设置。
 
