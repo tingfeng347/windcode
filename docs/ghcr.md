@@ -29,8 +29,8 @@ docker build --build-arg PYTHON_IMAGE=python:3.11-slim -t windcode:local .
 先确保待发布提交已经推送到 GitHub，再创建并推送一个与项目版本对应的 tag：
 
 ```bash
-git tag v0.2.2
-git push origin v0.2.2
+git tag v0.2.3
+git push origin v0.2.3
 ```
 
 随后在仓库的 **Actions** 页面查看 `Publish container image` 工作流。首次发布的 GHCR
@@ -38,7 +38,7 @@ git push origin v0.2.2
 
 镜像会包含以下 tag：
 
-- `0.2.2`、`0.2`、`0`：由语义化版本 tag 生成。
+- `0.2.3`、`0.2`、`0`：由语义化版本 tag 生成。
 - `sha-...`：对应提交的短 SHA。
 - `latest`：仅在公开仓库的版本 tag 发布时生成。
 
@@ -49,7 +49,7 @@ Windcode 是交互式终端程序，运行时请保留 TTY，并挂载需要处�
 ```bash
 docker run --rm -it \
   -v "$PWD:/workspace" \
-  ghcr.io/tingfeng347/windcode:0.2.2
+  ghcr.io/tingfeng347/windcode:0.2.3
 ```
 
 默认会打开挂载的 `/workspace`。也可以明确指定容器内的项目路径：
@@ -57,7 +57,7 @@ docker run --rm -it \
 ```bash
 docker run --rm -it \
   -v /absolute/path/to/project:/workspace \
-  ghcr.io/tingfeng347/windcode:0.2.2 \
+  ghcr.io/tingfeng347/windcode:0.2.3 \
   /workspace
 ```
 
@@ -66,7 +66,7 @@ docker run --rm -it \
 不要使用 `--user root` 覆盖该行为；如需排查容器环境，可运行：
 
 ```bash
-docker run --rm -v "$PWD:/workspace" ghcr.io/tingfeng347/windcode:0.2.2 sh -c 'id'
+docker run --rm -v "$PWD:/workspace" ghcr.io/tingfeng347/windcode:0.2.3 sh -c 'id'
 ```
 
 交互启动时，镜像会将 Docker 默认的 `TERM=xterm` 升级为 `xterm-256color`，并在未提供
@@ -79,7 +79,7 @@ docker run --rm -v "$PWD:/workspace" ghcr.io/tingfeng347/windcode:0.2.2 sh -c 'i
 docker run --rm -it \
   -v "$PWD:/workspace" \
   -v windcode-state:/home/windcode/.windcode \
-  ghcr.io/tingfeng347/windcode:0.2.2
+  ghcr.io/tingfeng347/windcode:0.2.3
 ```
 
 ## 私有镜像拉取
@@ -89,7 +89,7 @@ docker run --rm -it \
 
 ```bash
 printf '%s' "$CR_PAT" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
-docker pull ghcr.io/tingfeng347/windcode:0.2.2
+docker pull ghcr.io/tingfeng347/windcode:0.2.3
 ```
 
 发布应优先由本仓库工作流完成。GitHub 会把通过 `GITHUB_TOKEN` 发布的包自动关联到该仓库；
