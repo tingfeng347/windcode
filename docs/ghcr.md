@@ -69,6 +69,10 @@ docker run --rm -it \
 docker run --rm -v "$PWD:/workspace" ghcr.io/tingfeng347/windcode:0.2.2 sh -c 'id'
 ```
 
+交互启动时，镜像会将 Docker 默认的 `TERM=xterm` 升级为 `xterm-256color`，并在未提供
+`COLORTERM` 时启用 `truecolor`，以保留 Windcode 欢迎页的彩色样式。若终端本身不支持真彩色，
+可在运行时覆盖，例如 `-e COLORTERM=`。
+
 容器使用非 root 用户运行。若 Windcode 需要持久化会话、记忆和扩展状态，可额外挂载其状态目录：
 
 ```bash

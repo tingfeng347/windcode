@@ -5,6 +5,16 @@ workspace=/workspace
 workspace_uid=$(stat -c '%u' "$workspace")
 workspace_gid=$(stat -c '%g' "$workspace")
 
+# Docker assigns TERM=xterm for an allocated pseudo-TTY. That makes Rich/Textual
+# select the 16-color "standard" palette, losing the welcome screen's branding.
+# Preserve an explicitly supplied terminal type, but upgrade Docker's default.
+if [ "${TERM-}" = "xterm" ]; then
+    export TERM=xterm-256color
+fi
+if [ -z "${COLORTERM-}" ]; then
+    export COLORTERM=truecolor
+fi
+
 # Keep user-scoped Windcode state writable after dropping root privileges. This
 # directory is in the image unless the caller deliberately mounts a volume there.
 chown "$workspace_uid:$workspace_gid" "$HOME"
