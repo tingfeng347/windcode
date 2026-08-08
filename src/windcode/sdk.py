@@ -497,6 +497,12 @@ class Windcode:
             if config.providers
             else TransportRegistry()
         )
+        if config.primary_provider is not None and config.primary_provider not in registry.aliases:
+            await registry.aclose()
+            raise ProviderConfigurationError(
+                f"primary provider {config.primary_provider!r} is not runnable; "
+                "configure its credential or choose a connected provider"
+            )
         try:
             save_model_config(config_file, self.config, config)
         except Exception:
@@ -521,7 +527,7 @@ class Windcode:
         if requested is not None and requested in self.transport_registry.aliases:
             return (self.transport_registry.get(requested),)
         if not self._default_chain:
-            raise RuntimeError("no model transport is configured")
+            raise ProviderConfigurationError("no runnable model provider is configured")
         chain = tuple(self.transport_registry.get(alias) for alias in self._default_chain)
         if requested is not None:
             chain = (replace(chain[0], model=requested), *chain[1:])

@@ -11,6 +11,14 @@ from windcode.providers.registry import (
     TransportRegistry,
     create_transport,
 )
+from windcode.providers.service import (
+    ProviderApplyResult,
+    ProviderDraft,
+    ProviderHealth,
+    ProviderProbeResult,
+    ProviderService,
+    ProviderStatus,
+)
 
 __all__ = [
     "PROVIDER_PRESETS",
@@ -20,9 +28,15 @@ __all__ = [
     "ModelTransport",
     "OpenAICompatibleTransport",
     "OpenAIResponsesTransport",
+    "ProviderApplyResult",
     "ProviderConfigurationError",
+    "ProviderDraft",
     "ProviderError",
+    "ProviderHealth",
     "ProviderPreset",
+    "ProviderProbeResult",
+    "ProviderService",
+    "ProviderStatus",
     "TransportRegistry",
     "create_transport",
     "fetch_model_ids",
