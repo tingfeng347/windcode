@@ -12,6 +12,10 @@ from windcode.extensions.paths import PathBoundaryError, read_bounded, resolve_b
 
 MANIFEST_PATH = Path(".windcode-plugin/plugin.toml")
 _VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$")
+_COMPATIBILITY = re.compile(
+    r"^(?:\*|(?:>=|>|<=|<|==)?[0-9]+(?:\.[0-9]+){1,2}"
+    r"(?:,(?:>=|>|<=|<|==)?[0-9]+(?:\.[0-9]+){1,2})*)$"
+)
 _ALLOWED = {
     "manifest_version",
     "id",
@@ -139,7 +143,7 @@ def parse_plugin_manifest(root: Path, *, max_bytes: int = 65_536) -> PluginManif
     name, version, compatibility = str(raw["name"]), str(raw["version"]), str(raw["windcode"])
     if not name.strip() or len(name) > 100 or not _VERSION.fullmatch(version):
         raise ValueError("invalid plugin name or version")
-    if compatibility not in {">=0.1,<0.2", ">=0.1.0,<0.2.0", "*"}:
+    if not _COMPATIBILITY.fullmatch(compatibility):
         raise ValueError(f"incompatible Windcode version range: {compatibility}")
     permissions = cast(dict[str, object], raw.get("permissions", {}))
     if set(permissions) - {"effects", "network_hosts"}:

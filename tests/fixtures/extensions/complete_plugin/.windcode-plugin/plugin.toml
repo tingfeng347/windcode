@@ -1,0 +1,23 @@
+manifest_version = 1
+id = "complete"
+name = "Complete Test Plugin"
+version = "1.0.0"
+windcode = ">=0.1,<0.2"
+required = false
+
+skills = [{ id = "review", path = "skills/review" }]
+hooks = [
+  { id = "guard", path = "hooks/guard.toml" },
+  { id = "notice", path = "hooks/notice.toml" },
+]
+commands = [{ name = "review", target = "skill:review" }]
+
+[mcp_servers.analysis]
+path = "mcp/server.toml"
+
+[permissions]
+effects = ["read", "process"]
+network_hosts = []
+
+[data]
+persistent = true

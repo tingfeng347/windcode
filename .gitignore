@@ -10,8 +10,6 @@ wheels/
 # Virtual environments
 .venv
 
-tests/
-
 .windcode/config.toml
 .windcode/state/
 .windcode/skills/

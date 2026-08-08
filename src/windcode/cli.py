@@ -82,6 +82,25 @@ def build_extensions_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_sandbox_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="windcode sandbox")
+    parser.add_argument("action", choices=("setup",))
+    parser.add_argument("--json", action="store_true", dest="json_output")
+    return parser
+
+
+def _run_sandbox(argv: Sequence[str]) -> int:
+    namespace = build_sandbox_parser().parse_args(argv)
+    from windcode import sandbox
+
+    result = sandbox.setup_windows_sandbox()
+    if namespace.json_output:
+        print(json.dumps(result, default=str, sort_keys=True))
+    else:
+        print(result)
+    return 0
+
+
 async def _run_extensions(argv: Sequence[str]) -> int:
     namespace = build_extensions_parser().parse_args(argv)
     workspace: Path = namespace.workspace.expanduser().resolve()
@@ -138,6 +157,12 @@ async def _run_extensions(argv: Sequence[str]) -> int:
 
 def run(argv: Sequence[str] | None = None) -> int:
     arguments = tuple(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "sandbox":
+        try:
+            return _run_sandbox(arguments[1:])
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"windcode: {exc}", file=sys.stderr)
+            return 5
     if arguments and arguments[0] == "extensions":
         try:
             return asyncio.run(_run_extensions(arguments[1:]))

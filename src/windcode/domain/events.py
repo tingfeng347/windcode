@@ -339,6 +339,8 @@ AgentEventType = (
 
 
 def _json_value(value: object) -> object:
+    if isinstance(value, BaseException):
+        return {"type": type(value).__name__, "message": str(value)}
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, Path):
@@ -477,6 +479,24 @@ def event_from_dict(value: Mapping[str, object]) -> AgentEventType:
             tool_name=None if raw.get("tool_name") is None else str(raw.get("tool_name")),
             arguments_summary=(
                 None if raw.get("arguments_summary") is None else str(raw.get("arguments_summary"))
+            ),
+            command_actions=tuple(
+                _mapping(item)
+                for item in cast(list[object] | tuple[object, ...], raw.get("command_actions", ()))
+            ),
+            cwd=None if raw.get("cwd") is None else str(raw.get("cwd")),
+            network=bool(raw.get("network", False)),
+            sandbox_backend=(
+                None if raw.get("sandbox_backend") is None else str(raw.get("sandbox_backend"))
+            ),
+            sandbox_preset=(
+                None if raw.get("sandbox_preset") is None else str(raw.get("sandbox_preset"))
+            ),
+            escalation_reason=(
+                None if raw.get("escalation_reason") is None else str(raw.get("escalation_reason"))
+            ),
+            proposed_rule=(
+                None if raw.get("proposed_rule") is None else _mapping(raw.get("proposed_rule"))
             ),
         )
     if kind == UserInputRequested.kind:
