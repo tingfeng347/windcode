@@ -5,8 +5,9 @@ from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from windcode.domain.subagents import SubagentOperationError
 from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
-from windcode.runtime.subagents.coordinator import SubagentCoordinator, SubagentCoordinatorError
+from windcode.tools.subagents.operations import SubagentOperations
 
 
 class IntegrateSubagentInput(BaseModel):
@@ -22,7 +23,7 @@ class IntegrateSubagentTool:
     input_model = IntegrateSubagentInput
     effects = frozenset({ToolEffect.WORKSPACE_WRITE, ToolEffect.PROCESS})
 
-    def __init__(self, coordinator: SubagentCoordinator) -> None:
+    def __init__(self, coordinator: SubagentOperations) -> None:
         self.coordinator = coordinator
 
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
@@ -32,7 +33,7 @@ class IntegrateSubagentTool:
             result = await self.coordinator.integrate(
                 parsed.subagent_id, parsed.verification_commands
             )
-        except SubagentCoordinatorError as exc:
+        except SubagentOperationError as exc:
             return ToolResult(output=str(exc), is_error=True, data={"error": exc.category})
         data = {
             "subagent_id": result.subagent_id,

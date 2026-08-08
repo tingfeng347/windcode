@@ -10,12 +10,9 @@ from windcode.domain.subagents import (
     SubagentMessage,
     SubagentRecord,
 )
-
-
-class SubagentCollaborationError(RuntimeError):
-    def __init__(self, category: str, message: str) -> None:
-        self.category = category
-        super().__init__(message)
+from windcode.domain.subagents import (
+    SubagentCollaborationError as SubagentCollaborationError,
+)
 
 
 class CollaborationBackend(Protocol):

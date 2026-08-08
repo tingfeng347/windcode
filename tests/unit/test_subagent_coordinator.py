@@ -8,18 +8,22 @@ from typing import cast
 import pytest
 
 from windcode.config import PermissionMode, SubagentConfig
+from windcode.domain import subagents as domain_subagents
 from windcode.domain.events import RunResult
 from windcode.domain.subagents import (
     CollaborationMode,
     CollaborationParticipant,
     CollaborationRequest,
+    CollaborationResult,
     SubagentRecord,
+    SubagentResult,
     SubagentRole,
     SubagentStatus,
     SubagentTaskKind,
     SubagentTaskSpec,
     subagent_record_to_dict,
 )
+from windcode.domain.tools import ToolContext
 from windcode.observability import TraceStore
 from windcode.runtime.control import RunControl
 from windcode.runtime.event_bus import EventBus
@@ -33,6 +37,8 @@ from windcode.runtime.subagents.factory import ChildRuntime, ChildRuntimeFactory
 from windcode.runtime.subagents.teamwork import run_collaboration
 from windcode.runtime.subagents.verification import VerificationRunner
 from windcode.sessions import SessionStore
+from windcode.tools import ToolRegistry
+from windcode.tools.subagents import SubagentOperations, register_subagent_tools
 from windcode.worktrees import WorktreeManager
 
 
@@ -87,6 +93,31 @@ class FakeFactory:
         bus = EventBus(session, TraceStore(session_id, root=self.tmp_path / "child-traces"))
         loop = cast(AgentLoop, FakeLoop(self, name, bus))
         return ChildRuntime(child_record, RunControl(), bus, loop, workspace, name)
+
+
+class FakeSubagentOperations:
+    async def spawn(self, specs: tuple[SubagentTaskSpec, ...]) -> tuple[SubagentRecord, ...]:
+        del specs
+        return ()
+
+    def list(self) -> tuple[SubagentRecord, ...]:
+        return ()
+
+    async def wait(self, subagent_id: str) -> SubagentResult:
+        raise AssertionError(f"unexpected wait: {subagent_id}")
+
+    async def cancel(self, subagent_id: str) -> SubagentRecord:
+        raise AssertionError(f"unexpected cancel: {subagent_id}")
+
+    async def integrate(
+        self,
+        subagent_id: str,
+        verification_commands: tuple[str, ...] = (),
+    ) -> SubagentResult:
+        raise AssertionError(f"unexpected integrate: {subagent_id}, {verification_commands}")
+
+    async def collaborate(self, request: CollaborationRequest) -> CollaborationResult:
+        return CollaborationResult("fake", request.request, request.mode, "completed")
 
 
 class CoordinatingLoop:
@@ -173,6 +204,32 @@ async def wait_until_started(factory: FakeFactory, count: int) -> None:
     while len(factory.started) < count:
         factory.started_event.clear()
         await factory.started_event.wait()
+
+
+async def test_subagent_tools_accept_consumer_side_fake(tmp_path: Path) -> None:
+    operations: SubagentOperations = FakeSubagentOperations()
+    registry = ToolRegistry()
+    register_subagent_tools(registry=registry, coordinator=operations)
+
+    result = await registry.execute(
+        "list_subagents",
+        ToolContext(tmp_path, "run", lambda: False),
+        {},
+    )
+
+    assert result.data == {"subagents": []}
+    assert registry.names() == (
+        "spawn_subagents",
+        "list_subagents",
+        "wait_subagents",
+        "cancel_subagent",
+        "integrate_subagent",
+        "collaborate_subagents",
+    )
+
+
+def test_subagent_error_keeps_runtime_import_identity() -> None:
+    assert SubagentCoordinatorError is domain_subagents.SubagentCoordinatorError
 
 
 async def test_capacity_validation_is_atomic(tmp_path: Path) -> None:

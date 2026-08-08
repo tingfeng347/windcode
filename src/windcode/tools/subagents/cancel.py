@@ -5,8 +5,9 @@ from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from windcode.domain.subagents import SubagentOperationError
 from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
-from windcode.runtime.subagents.coordinator import SubagentCoordinator, SubagentCoordinatorError
+from windcode.tools.subagents.operations import SubagentOperations
 
 
 class CancelSubagentInput(BaseModel):
@@ -21,7 +22,7 @@ class CancelSubagentTool:
     input_model = CancelSubagentInput
     effects = frozenset({ToolEffect.PROCESS})
 
-    def __init__(self, coordinator: SubagentCoordinator) -> None:
+    def __init__(self, coordinator: SubagentOperations) -> None:
         self.coordinator = coordinator
 
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
@@ -29,7 +30,7 @@ class CancelSubagentTool:
         parsed = cast(CancelSubagentInput, arguments)
         try:
             record = await self.coordinator.cancel(parsed.subagent_id)
-        except SubagentCoordinatorError as exc:
+        except SubagentOperationError as exc:
             return ToolResult(output=str(exc), is_error=True, data={"error": exc.category})
         data = {"subagent_id": record.subagent_id, "status": record.status.value}
         return ToolResult(json.dumps(data, ensure_ascii=True), data=data)

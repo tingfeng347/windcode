@@ -10,7 +10,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
 from windcode.policy.commands import CommandAnalysis, analyze_bash, analyze_powershell
-from windcode.runtime.process import ProcessRunner, terminate_process_tree
 from windcode.sandbox import (
     LaunchSpec,
     SandboxBackend,
@@ -18,6 +17,7 @@ from windcode.sandbox import (
     SandboxPolicy,
 )
 from windcode.tools.filesystem import require_workspace_path
+from windcode.tools.process import ProcessRunner, terminate_process_tree
 
 
 class ShellInput(BaseModel):
