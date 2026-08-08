@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from pydantic import TypeAdapter, ValidationError
@@ -17,9 +18,11 @@ from windcode.config.models import (
     McpStdioConfig,
 )
 from windcode.config.paths import default_user_storage_root
+from windcode.domain.tools import ToolEffect
 from windcode.extensions.commands import CommandRoute, build_command_catalog
 from windcode.extensions.discovery import DiscoveryResult, DiscoveryRoot, discover_skills
 from windcode.extensions.hooks.loader import load_hook_definition
+from windcode.extensions.hooks.models import CommandAction
 from windcode.extensions.models import (
     ActivationState,
     CapabilityKind,
@@ -49,6 +52,23 @@ from windcode.extensions.state import (
     InstalledPlugin,
     ManagementAuditRecord,
 )
+
+
+def _manifest_permissions(manifest: PluginManifest) -> PermissionRequirement:
+    effects = {ToolEffect(value) for value in manifest.effects}
+    return PermissionRequirement(
+        filesystem_read=ToolEffect.READ in effects,
+        filesystem_write=bool(effects & {ToolEffect.WORKSPACE_WRITE, ToolEffect.OUTSIDE_WORKSPACE}),
+        network=ToolEffect.NETWORK in effects,
+        process=ToolEffect.PROCESS in effects,
+    )
+
+
+def _require_manifest_effect(manifest: PluginManifest, effect: ToolEffect, component: str) -> None:
+    if effect.value not in manifest.effects:
+        raise ValueError(
+            f"plugin component {component!r} requires undeclared {effect.value!r} permission"
+        )
 
 
 class ExtensionService:
@@ -292,7 +312,11 @@ class ExtensionService:
             source = ExtensionSource(
                 ExtensionScope.USER, root, installed.plugin_id, digest=installed.digest
             )
+            record_count = len(records)
+            definition_ids = set(definitions)
+            manifest: PluginManifest | None = None
             try:
+                manifest = parse_plugin_manifest(root, max_bytes=self.config.max_metadata_bytes)
                 self._add_plugin(
                     installed.plugin_id,
                     installed.enabled,
@@ -300,6 +324,7 @@ class ExtensionService:
                     source,
                     records,
                     definitions,
+                    manifest=manifest,
                 )
             except (
                 OSError,
@@ -308,6 +333,9 @@ class ExtensionService:
                 tomllib.TOMLDecodeError,
                 ValidationError,
             ) as exc:
+                del records[record_count:]
+                for stable_id in set(definitions) - definition_ids:
+                    definitions.pop(stable_id)
                 diagnostic = Diagnostic(
                     DiagnosticStage.PARSE,
                     DiagnosticSeverity.ERROR,
@@ -328,7 +356,7 @@ class ExtensionService:
                         CapabilityKind.PLUGIN,
                         source,
                         enabled=installed.enabled,
-                        required=True,
+                        required=manifest.required if manifest is not None else False,
                         activation=ActivationState.FAILED,
                         diagnostics=(diagnostic,),
                     )
@@ -347,8 +375,11 @@ class ExtensionService:
         source: ExtensionSource,
         records: list[CapabilityRecord],
         definitions: dict[str, object],
+        *,
+        manifest: PluginManifest | None = None,
     ) -> None:
-        manifest = parse_plugin_manifest(root, max_bytes=self.config.max_metadata_bytes)
+        manifest = manifest or parse_plugin_manifest(root, max_bytes=self.config.max_metadata_bytes)
+        permissions = _manifest_permissions(manifest)
         plugin_stable_id = capability_id(CapabilityKind.PLUGIN, plugin_id, plugin_id=plugin_id)
         activation = ActivationState.AVAILABLE if enabled else ActivationState.INACTIVE
         records.append(
@@ -360,10 +391,12 @@ class ExtensionService:
                 enabled=enabled,
                 required=manifest.required,
                 activation=activation,
+                permissions=permissions,
             )
         )
         definitions[plugin_stable_id] = manifest
         for component in manifest.skills:
+            _require_manifest_effect(manifest, ToolEffect.READ, component.component_id)
             component_source = replace(source, component_id=component.component_id)
             stable_id = capability_id(
                 CapabilityKind.SKILL, component.component_id, plugin_id=plugin_id
@@ -380,7 +413,7 @@ class ExtensionService:
                     enabled=enabled,
                     required=manifest.required,
                     activation=activation,
-                    permissions=PermissionRequirement(filesystem_read=True),
+                    permissions=permissions,
                 )
             )
             definitions[stable_id] = metadata
@@ -395,6 +428,8 @@ class ExtensionService:
                 source_id=component_source.source_id,
                 max_bytes=self.config.max_metadata_bytes,
             )
+            if isinstance(hook.action, CommandAction):
+                _require_manifest_effect(manifest, ToolEffect.PROCESS, component.component_id)
             records.append(
                 CapabilityRecord(
                     stable_id,
@@ -404,6 +439,7 @@ class ExtensionService:
                     enabled=enabled,
                     required=manifest.required or hook.required,
                     activation=activation,
+                    permissions=permissions,
                 )
             )
             definitions[stable_id] = hook
@@ -421,6 +457,16 @@ class ExtensionService:
                 McpStdioConfig | McpHttpConfig,
                 TypeAdapter(McpServerConfig).validate_python(raw),
             )
+            required_effect = (
+                ToolEffect.NETWORK if isinstance(server, McpHttpConfig) else ToolEffect.PROCESS
+            )
+            _require_manifest_effect(manifest, required_effect, component.component_id)
+            if isinstance(server, McpHttpConfig):
+                hostname = (urlparse(server.url).hostname or "").lower()
+                if hostname not in manifest.network_hosts:
+                    raise ValueError(
+                        f"plugin MCP host {hostname!r} is not declared in network_hosts"
+                    )
             server_enabled = enabled and server.enabled
             records.append(
                 CapabilityRecord(
@@ -431,10 +477,7 @@ class ExtensionService:
                     enabled=server_enabled,
                     required=manifest.required or server.required,
                     activation=(activation if server_enabled else ActivationState.INACTIVE),
-                    permissions=PermissionRequirement(
-                        network=server.transport == "streamable_http",
-                        process=server.transport == "stdio",
-                    ),
+                    permissions=permissions,
                 )
             )
             definitions[stable_id] = server

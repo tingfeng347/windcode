@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from windcode.domain.tools import ToolEffect
 from windcode.extensions.models import normalize_id
 from windcode.extensions.paths import PathBoundaryError, read_bounded, resolve_beneath
 
@@ -146,6 +147,26 @@ def parse_plugin_manifest(root: Path, *, max_bytes: int = 65_536) -> PluginManif
     data = cast(dict[str, object], raw.get("data", {}))
     if set(data) - {"persistent"}:
         raise ValueError("unknown data fields")
+    raw_effects = permissions.get("effects", [])
+    raw_hosts = permissions.get("network_hosts", [])
+    if not isinstance(raw_effects, list) or not isinstance(raw_hosts, list):
+        raise ValueError("permission effects and network_hosts must be arrays")
+    effect_values = cast(list[object], raw_effects)
+    host_values = cast(list[object], raw_hosts)
+    try:
+        effects = tuple(sorted(ToolEffect(str(value)).value for value in effect_values))
+    except ValueError as exc:
+        raise ValueError(f"unknown plugin permission effect: {exc}") from exc
+    hosts = tuple(sorted(str(value).lower() for value in host_values))
+    if any(
+        not re.fullmatch(
+            r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*"
+            r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
+            host,
+        )
+        for host in hosts
+    ):
+        raise ValueError("network_hosts entries must be hostnames without scheme, port, or path")
     return PluginManifest(
         1,
         plugin_id,
@@ -157,10 +178,8 @@ def parse_plugin_manifest(root: Path, *, max_bytes: int = 65_536) -> PluginManif
         _components(root, raw.get("hooks"), "hooks"),
         _mcp_components(root, raw.get("mcp_servers")),
         _commands(raw.get("commands")),
-        tuple(sorted(str(value) for value in cast(list[object], permissions.get("effects", [])))),
-        tuple(
-            sorted(str(value) for value in cast(list[object], permissions.get("network_hosts", [])))
-        ),
+        effects,
+        hosts,
         bool(data.get("persistent", False)),
         root,
     )

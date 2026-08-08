@@ -22,7 +22,7 @@ from windcode.domain.events import (
     SubagentStarted,
 )
 from windcode.domain.messages import SourcedContextMessage
-from windcode.domain.tools import ToolContext, ToolResult
+from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
 from windcode.extensions.events import extension_event
 from windcode.extensions.hooks.dispatcher import HookDispatcher
 from windcode.extensions.hooks.executor import HookExecutor
@@ -32,6 +32,7 @@ from windcode.extensions.mcp.client import McpClient, ResolvedHttpServer, Resolv
 from windcode.extensions.mcp.runtime import McpRuntime
 from windcode.extensions.mcp.tools import McpCapabilityService
 from windcode.extensions.models import CapabilityKind, ExtensionSnapshot
+from windcode.extensions.plugins.manifest import PluginManifest
 from windcode.extensions.skills.loader import SkillLoader
 from windcode.extensions.skills.tools import SkillActivationResult, SkillCatalog, SkillRuntime
 from windcode.policy.models import PolicyDecision, PolicyRequest
@@ -90,6 +91,7 @@ class RunExtensions:
         mcp_tool_catalogs: dict[str, tuple[McpToolDefinition, ...]] | None = None,
     ) -> RunExtensions:
         servers: dict[str, tuple[Callable[[], McpClient], bool]] = {}
+        server_origins: dict[str, str] = {}
         hooks: list[HookDefinition] = []
         records = {record.capability_id: record for record in snapshot.capabilities}
         for stable_id, definition in snapshot.definitions.items():
@@ -141,6 +143,8 @@ class RunExtensions:
                     client_factory = http_factory
 
                 servers[record.public_name] = (client_factory, definition.required)
+                if record.source.plugin_id is not None:
+                    server_origins[record.public_name] = record.source.source_id
         runtime = mcp_runtime or McpRuntime(servers)
         run_extensions = cls(
             snapshot,
@@ -153,6 +157,7 @@ class RunExtensions:
                 artifact_store=artifact_store,
                 content_limit=max_content_bytes,
                 tool_catalogs=mcp_tool_catalogs,
+                server_origins=server_origins,
             ),
             HookDispatcher(tuple(hooks), HookExecutor()),
             owns_mcp=mcp_runtime is None,
@@ -254,7 +259,17 @@ class RunExtensions:
                 source_id=call.origin or "windcode",
             )
         )
-        return PolicyConstraints(outcome.additional_effects, outcome.rejected)
+        declared_effects: set[ToolEffect] = set()
+        if call.origin is not None and call.origin.startswith("plugin:"):
+            plugin_id = call.origin.removeprefix("plugin:").split("/", 1)[0]
+            for definition in self.snapshot.definitions.values():
+                if isinstance(definition, PluginManifest) and definition.plugin_id == plugin_id:
+                    declared_effects.update(ToolEffect(value) for value in definition.effects)
+                    break
+        return PolicyConstraints(
+            frozenset({*outcome.additional_effects, *declared_effects}),
+            outcome.rejected,
+        )
 
     async def permission_requested(
         self, call: ScheduledCall, request: PolicyRequest, decision: PolicyDecision

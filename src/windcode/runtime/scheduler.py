@@ -153,6 +153,10 @@ class ToolScheduler:
 
     async def _execute_one(self, call: ScheduledCall, context: ToolContext) -> ScheduledResult:
         try:
+            tool = self.registry.get(call.tool_name)
+            tool_origin = getattr(tool, "origin", None)
+            if call.origin is None and isinstance(tool_origin, str):
+                call = replace(call, origin=tool_origin)
             constraints = (
                 await self.before_policy(call, context)
                 if self.before_policy is not None

@@ -25,12 +25,14 @@ class McpToolAdapter:
         runtime: McpRuntime,
         *,
         wire_name: str | None = None,
+        origin: str | None = None,
         artifact_store: ArtifactStore | None = None,
         output_limit: int = 20_000,
     ) -> None:
         self.definition = definition
         self.runtime = runtime
         self._wire_name = wire_name
+        self.origin = origin
         self.artifact_store = artifact_store
         self.output_limit = output_limit
 

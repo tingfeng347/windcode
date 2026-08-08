@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
@@ -98,6 +99,7 @@ class McpCapabilityService:
         artifact_store: ArtifactStore | None = None,
         content_limit: int = 20_000,
         tool_catalogs: dict[str, tuple[McpToolDefinition, ...]] | None = None,
+        server_origins: Mapping[str, str] | None = None,
     ) -> None:
         self.runtime = runtime
         self.artifact_store = artifact_store
@@ -105,6 +107,7 @@ class McpCapabilityService:
         self._catalogs: dict[str, McpCatalog] = {}
         self._tool_catalogs = tool_catalogs if tool_catalogs is not None else {}
         self._tool_catalog_locks: dict[str, asyncio.Lock] = {}
+        self._server_origins = dict(server_origins or {})
         self._instructions_emitted: set[str] = set()
         self._pending_context: list[SourcedContextMessage] = []
 
@@ -248,6 +251,7 @@ class McpCapabilityService:
             definition,
             self.runtime,
             wire_name=wire_name,
+            origin=self._server_origins.get(definition.server_id),
             artifact_store=self.artifact_store,
             output_limit=self.content_limit,
         )
@@ -311,6 +315,7 @@ class McpCapabilityService:
                 definition,
                 self.runtime,
                 wire_name=wire_name,
+                origin=self._server_origins.get(definition.server_id),
                 artifact_store=self.artifact_store,
                 output_limit=self.content_limit,
             )
