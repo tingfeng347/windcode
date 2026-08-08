@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections import deque
 from pathlib import Path
 from time import monotonic
@@ -15,7 +14,7 @@ from textual.css.query import NoMatches
 from textual.theme import Theme
 from textual.widgets import Static
 
-from windcode.auth import CredentialStore, CredentialStoreError
+from windcode.auth import CredentialStore
 from windcode.config import AppConfig, PermissionMode, ProviderConfig, default_user_config_path
 from windcode.domain.events import (
     ApprovalRequested,
@@ -29,7 +28,7 @@ from windcode.domain.events import (
 )
 from windcode.domain.messages import TextBlock, message_from_dict
 from windcode.memory import MemoryStatus
-from windcode.providers import fetch_model_ids
+from windcode.providers import ProviderService, fetch_model_ids
 from windcode.sdk import RunHandle, Windcode
 from windcode.tui.commands import (
     COMMANDS,
@@ -101,6 +100,13 @@ class WindcodeApp(App[None]):
             workspace=workspace,
         )
         self.client.model_startup_error = provider_startup_error
+        self.provider_service = ProviderService(
+            config,
+            self.client.credential_store,
+            apply_config=self._commit_provider_config,
+            connected_aliases=lambda: self.client.transport_registry.aliases,
+            model_loader=self._load_provider_models,
+        )
         self.handle: RunHandle | None = None
         self.tool_blocks: dict[str, ToolBlock] = {}
         self.approval_widgets: dict[str, ApprovalWidget] = {}
@@ -323,46 +329,17 @@ class WindcodeApp(App[None]):
         self.query_one("#chat-input", ChatInput).focus()
         self._update_status("idle")
 
-    def _model_config(
-        self,
-        providers: dict[str, ProviderConfig],
-        *,
-        primary: str | None,
-        fallback: tuple[str, ...],
-    ) -> AppConfig:
-        data = self.config.model_dump(mode="python")
-        data.update(
-            providers=providers,
-            primary_provider=primary,
-            fallback_chain=fallback,
-        )
-        return AppConfig.model_validate(data)
-
-    async def _apply_model_config(self, config: AppConfig) -> bool:
-        try:
-            await self.client.reconfigure_models(config, config_file=self.config_file)
-        except (OSError, RuntimeError, ValueError) as exc:
-            if self.provider_manager is not None:
-                self.provider_manager.show_error(str(exc))
-            elif self.model_manager is not None:
-                self.model_manager.show_error(str(exc))
-            else:
-                await self._show_system_message(str(exc), error=True)
-            return False
+    async def _commit_provider_config(self, config: AppConfig) -> None:
+        await self.client.reconfigure_models(config, config_file=self.config_file)
         self.config = config
-        return True
+
+    async def _load_provider_models(
+        self, provider: ProviderConfig, api_key: str
+    ) -> tuple[str, ...]:
+        return await fetch_model_ids(provider, api_key)
 
     def _connected_providers(self) -> dict[str, bool]:
-        connected: dict[str, bool] = {}
-        for alias, provider in self.config.providers.items():
-            available = bool(provider.api_key_env and os.environ.get(provider.api_key_env))
-            if not available and provider.credential_id:
-                try:
-                    available = bool(self.client.credential_store.get(provider.credential_id))
-                except CredentialStoreError:
-                    available = False
-            connected[alias] = available
-        return connected
+        return {health.alias: health.connected for health in self.provider_service.snapshot()}
 
     async def _open_model_manager(self, *, selected: str | None = None) -> None:
         if self.session_selector is not None:
@@ -397,10 +374,8 @@ class WindcodeApp(App[None]):
         if self.provider_manager is not None:
             await self.provider_manager.dismiss()
         self.provider_manager = ProviderManager(
-            self.config.providers,
+            self.provider_service.snapshot(),
             selected=selected or self.model,
-            primary=self.config.primary_provider,
-            connected=self._connected_providers(),
             preset_id=preset_id,
         )
         await self.push_screen(self.provider_manager)
@@ -669,111 +644,59 @@ class WindcodeApp(App[None]):
 
     @on(ProviderManager.Save)
     async def provider_save(self, event: ProviderManager.Save) -> None:
-        previous_secret: str | None = None
-        if event.secret is not None and event.provider.credential_id is not None:
-            try:
-                previous_secret = self.client.credential_store.get(event.provider.credential_id)
-                self.client.credential_store.set(event.provider.credential_id, event.secret)
-            except CredentialStoreError as exc:
-                if self.provider_manager is not None:
-                    self.provider_manager.show_error(str(exc))
-                return
-        providers = dict(self.config.providers)
-        providers[event.alias] = event.provider
-        primary = self.config.primary_provider or event.alias
-        config = self._model_config(
-            providers,
-            primary=primary,
-            fallback=self.config.fallback_chain,
-        )
-        if await self._apply_model_config(config):
-            self.model = event.alias
-            self.query_one("#title-bar", Static).update(self._make_banner())
-            self._update_status("idle")
-            await self._open_provider_manager(selected=event.alias)
-        elif event.secret is not None and event.provider.credential_id is not None:
-            if previous_secret is None:
-                self.client.credential_store.delete(event.provider.credential_id)
-            else:
-                self.client.credential_store.set(event.provider.credential_id, previous_secret)
+        try:
+            result = await self.provider_service.save(event.draft)
+        except (OSError, RuntimeError, ValueError) as exc:
+            if self.provider_manager is not None:
+                self.provider_manager.show_error(str(exc))
+            return
+        self.model = result.health.alias if result.health.connected else self.model
+        self.query_one("#title-bar", Static).update(self._make_banner())
+        self._update_status("idle")
+        await self._open_provider_manager(selected=result.health.alias)
 
     @on(ProviderManager.LoadModels)
     async def provider_load_models(self, event: ProviderManager.LoadModels) -> None:
         manager = self.provider_manager
         if manager is None:
             return
-        api_key = event.secret
-        if not api_key and event.provider.api_key_env:
-            api_key = os.environ.get(event.provider.api_key_env)
-        if not api_key and event.provider.credential_id:
-            try:
-                api_key = self.client.credential_store.get(event.provider.credential_id)
-            except CredentialStoreError as exc:
-                manager.show_error(str(exc))
-                return
-        if not api_key:
-            manager.show_error("填写 API Key 或配置对应环境变量后即可加载模型")
-            return
         try:
-            model_ids = await fetch_model_ids(event.provider, api_key)
+            result = await self.provider_service.probe(event.draft)
         except (OSError, RuntimeError, TimeoutError) as exc:
             if self.provider_manager is manager:
                 manager.show_error(str(exc))
             return
         if self.provider_manager is not manager:
             return
-        if not model_ids:
-            manager.show_error("Provider 未返回可用模型 ID, 请手动填写")
-            return
-        manager.show_model_ids(model_ids)
+        manager.update_health(result.health)
+        manager.show_model_ids(result.model_ids)
 
     @on(ProviderManager.Delete)
     async def provider_delete(self, event: ProviderManager.Delete) -> None:
-        provider = self.config.providers.get(event.alias)
-        providers = dict(self.config.providers)
-        providers.pop(event.alias, None)
-        primary = self.config.primary_provider
-        if primary == event.alias:
-            primary = next(iter(providers), None)
-        fallback = tuple(
-            alias
-            for alias in self.config.fallback_chain
-            if alias != event.alias and alias != primary and alias in providers
-        )
-        config = self._model_config(providers, primary=primary, fallback=fallback)
-        if await self._apply_model_config(config):
-            if self.model == event.alias:
-                self.model = primary
-            self.query_one("#title-bar", Static).update(self._make_banner())
-            self._update_status("idle")
-            if provider is not None and provider.credential_id is not None:
-                try:
-                    self.client.credential_store.delete(provider.credential_id)
-                except CredentialStoreError as exc:
-                    await self._show_system_message(str(exc), error=True)
-            await self._open_provider_manager(selected=self.model)
+        try:
+            config = await self.provider_service.delete(event.alias)
+        except (OSError, RuntimeError, ValueError) as exc:
+            if self.provider_manager is not None:
+                self.provider_manager.show_error(str(exc))
+            return
+        if self.model == event.alias:
+            self.model = config.primary_provider
+        self.query_one("#title-bar", Static).update(self._make_banner())
+        self._update_status("idle")
+        await self._open_provider_manager(selected=self.model)
 
     @on(ProviderManager.SetDefault)
     async def provider_set_default(self, event: ProviderManager.SetDefault) -> None:
-        ordered = (
-            self.config.primary_provider,
-            *self.config.fallback_chain,
-        )
-        fallback = tuple(
-            alias
-            for alias in ordered
-            if alias is not None and alias != event.alias and alias in self.config.providers
-        )
-        config = self._model_config(
-            dict(self.config.providers),
-            primary=event.alias,
-            fallback=fallback,
-        )
-        if await self._apply_model_config(config):
-            self.model = event.alias
-            self.query_one("#title-bar", Static).update(self._make_banner())
-            self._update_status("idle")
-            await self._open_provider_manager(selected=event.alias)
+        try:
+            await self.provider_service.set_default(event.alias)
+        except (OSError, RuntimeError, ValueError) as exc:
+            if self.provider_manager is not None:
+                self.provider_manager.show_error(str(exc))
+            return
+        self.model = event.alias
+        self.query_one("#title-bar", Static).update(self._make_banner())
+        self._update_status("idle")
+        await self._open_provider_manager(selected=event.alias)
 
     @on(ModelManager.Closed)
     async def model_manager_closed(self) -> None:
@@ -792,6 +715,7 @@ class WindcodeApp(App[None]):
             await self._show_system_message(f"无法保存长期记忆设置: {exc}", error=True)
             return
         self.config = self.client.config
+        self.provider_service.update_config(self.config)
         if self.memory_manager is not None:
             records = self.client.list_memories() if event.enabled else ()
             self.memory_manager.refresh_records(records)

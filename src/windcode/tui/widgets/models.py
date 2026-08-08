@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from typing import ClassVar, cast
 
@@ -8,13 +7,14 @@ from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Center, Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
 from windcode.config import ProviderConfig, ProviderProtocol
+from windcode.providers import ProviderDraft, ProviderHealth, ProviderStatus
 from windcode.providers.catalog import (
     PRESETS_BY_ID,
     PROVIDER_PRESETS,
@@ -32,7 +32,6 @@ DEFAULT_KEY_ENV = {
     ProviderProtocol.OPENAI_RESPONSES: "OPENAI_API_KEY",
     ProviderProtocol.OPENAI_COMPATIBLE: "OPENAI_API_KEY",
 }
-_ALIAS_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 def _model_option(
@@ -56,9 +55,10 @@ def _model_option(
     return Option(text, id=alias)
 
 
-def _field_label(title: str, description: str) -> Static:
+def _field_label(title: str, description: str = "") -> Static:
     text = Text(title, style="bold")
-    text.append(f"\n{description}", style="dim")
+    if description:
+        text.append(f"\n{description}", style="dim")
     return Static(text, classes="provider-field-label")
 
 
@@ -281,11 +281,9 @@ class ProviderManager(ModalScreen[None]):
     BINDINGS: ClassVar[list[Binding]] = [Binding("escape", "close_or_cancel", "返回")]
 
     class Save(Message):
-        def __init__(self, alias: str, provider: ProviderConfig, secret: str | None) -> None:
+        def __init__(self, draft: ProviderDraft) -> None:
             super().__init__()
-            self.alias = alias
-            self.provider = provider
-            self.secret = secret
+            self.draft = draft
 
     class Delete(Message):
         def __init__(self, alias: str) -> None:
@@ -298,128 +296,134 @@ class ProviderManager(ModalScreen[None]):
             self.alias = alias
 
     class LoadModels(Message):
-        def __init__(
-            self,
-            alias: str,
-            provider: ProviderConfig,
-            secret: str | None,
-        ) -> None:
+        def __init__(self, draft: ProviderDraft) -> None:
             super().__init__()
-            self.alias = alias
-            self.provider = provider
-            self.secret = secret
+            self.draft = draft
 
     class Closed(Message):
         pass
 
     def __init__(
         self,
-        profiles: Mapping[str, ProviderConfig],
+        health: tuple[ProviderHealth, ...],
         *,
         selected: str | None,
-        primary: str | None,
-        connected: Mapping[str, bool],
         preset_id: str | None = None,
     ) -> None:
         super().__init__(id="provider-manager")
-        self.profiles = dict(profiles)
-        self.selected = selected if selected in profiles else primary
-        self.primary = primary
-        self.connected = dict(connected)
+        self.health = {item.alias: item for item in health}
+        self.profiles = {item.alias: item.provider for item in health}
+        primary = next((item.alias for item in health if item.is_default), None)
+        self.selected = selected if selected in self.profiles else primary
         self.initial_preset_id = preset_id
         self._aliases = tuple(self.profiles)
         self._editing_alias: str | None = None
         self._pending_delete: str | None = None
+        self._draft_health: ProviderHealth | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="provider-dialog"):
             yield Static("Provider 管理", id="provider-manager-title")
-            yield OptionList(id="provider-list")
-            yield Static("", id="provider-details")
-            with Horizontal(id="provider-actions", classes="dialog-actions"):
-                yield Button("新增", id="provider-add", variant="primary")
-                yield Button("编辑", id="provider-edit")
-                yield Button("设为默认", id="provider-default")
+            with Horizontal(id="provider-workspace"):
+                with Vertical(id="provider-sidebar"):
+                    yield Static("PROVIDERS", classes="provider-panel-title")
+                    yield OptionList(id="provider-list")
+                    with Horizontal(id="provider-sidebar-actions"):
+                        yield Button("新增", id="provider-add", variant="primary")
+                        yield Button("默认", id="provider-default")
+                    yield Button("完成", id="provider-close")
+                with Vertical(id="provider-editor"):
+                    yield Static("连接配置", classes="provider-panel-title")
+                    yield Static("标签在上, 修改将保存到当前 Provider。", id="provider-editor-hint")
+                    with VerticalScroll(id="provider-form-scroll"):
+                        with Vertical(id="provider-form"):
+                            with Vertical(classes="provider-field"):
+                                yield _field_label("厂商模板")
+                                yield Select(
+                                    (
+                                        ("自定义 Provider", "custom"),
+                                        *((preset.name, preset.id) for preset in PROVIDER_PRESETS),
+                                    ),
+                                    allow_blank=False,
+                                    value="openai",
+                                    id="provider-preset",
+                                )
+                            with Vertical(classes="provider-field"):
+                                yield _field_label("配置别名")
+                                yield Input(placeholder="Provider 别名", id="provider-alias")
+                            with Vertical(classes="provider-field"):
+                                yield _field_label("接口协议")
+                                yield Select(
+                                    tuple(
+                                        (label, protocol.value)
+                                        for protocol, label in PROTOCOL_LABELS.items()
+                                    ),
+                                    allow_blank=False,
+                                    value=ProviderProtocol.OPENAI_RESPONSES.value,
+                                    id="provider-protocol",
+                                )
+                            with Vertical(classes="provider-field"):
+                                yield _field_label("模型 ID")
+                                with Horizontal(id="provider-model-controls"):
+                                    yield Input(
+                                        placeholder="例如 deepseek-chat", id="provider-model"
+                                    )
+                                    yield Button("加载", id="provider-load-models")
+                                yield Select[str](
+                                    (),
+                                    prompt="从已加载模型中选择",
+                                    id="provider-model-options",
+                                )
+                            with Vertical(classes="provider-field"):
+                                yield _field_label("Base URL")
+                                yield Input(
+                                    placeholder="https://api.example.com/v1", id="provider-base-url"
+                                )
+                            with Vertical(classes="provider-field"):
+                                yield _field_label("API Key")
+                                yield Input(
+                                    placeholder="API Key", password=True, id="provider-api-key"
+                                )
+                            with Vertical(classes="provider-field"):
+                                yield _field_label("环境变量")
+                                yield Input(
+                                    placeholder="例如 DEEPSEEK_API_KEY", id="provider-api-key-env"
+                                )
+                            yield Static("", id="provider-editor-error")
+                with Vertical(id="provider-inspector"):
+                    yield Static("检查器", classes="provider-panel-title")
+                    yield Static("", id="provider-details")
+            with Horizontal(id="provider-editor-actions"):
+                yield Button("保存", id="provider-save", variant="primary")
+                yield Button("取消", id="provider-cancel")
                 yield Button("断开", id="provider-delete", variant="error")
                 yield Button("确认断开", id="provider-confirm-delete", variant="error")
-                yield Button("完成", id="provider-close")
-            with Vertical(id="provider-editor"):
-                with Vertical(id="provider-form"):
-                    with Horizontal(classes="provider-field"):
-                        yield _field_label("厂商模板", "预填协议、地址和变量")
-                        yield Select(
-                            (
-                                ("自定义 Provider", "custom"),
-                                *((preset.name, preset.id) for preset in PROVIDER_PRESETS),
-                            ),
-                            allow_blank=False,
-                            value="openai",
-                            id="provider-preset",
-                        )
-                    with Horizontal(classes="provider-field"):
-                        yield _field_label("配置别名", "用于 /model 和配置引用")
-                        yield Input(placeholder="Provider 别名", id="provider-alias")
-                    with Horizontal(classes="provider-field"):
-                        yield _field_label("接口协议", "服务端请求格式")
-                        yield Select(
-                            tuple(
-                                (label, protocol.value)
-                                for protocol, label in PROTOCOL_LABELS.items()
-                            ),
-                            allow_blank=False,
-                            value=ProviderProtocol.OPENAI_RESPONSES.value,
-                            id="provider-protocol",
-                        )
-                    with Horizontal(classes="provider-field"):
-                        yield _field_label("模型 ID", "可填写或从 Provider 加载")
-                        with Horizontal(id="provider-model-controls"):
-                            yield Input(placeholder="例如 deepseek-chat", id="provider-model")
-                            yield Select[str]((), prompt="选择模型", id="provider-model-options")
-                            yield Button("加载", id="provider-load-models")
-                    with Horizontal(classes="provider-field"):
-                        yield _field_label("Base URL", "API 根地址; 模板已预填")
-                        yield Input(
-                            placeholder="https://api.example.com/v1", id="provider-base-url"
-                        )
-                    with Horizontal(classes="provider-field"):
-                        yield _field_label("API Key", "存入密钥库; 留空保留")
-                        yield Input(placeholder="API Key", password=True, id="provider-api-key")
-                    with Horizontal(classes="provider-field"):
-                        yield _field_label("环境变量", "变量名; 其值优先于密钥库")
-                        yield Input(placeholder="例如 DEEPSEEK_API_KEY", id="provider-api-key-env")
-                    yield Static("", id="provider-editor-error")
-                    with Center(id="provider-editor-actions-wrap"):
-                        with Horizontal(id="provider-editor-actions"):
-                            yield Button("保存连接", id="provider-save", variant="primary")
-                            yield Button("取消", id="provider-cancel")
 
     def on_mount(self) -> None:
-        self.query_one("#provider-editor", Vertical).display = False
         self.query_one("#provider-confirm-delete", Button).display = False
         self._refresh_options()
-        if self._aliases:
-            if self.initial_preset_id is not None:
-                self._open_editor(None)
-            else:
-                self.query_one("#provider-list", OptionList).focus()
-        else:
-            self._open_editor(None)
+        self._open_editor(self.selected if self.initial_preset_id is None else None)
 
     def _refresh_options(self) -> None:
         options: list[Option] = []
         for alias in self._aliases:
             provider = self.profiles[alias]
-            preset = provider_preset(provider)
             text = Text()
-            text.append(alias, style="bold")
-            platform = preset.name if preset is not None else PROTOCOL_LABELS[provider.protocol]
-            text.append(f"  {provider.model} · {platform}", style="dim")
+            health = self.health[alias]
             text.append(
-                "  已连接" if self.connected.get(alias, False) else "  未连接",
-                style="green" if self.connected.get(alias, False) else "yellow",
+                "●",
+                style=(
+                    "green"
+                    if health.status is ProviderStatus.READY
+                    else "red"
+                    if health.status is ProviderStatus.ERROR
+                    else "yellow"
+                ),
             )
-            if alias == self.primary:
-                text.append("  默认", style="cyan")
+            text.append(f" {alias}", style="bold")
+            text.append(f"\n  {provider.model}", style="dim")
+            if health.is_default:
+                text.append(" 默认", style="cyan")
             options.append(Option(text, id=alias))
         provider_list = self.query_one("#provider-list", OptionList)
         provider_list.clear_options()
@@ -434,26 +438,45 @@ class ProviderManager(ModalScreen[None]):
 
     def _update_details(self, alias: str | None) -> None:
         if alias is None:
-            self.query_one("#provider-details", Static).update("连接 Provider 后即可选择模型")
+            if self._draft_health is not None:
+                health = self._draft_health
+                self.query_one("#provider-details", Static).update(
+                    f"{health.alias}\n连接测试成功\n\n连接状态\n已连接\n\n协议\n"
+                    f"{PROTOCOL_LABELS[health.provider.protocol]}\n\n环境变量\n"
+                    f"{health.provider.api_key_env or '仅密钥库'} "
+                    f"({'已设置' if health.environment_set else '未设置'})\n\n"
+                    f"已加载模型\n{health.loaded_model_count}"
+                )
+                return
+            self.query_one("#provider-details", Static).update(
+                "新建 Provider\n\n协议\n待选择\n\n环境变量\n待配置\n\n已加载模型\n0"
+            )
             return
-        provider = self.profiles[alias]
+        health = self.health[alias]
+        provider = health.provider
         preset = provider_preset(provider)
-        env = f"环境变量: {provider.api_key_env}" if provider.api_key_env else "仅使用已保存密钥"
-        endpoint = provider.base_url or "官方端点"
         platform = preset.name if preset is not None else "自定义 Provider"
-        self.query_one("#provider-details", Static).update(f"{platform} · {env} · {endpoint}")
+        env_name = provider.api_key_env
+        env_status = "已设置" if health.environment_set else "未设置"
+        endpoint = provider.base_url or "官方端点"
+        connection = {
+            ProviderStatus.READY: "已连接",
+            ProviderStatus.DISCONNECTED: "未连接",
+            ProviderStatus.ERROR: "错误",
+        }[health.status]
+        self.query_one("#provider-details", Static).update(
+            f"{alias}\n{platform}\n\n连接状态\n{connection}\n\n协议\n"
+            f"{PROTOCOL_LABELS[provider.protocol]}\n\n环境变量\n"
+            f"{env_name or '仅密钥库'} ({env_status})\n\n端点\n{endpoint}\n\n"
+            f"已加载模型\n{health.loaded_model_count}"
+        )
 
     def show_error(self, message: str) -> None:
-        target = (
-            "#provider-editor-error"
-            if self.query_one("#provider-editor", Vertical).display
-            else "#provider-details"
-        )
-        self.query_one(target, Static).update(message)
+        self.query_one("#provider-editor-error", Static).update(message)
 
     @on(OptionList.OptionHighlighted, "#provider-list")
     def provider_highlighted(self, event: OptionList.OptionHighlighted) -> None:
-        self._update_details(event.option.id)
+        self._open_editor(event.option.id)
 
     @on(Select.Changed, "#provider-preset")
     def preset_changed(self, event: Select.Changed) -> None:
@@ -478,15 +501,13 @@ class ProviderManager(ModalScreen[None]):
         alias = self._highlighted_alias()
         if button_id == "provider-add":
             self._open_editor(None)
-        elif button_id == "provider-edit" and alias is not None:
-            self._open_editor(alias)
         elif button_id == "provider-default" and alias is not None:
             self.post_message(self.SetDefault(alias))
         elif button_id == "provider-delete" and alias is not None:
             self._pending_delete = alias
             event.button.display = False
             self.query_one("#provider-confirm-delete", Button).display = True
-            self.query_one("#provider-details", Static).update(
+            self.query_one("#provider-editor-error", Static).update(
                 f"再次确认将断开 {alias} 并删除已保存密钥"
             )
         elif button_id == "provider-confirm-delete" and self._pending_delete is not None:
@@ -502,6 +523,10 @@ class ProviderManager(ModalScreen[None]):
 
     def _open_editor(self, alias: str | None) -> None:
         self._editing_alias = alias
+        self._pending_delete = None
+        self._draft_health = None
+        self.query_one("#provider-delete", Button).display = alias is not None
+        self.query_one("#provider-confirm-delete", Button).display = False
         provider = self.profiles.get(alias) if alias else None
         existing_preset = provider_preset(provider) if provider is not None else None
         new_preset = PRESETS_BY_ID.get(self.initial_preset_id or "openai")
@@ -535,12 +560,8 @@ class ProviderManager(ModalScreen[None]):
         model_options = cast(Select[str], self.query_one("#provider-model-options", Select))
         model_options.set_options(())
         model_options.clear()
-        self.query_one("#provider-list", OptionList).display = False
-        self.query_one("#provider-details", Static).display = False
-        self.query_one("#provider-actions", Horizontal).display = False
-        self.query_one("#provider-editor", Vertical).display = True
+        self._update_details(alias)
         alias_input.focus()
-        self.call_after_refresh(self._request_models)
 
     def _apply_preset(self, preset: ProviderPreset) -> None:
         self.query_one("#provider-alias", Input).value = preset.id
@@ -551,34 +572,41 @@ class ProviderManager(ModalScreen[None]):
         model_options = cast(Select[str], self.query_one("#provider-model-options", Select))
         model_options.set_options(())
         model_options.clear()
-        self.call_after_refresh(self._request_models)
+        self._update_details(None)
+
+    def _draft(self) -> ProviderDraft | None:
+        protocol_value = cast(Select[str], self.query_one("#provider-protocol", Select)).value
+        if not isinstance(protocol_value, str):
+            return None
+        preset_value = cast(Select[str], self.query_one("#provider-preset", Select)).value
+        alias = self.query_one("#provider-alias", Input).value.strip()
+        return ProviderDraft(
+            alias=alias,
+            protocol=ProviderProtocol(protocol_value),
+            model=self.query_one("#provider-model", Input).value.strip(),
+            provider_id=(
+                preset_value
+                if isinstance(preset_value, str) and preset_value in PRESETS_BY_ID
+                else None
+            ),
+            api_key_env=self.query_one("#provider-api-key-env", Input).value.strip() or None,
+            credential_id=alias or None,
+            base_url=self.query_one("#provider-base-url", Input).value.strip() or None,
+            secret=self.query_one("#provider-api-key", Input).value.strip() or None,
+            editing_alias=self._editing_alias,
+        )
 
     def _request_models(self) -> None:
-        alias = self.query_one("#provider-alias", Input).value.strip()
-        api_key_env = self.query_one("#provider-api-key-env", Input).value.strip() or None
-        secret = self.query_one("#provider-api-key", Input).value.strip() or None
-        base_url = self.query_one("#provider-base-url", Input).value.strip() or None
-        protocol_value = cast(Select[str], self.query_one("#provider-protocol", Select)).value
-        if not _ALIAS_PATTERN.fullmatch(alias) or not isinstance(protocol_value, str):
-            return
-        preset_value = cast(Select[str], self.query_one("#provider-preset", Select)).value
-        try:
-            provider = ProviderConfig(
-                protocol=ProviderProtocol(protocol_value),
-                model=self.query_one("#provider-model", Input).value.strip() or "pending",
-                provider_id=(
-                    preset_value
-                    if isinstance(preset_value, str) and preset_value in PRESETS_BY_ID
-                    else None
-                ),
-                api_key_env=api_key_env,
-                credential_id=alias,
-                base_url=base_url,
-            )
-        except (TypeError, ValueError):
+        draft = self._draft()
+        if draft is None:
             return
         self.query_one("#provider-editor-error", Static).update("正在加载模型列表…")
-        self.post_message(self.LoadModels(alias, provider, secret))
+        self.post_message(self.LoadModels(draft))
+
+    def update_health(self, health: ProviderHealth) -> None:
+        self.health[health.alias] = health
+        if health.alias not in self.profiles:
+            self._draft_health = health
 
     def show_model_ids(self, model_ids: tuple[str, ...]) -> None:
         model_select = cast(Select[str], self.query_one("#provider-model-options", Select))
@@ -588,57 +616,15 @@ class ProviderManager(ModalScreen[None]):
         model_select.value = selected
         self.query_one("#provider-model", Input).value = selected
         self.query_one("#provider-editor-error", Static).update(f"已加载 {len(model_ids)} 个模型")
+        self._update_details(self._editing_alias)
 
     def _close_editor(self) -> None:
-        self.query_one("#provider-editor", Vertical).display = False
-        self.query_one("#provider-list", OptionList).display = True
-        self.query_one("#provider-details", Static).display = True
-        self.query_one("#provider-actions", Horizontal).display = True
-        self.query_one("#provider-list", OptionList).focus()
+        self._open_editor(self._highlighted_alias())
 
     def _save_editor(self) -> None:
-        alias = self.query_one("#provider-alias", Input).value.strip()
-        model = self.query_one("#provider-model", Input).value.strip()
-        api_key_env = self.query_one("#provider-api-key-env", Input).value.strip() or None
-        secret = self.query_one("#provider-api-key", Input).value.strip() or None
-        base_url = self.query_one("#provider-base-url", Input).value.strip() or None
-        preset_value = cast(Select[str], self.query_one("#provider-preset", Select)).value
-        protocol_value = cast(Select[str], self.query_one("#provider-protocol", Select)).value
-        if not _ALIAS_PATTERN.fullmatch(alias):
-            self.show_error("别名只能包含字母、数字、点、下划线和连字符")
-            return
-        if self._editing_alias is None and alias in self.profiles:
-            self.show_error(f"Provider 已存在: {alias}")
-            return
-        if not model:
-            self.show_error("请填写模型 ID, 或先加载并选择可用模型")
-            return
-        if not isinstance(protocol_value, str):
-            self.show_error("请选择协议")
-            return
-        try:
-            provider = ProviderConfig(
-                protocol=ProviderProtocol(protocol_value),
-                model=model,
-                provider_id=(
-                    preset_value
-                    if isinstance(preset_value, str) and preset_value in PRESETS_BY_ID
-                    else None
-                ),
-                api_key_env=api_key_env,
-                credential_id=alias,
-                base_url=base_url,
-            )
-        except (ValueError, TypeError) as exc:
-            self.show_error(str(exc))
-            return
-        if provider.protocol is ProviderProtocol.OPENAI_COMPATIBLE and not provider.base_url:
-            self.show_error("OpenAI Compatible 协议必须填写 Base URL")
-            return
-        self.post_message(self.Save(alias, provider, secret))
+        draft = self._draft()
+        if draft is not None:
+            self.post_message(self.Save(draft))
 
     def action_close_or_cancel(self) -> None:
-        if self.query_one("#provider-editor", Vertical).display:
-            self._close_editor()
-        else:
-            self.post_message(self.Closed())
+        self._close_editor()
