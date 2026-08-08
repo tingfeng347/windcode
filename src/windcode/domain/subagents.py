@@ -36,6 +36,20 @@ class SubagentStatus(StrEnum):
     INTEGRATED = "integrated"
 
 
+class SubagentOperationError(RuntimeError):
+    def __init__(self, category: str, message: str) -> None:
+        self.category = category
+        super().__init__(message)
+
+
+class SubagentCollaborationError(SubagentOperationError):
+    pass
+
+
+class SubagentCoordinatorError(SubagentCollaborationError):
+    pass
+
+
 TERMINAL_SUBAGENT_STATUSES = frozenset(
     {
         SubagentStatus.BLOCKED,

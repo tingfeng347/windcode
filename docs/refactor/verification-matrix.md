@@ -12,8 +12,8 @@
 | 持久化 | 旧版 fixture 读取/追加/重开 | Session/Auth/Memory/Extension golden 通过 | 所有格式兼容且不触碰真实状态 |
 | 扩展协议 | Plugin/Skill/Hook/MCP valid/invalid fixture | 项目 MCP 信任、required 启动阻断、reload generation 隔离定向测试通过 | fake stdio/HTTP MCP 全通过 |
 | 错误/事件 | 分类真值表、全字段 round trip | 30 类类型往返及 Approval 全字段通过 | 为其他非默认字段补齐逐类往返 |
-| 质量 | Ruff、Pyright、pytest、build | Python 3.11/3.12: 592 passed/3 skipped；其余门禁通过 | 全绿且测试纳入 Git/CI |
-| 架构 | AST 依赖、参数、复杂度脚本 | 1 个顶层环、13 模块环；防替换白名单生效 | 达到硬阈值 |
+| 质量 | Ruff、Pyright、pytest、build | Python 3.11/3.12: 596 passed/3 skipped；其余门禁通过 | 全绿且测试纳入 Git/CI |
+| 架构 | AST 依赖、参数、复杂度脚本 | 顶层/模块 SCC 均为 0；两类反向依赖均为 0；零值门禁生效 | 达到硬阈值 |
 
 ## 架构硬阈值
 

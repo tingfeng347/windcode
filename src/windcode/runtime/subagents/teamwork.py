@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Protocol
 from uuid import uuid4
 
 from windcode.domain.subagents import (
@@ -9,13 +10,37 @@ from windcode.domain.subagents import (
     CollaborationParticipant,
     CollaborationRequest,
     CollaborationResult,
+    SubagentCoordinatorError,
+    SubagentRecord,
     SubagentResult,
     SubagentRole,
     SubagentStatus,
     SubagentTaskKind,
     SubagentTaskSpec,
 )
-from windcode.runtime.subagents.coordinator import SubagentCoordinator, SubagentCoordinatorError
+
+
+class TeamworkCoordinator(Protocol):
+    def available_task_capacity(self) -> int: ...
+
+    def available_concurrency(self) -> int: ...
+
+    async def register_coordination_session(
+        self,
+        collaboration_id: str,
+        mode: CollaborationMode,
+        participant_names: tuple[str, ...],
+        rounds: int,
+    ) -> None: ...
+
+    async def spawn(self, specs: tuple[SubagentTaskSpec, ...]) -> tuple[SubagentRecord, ...]: ...
+
+    async def wait(self, subagent_id: str) -> SubagentResult: ...
+
+    def coordination_contributions(
+        self, collaboration_id: str
+    ) -> tuple[CollaborationContribution, ...]: ...
+
 
 _NEGOTIATION_MARKERS = (
     "协商",
@@ -200,13 +225,13 @@ def _synthesis_spec(
 
 
 async def run_collaboration(
-    coordinator: SubagentCoordinator,
+    coordinator: TeamworkCoordinator,
     request: CollaborationRequest,
 ) -> CollaborationResult:
     collaboration_id = uuid4().hex[:6]
     mode = _resolved_mode(request)
     participant_count = len(request.participants)
-    available_tasks = coordinator.config.max_tasks - len(coordinator.list())
+    available_tasks = coordinator.available_task_capacity()
     if participant_count + 1 > available_tasks:
         raise SubagentCoordinatorError(
             "collaboration_capacity_exceeded",

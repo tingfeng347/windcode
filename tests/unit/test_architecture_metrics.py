@@ -15,6 +15,15 @@ def test_current_architecture_matches_baseline() -> None:
     assert check_against_baseline(collect(), _baseline()) == []
 
 
+def test_runtime_boundaries_have_no_cycles_or_reverse_dependencies() -> None:
+    actual = collect()
+
+    assert actual["component_sccs"] == ()
+    assert actual["module_sccs"] == ()
+    assert actual["tools_to_runtime_edge_list"] == ()
+    assert actual["extensions_to_runtime_edge_list"] == ()
+
+
 def test_architecture_check_rejects_missing_tracked_function() -> None:
     actual = collect()
     complexities = dict(cast(dict[str, object], actual["key_function_complexity"]))

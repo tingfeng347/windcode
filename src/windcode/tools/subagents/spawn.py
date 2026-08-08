@@ -6,9 +6,14 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from windcode.domain.subagents import SubagentRole, SubagentTaskKind, SubagentTaskSpec
+from windcode.domain.subagents import (
+    SubagentOperationError,
+    SubagentRole,
+    SubagentTaskKind,
+    SubagentTaskSpec,
+)
 from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
-from windcode.runtime.subagents.coordinator import SubagentCoordinator, SubagentCoordinatorError
+from windcode.tools.subagents.operations import SubagentOperations
 
 
 class SubagentTaskInput(BaseModel):
@@ -85,7 +90,7 @@ class SpawnSubagentsTool:
     input_model = SpawnSubagentsInput
     effects = frozenset({ToolEffect.PROCESS, ToolEffect.WORKSPACE_WRITE})
 
-    def __init__(self, coordinator: SubagentCoordinator) -> None:
+    def __init__(self, coordinator: SubagentOperations) -> None:
         self.coordinator = coordinator
 
     def approval_summary(self, arguments: Mapping[str, Any]) -> str:
@@ -113,7 +118,7 @@ class SpawnSubagentsTool:
         parsed = cast(SpawnSubagentsInput, arguments)
         try:
             records = await self.coordinator.spawn(tuple(item.to_spec() for item in parsed.tasks))
-        except (SubagentCoordinatorError, ValueError) as exc:
+        except (SubagentOperationError, ValueError) as exc:
             category = getattr(exc, "category", "invalid_task")
             return ToolResult(
                 output=str(exc),

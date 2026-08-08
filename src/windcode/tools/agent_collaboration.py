@@ -1,17 +1,41 @@
 from __future__ import annotations
 
 import json
-from typing import cast
+from typing import Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from windcode.domain.subagents import CollaborationContribution, SubagentMessage
-from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
-from windcode.runtime.subagents.collaboration import (
-    BoundSubagentCollaboration,
-    SubagentCollaborationError,
+from windcode.domain.subagents import (
+    CollaborationContribution,
+    SubagentMessage,
+    SubagentOperationError,
+    SubagentRecord,
 )
+from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
 from windcode.tools.registry import ToolRegistry
+
+
+class AgentCollaboration(Protocol):
+    @property
+    def subagent_id(self) -> str: ...
+
+    def list_agents(self) -> tuple[SubagentRecord, ...]: ...
+
+    async def send(self, target: str, content: str) -> SubagentMessage: ...
+
+    async def wait(
+        self,
+        *,
+        timeout_seconds: float,
+        max_messages: int,
+    ) -> tuple[SubagentMessage, ...]: ...
+
+    async def exchange_round(
+        self,
+        round_index: int,
+        contribution: str,
+        timeout_seconds: float,
+    ) -> tuple[CollaborationContribution, ...]: ...
 
 
 class ListAgentsInput(BaseModel):
@@ -24,7 +48,7 @@ class ListAgentsTool:
     input_model = ListAgentsInput
     effects = frozenset({ToolEffect.READ})
 
-    def __init__(self, collaboration: BoundSubagentCollaboration) -> None:
+    def __init__(self, collaboration: AgentCollaboration) -> None:
         self.collaboration = collaboration
 
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
@@ -56,7 +80,7 @@ class SendMessageTool:
     input_model = SendMessageInput
     effects = frozenset({ToolEffect.AGENT_COMMUNICATION})
 
-    def __init__(self, collaboration: BoundSubagentCollaboration) -> None:
+    def __init__(self, collaboration: AgentCollaboration) -> None:
         self.collaboration = collaboration
 
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
@@ -64,7 +88,7 @@ class SendMessageTool:
         parsed = cast(SendMessageInput, arguments)
         try:
             message = await self.collaboration.send(parsed.target, parsed.message)
-        except SubagentCollaborationError as exc:
+        except SubagentOperationError as exc:
             return ToolResult(str(exc), is_error=True, data={"error": exc.category})
         data = {
             "message_id": message.message_id,
@@ -103,7 +127,7 @@ class WaitForMessagesTool:
     input_model = WaitForMessagesInput
     effects = frozenset({ToolEffect.AGENT_COMMUNICATION})
 
-    def __init__(self, collaboration: BoundSubagentCollaboration) -> None:
+    def __init__(self, collaboration: AgentCollaboration) -> None:
         self.collaboration = collaboration
 
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
@@ -143,7 +167,7 @@ class ExchangeRoundTool:
     input_model = ExchangeRoundInput
     effects = frozenset({ToolEffect.AGENT_COMMUNICATION})
 
-    def __init__(self, collaboration: BoundSubagentCollaboration) -> None:
+    def __init__(self, collaboration: AgentCollaboration) -> None:
         self.collaboration = collaboration
 
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
@@ -155,7 +179,7 @@ class ExchangeRoundTool:
                 parsed.contribution,
                 parsed.timeout_seconds,
             )
-        except SubagentCollaborationError as exc:
+        except SubagentOperationError as exc:
             return ToolResult(str(exc), is_error=True, data={"error": exc.category})
         data = [_contribution_data(item) for item in contributions]
         return ToolResult(json.dumps(data, ensure_ascii=True), data={"contributions": data})
@@ -163,7 +187,7 @@ class ExchangeRoundTool:
 
 def register_collaboration_tools(
     registry: ToolRegistry,
-    collaboration: BoundSubagentCollaboration,
+    collaboration: AgentCollaboration,
 ) -> None:
     for tool in (
         ListAgentsTool(collaboration),
@@ -175,6 +199,6 @@ def register_collaboration_tools(
 
 def register_coordination_tool(
     registry: ToolRegistry,
-    collaboration: BoundSubagentCollaboration,
+    collaboration: AgentCollaboration,
 ) -> None:
     registry.register(ExchangeRoundTool(collaboration))

@@ -8,7 +8,12 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from windcode.config import PermissionMode
-from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
+from windcode.domain import tools as domain_tools
+from windcode.domain.tools import (
+    ToolContext,
+    ToolEffect,
+    ToolResult,
+)
 from windcode.policy import (
     ApprovalChoice,
     CommandAnalysis,
@@ -19,7 +24,7 @@ from windcode.policy import (
     analyze_bash,
 )
 from windcode.runtime import ScheduledCall, ToolScheduler
-from windcode.runtime.scheduler import PolicyConstraints
+from windcode.runtime.scheduler import PolicyConstraints, ScheduledResult
 from windcode.sandbox import SandboxCapabilities, SandboxPolicy, SandboxStatus
 from windcode.tools import ToolRegistry
 
@@ -240,3 +245,9 @@ async def test_unparsed_shell_only_offers_one_time_approval(tmp_path: Path) -> N
     )
     assert results[0].result.data["error"] == "approval_denied"
     assert shell.executions == 0
+
+
+def test_runtime_scheduler_preserves_domain_contract_identity() -> None:
+    assert ScheduledCall is domain_tools.ScheduledCall
+    assert ScheduledResult is domain_tools.ScheduledResult
+    assert PolicyConstraints is domain_tools.PolicyConstraints

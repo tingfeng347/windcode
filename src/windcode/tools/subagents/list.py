@@ -5,7 +5,7 @@ import json
 from pydantic import BaseModel, ConfigDict
 
 from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
-from windcode.runtime.subagents.coordinator import SubagentCoordinator
+from windcode.tools.subagents.operations import SubagentOperations
 
 
 class ListSubagentsInput(BaseModel):
@@ -21,7 +21,7 @@ class ListSubagentsTool:
     input_model = ListSubagentsInput
     effects = frozenset({ToolEffect.READ})
 
-    def __init__(self, coordinator: SubagentCoordinator) -> None:
+    def __init__(self, coordinator: SubagentOperations) -> None:
         self.coordinator = coordinator
 
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
