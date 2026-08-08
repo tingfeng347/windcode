@@ -1,0 +1,5 @@
+transport = "stdio"
+command = "python"
+args = ["mcp/server.py"]
+cwd = "."
+required = false

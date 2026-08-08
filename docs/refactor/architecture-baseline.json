@@ -1,0 +1,18 @@
+{
+  "ceilings": {
+    "component_scc_count": 1,
+    "extensions_to_runtime_edges": 1,
+    "max_component_scc_size": 3,
+    "max_constructor_parameters": 18,
+    "max_module_scc_size": 13,
+    "module_scc_count": 1,
+    "modules_with_fanout_over_20": 2,
+    "tools_to_runtime_edges": 11
+  },
+  "key_function_complexity": {
+    "windcode.runtime.loop:AgentLoop.run": 41,
+    "windcode.runtime.subagents.factory:ChildRuntimeFactory.create": 24,
+    "windcode.sdk:Windcode.start_run": 31,
+    "windcode.tui.app:WindcodeApp._command": 88
+  }
+}

@@ -1,0 +1,9 @@
+id = "guard"
+event = "tool_before_policy"
+tool_id = "dangerous_test_tool"
+priority = 1
+required = true
+
+[action]
+type = "reject"
+reason = "blocked by complete plugin guard"
