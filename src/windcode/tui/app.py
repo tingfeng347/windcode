@@ -128,11 +128,13 @@ class WindcodeApp(App[None]):
         return "按配置"
 
     def _model_setup_message(self) -> str | None:
-        if self.client.transport_registry.aliases:
+        if self.client.can_resolve_model(self.model):
             return None
         if self.client.model_startup_error is not None:
             return f"模型 Provider 加载失败: {self.client.model_startup_error}; 请重新配置 Provider"
         if self.config.providers:
+            if self.client.transport_registry.aliases:
+                return "尚未设置默认模型 Provider, 请在 /model 中设置默认项"
             return "模型 Provider 尚未连接, 请检查 API Key 或重新配置 Provider"
         return "尚未配置模型 Provider, 请先连接模型后再开始任务"
 

@@ -527,6 +527,11 @@ class Windcode:
             chain = (replace(chain[0], model=requested), *chain[1:])
         return chain
 
+    def can_resolve_model(self, requested: str | None = None) -> bool:
+        return (requested is not None and requested in self.transport_registry.aliases) or bool(
+            self._default_chain
+        )
+
     def _memory(self) -> MemoryService:
         if not self.config.memory.enabled or self.memory_service is None:
             raise RuntimeError("long-term memory is disabled")
