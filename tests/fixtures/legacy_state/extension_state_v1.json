@@ -1,0 +1,14 @@
+{
+  "audit": [],
+  "config": {
+    "mcp:legacy": {
+      "enabled": true
+    }
+  },
+  "enabled": {
+    "skill:legacy": true
+  },
+  "plugins": {},
+  "version": 1,
+  "workspaces": {}
+}

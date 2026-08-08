@@ -24,7 +24,8 @@
 
 1. assistant tool call 必须先持久化；取消、预算和错误必须补齐 interrupted tool result。
 2. extension snapshot 在单次 run 内不可变；reload 只影响新 run，并清理相关 MCP 缓存。
-3. required MCP 后台启动不能阻塞普通消息；失败 server 相互隔离。
+3. required MCP 可后台预连接，但运行必须等待其有界启动门；失败阻止相关运行，可选
+   server 失败仍相互隔离。
 4. plugin effects、hook、policy、approval、sandbox 和 child permission 必须保持收紧链路。
 5. durable/transient event、sequence、branch、recovery 和 trace 顺序不能改变。
 6. memory candidate、SOP、经验晋升、预算和项目隔离规则不能退化成普通 CRUD。

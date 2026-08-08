@@ -29,13 +29,16 @@ def _helper_path(helper: str) -> Path | None:
 
 
 def _invoke_helper(helper: Path, *arguments: str) -> dict[str, object]:
-    completed = subprocess.run(
-        (str(helper), *arguments),
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    try:
+        completed = subprocess.run(
+            (str(helper), *arguments),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("Windows sandbox helper timed out") from exc
     if completed.returncode != 0:
         message = completed.stderr.strip() or completed.stdout.strip() or "helper failed"
         raise RuntimeError(message)
@@ -55,9 +58,9 @@ def _capabilities(value: object) -> SandboxCapabilities:
         else {}
     )
     return SandboxCapabilities(
-        bool(raw.get("filesystem_isolation", False)),
-        bool(raw.get("network_isolation", False)),
-        bool(raw.get("process_isolation", False)),
+        raw.get("filesystem_isolation") is True,
+        raw.get("network_isolation") is True,
+        raw.get("process_isolation") is True,
     )
 
 

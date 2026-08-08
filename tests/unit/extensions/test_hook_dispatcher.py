@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from windcode.domain.errors import ErrorCategory, RequiredExtensionError
 from windcode.extensions.hooks.dispatcher import HookDispatcher
 from windcode.extensions.hooks.executor import HookExecutor
 from windcode.extensions.hooks.models import (
@@ -84,8 +85,11 @@ async def test_required_observer_failure_propagates_and_optional_background_clos
     dispatcher = HookDispatcher((required, optional), executor)
     context = HookContext(1, HookEvent.TOOL_AFTER, "session", "run", "call")
 
-    with pytest.raises(RuntimeError, match="required Hook failed"):
+    with pytest.raises(RequiredExtensionError, match="required Hook failed") as error:
         await dispatcher.dispatch(context, background=True)
+    assert isinstance(error.value, RuntimeError)
+    assert error.value.category is ErrorCategory.EXTENSION
+    assert error.value.failed_sources == ("plugin:test/required/required",)
     await dispatcher.aclose()
 
     assert optional.source_id not in executor.calls

@@ -35,7 +35,12 @@ from windcode.runtime.subagents.factory import ChildRuntimeFactory
 from windcode.runtime.subagents.verification import VerificationRunner
 from windcode.sessions import SessionStore
 from windcode.tools import create_builtin_registry
-from windcode.worktrees import WorktreeManager
+from windcode.worktrees import (
+    GitBaseline,
+    GitErrorCategory,
+    WorktreeError,
+    WorktreeManager,
+)
 
 
 def git(cwd: Path, *arguments: str) -> str:
@@ -43,6 +48,10 @@ def git(cwd: Path, *arguments: str) -> str:
         ("git", *arguments), cwd=cwd, text=True, capture_output=True, check=True
     )
     return result.stdout.strip()
+
+
+def git_without_check(cwd: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(("git", *arguments), cwd=cwd, text=True, capture_output=True, check=False)
 
 
 def repository(tmp_path: Path) -> Path:
@@ -100,7 +109,24 @@ def write_task(name: str, goal: str = "add an independent file") -> SubagentTask
     )
 
 
-def coordinator(tmp_path: Path, repo: Path) -> SubagentCoordinator:
+def read_task(name: str) -> SubagentTaskSpec:
+    return SubagentTaskSpec(
+        name,
+        SubagentRole.RESEARCHER,
+        SubagentTaskKind.READ,
+        "inspect the parent workspace",
+        "Read only and report findings.",
+        "A concise report.",
+        ("Do not modify files.",),
+    )
+
+
+def coordinator(
+    tmp_path: Path,
+    repo: Path,
+    *,
+    worktrees: WorktreeManager | None = None,
+) -> SubagentCoordinator:
     state = tmp_path / "state"
     parent_session = SessionStore.create(state / "sessions", "parent")
     parent_bus = EventBus(
@@ -124,9 +150,33 @@ def coordinator(tmp_path: Path, repo: Path) -> SubagentCoordinator:
         config=app_config.subagents,
         event_bus=parent_bus,
         factory=factory,
-        worktrees=WorktreeManager(worktrees_root=tmp_path / "worktrees"),
+        worktrees=worktrees or WorktreeManager(worktrees_root=tmp_path / "worktrees"),
         verification=VerificationRunner(),
     )
+
+
+class UnavailableWorktreeManager(WorktreeManager):
+    async def validate_parent(
+        self,
+        workspace: Path,
+        *,
+        require_clean: bool = True,
+    ) -> GitBaseline:
+        del workspace, require_clean
+        raise WorktreeError(GitErrorCategory.WORKTREE_UNAVAILABLE, "Git Worktree is unavailable")
+
+
+async def assert_write_rejected_but_read_runs(coord: SubagentCoordinator) -> None:
+    with pytest.raises(SubagentCoordinatorError) as error:
+        await coord.spawn((read_task("inspect_parent"), write_task("isolated_child")))
+    assert error.value.category == "write_workspace_blocked"
+    assert coord.list() == ()
+
+    (record,) = await coord.spawn((read_task("inspect_parent"),))
+    completed = await coord.wait(record.subagent_id)
+    assert completed.status is SubagentStatus.COMPLETED
+    assert completed.commit is None
+    assert coord.list()[0].worktree_path is None
 
 
 async def test_write_task_integrates_verifies_and_cleans(tmp_path: Path) -> None:
@@ -148,27 +198,50 @@ async def test_write_task_integrates_verifies_and_cleans(tmp_path: Path) -> None
     assert not worktree.exists()
 
 
-async def test_write_task_runs_in_own_worktree_while_parent_is_dirty(tmp_path: Path) -> None:
+@pytest.mark.parametrize("dirty_state", ("tracked", "untracked", "staged", "conflicted"))
+async def test_dirty_parent_rejects_write_batch_but_read_task_still_runs(
+    tmp_path: Path,
+    dirty_state: str,
+) -> None:
     repo = repository(tmp_path)
-    dirty = repo / "parent-only.txt"
-    dirty.write_text("preserve me\n", encoding="utf-8")
+    if dirty_state == "tracked":
+        (repo / "example.txt").write_text("modified\n", encoding="utf-8")
+    elif dirty_state == "untracked":
+        (repo / "parent-only.txt").write_text("preserve me\n", encoding="utf-8")
+    elif dirty_state == "staged":
+        (repo / "staged.txt").write_text("staged\n", encoding="utf-8")
+        git(repo, "add", "staged.txt")
+    else:
+        git(repo, "checkout", "-b", "conflicting-parent")
+        (repo / "example.txt").write_text("other\n", encoding="utf-8")
+        git(repo, "commit", "-am", "other change")
+        git(repo, "checkout", "main")
+        (repo / "example.txt").write_text("parent\n", encoding="utf-8")
+        git(repo, "commit", "-am", "parent change")
+        merge = git_without_check(repo, "merge", "conflicting-parent")
+        assert merge.returncode != 0
     coord = coordinator(tmp_path, repo)
 
-    (record,) = await coord.spawn((write_task("isolated_child"),))
-    completed = await coord.wait(record.subagent_id)
+    await assert_write_rejected_but_read_runs(coord)
 
-    assert completed.status is SubagentStatus.COMPLETED
-    assert completed.commit is not None
-    assert dirty.read_text(encoding="utf-8") == "preserve me\n"
-    assert "?? parent-only.txt" in git(repo, "status", "--porcelain")
-    worktree = coord.list()[0].worktree_path
-    assert worktree is not None
-    assert not (worktree / "parent-only.txt").exists()
-    with pytest.raises(SubagentCoordinatorError, match="safely committed") as error:
-        await coord.integrate(record.subagent_id)
-    assert error.value.category == "integration_workspace_blocked"
-    assert worktree.exists()
-    assert dirty.read_text(encoding="utf-8") == "preserve me\n"
+    assert git(repo, "status", "--porcelain")
+
+
+async def test_non_git_parent_rejects_write_batch_but_read_task_still_runs(tmp_path: Path) -> None:
+    workspace = tmp_path / "plain"
+    workspace.mkdir()
+    coord = coordinator(tmp_path, workspace)
+
+    await assert_write_rejected_but_read_runs(coord)
+
+
+async def test_missing_worktree_support_rejects_write_but_read_task_still_runs(
+    tmp_path: Path,
+) -> None:
+    repo = repository(tmp_path)
+    coord = coordinator(tmp_path, repo, worktrees=UnavailableWorktreeManager())
+
+    await assert_write_rejected_but_read_runs(coord)
 
 
 async def test_parent_verification_failure_preserves_integrated_evidence(tmp_path: Path) -> None:

@@ -2,8 +2,10 @@ import asyncio
 
 import pytest
 
+from windcode.domain.errors import ErrorCategory
 from windcode.extensions.mcp.client import McpClient, ResolvedHttpServer
 from windcode.extensions.mcp.runtime import McpRuntime, McpServerState
+from windcode.types import RequiredExtensionStartupError
 
 
 class FakeClient(McpClient):
@@ -49,14 +51,53 @@ async def test_runtime_is_lazy_deduplicates_activation_and_closes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_required_failure_isolated_but_reported() -> None:
+async def test_required_failure_attempts_required_only_and_blocks() -> None:
     failed = FakeClient(fail=True)
-    good = FakeClient()
-    runtime = McpRuntime({"bad": (lambda: failed, True), "good": (lambda: good, False)})
+    required = FakeClient()
+    optional = FakeClient()
+    runtime = McpRuntime(
+        {
+            "bad": (lambda: failed, True),
+            "required": (lambda: required, True),
+            "optional": (lambda: optional, False),
+        }
+    )
 
-    assert await runtime.activate_required() == ()
+    with pytest.raises(RequiredExtensionStartupError) as error:
+        await runtime.activate_required()
+
+    assert error.value.failed_sources == ("bad",)
+    assert error.value.category is ErrorCategory.EXTENSION
+    assert "Check configuration, credentials, network policy" in str(error.value)
     assert runtime.state("bad") is McpServerState.FAILED
-    assert runtime.state("good") is McpServerState.DISCOVERED
+    assert runtime.state("required") is McpServerState.READY
+    assert required.connect_count == 1
+    assert runtime.state("optional") is McpServerState.DISCOVERED
+    assert optional.connect_count == 0
+    await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_observers_are_task_local() -> None:
+    first = FakeClient()
+    second = FakeClient()
+    runtime = McpRuntime({"first": (lambda: first, False), "second": (lambda: second, False)})
+    observed: dict[str, list[tuple[str, str]]] = {"first": [], "second": []}
+
+    async def activate(server_id: str) -> None:
+        async def observer(action: str, observed_server_id: str, _status: str) -> None:
+            observed[server_id].append((action, observed_server_id))
+
+        token = runtime.bind_observer(observer)
+        try:
+            await runtime.activate(server_id)
+        finally:
+            runtime.reset_observer(token)
+
+    await asyncio.gather(activate("first"), activate("second"))
+
+    assert {server_id for _, server_id in observed["first"]} == {"first"}
+    assert {server_id for _, server_id in observed["second"]} == {"second"}
     await runtime.aclose()
 
 

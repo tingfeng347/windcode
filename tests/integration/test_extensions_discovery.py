@@ -8,7 +8,7 @@ from windcode.config import load_config
 
 
 @pytest.mark.asyncio
-async def test_project_mcp_connects_without_workspace_trust(
+async def test_project_mcp_connects_only_after_workspace_trust_and_reload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -29,5 +29,17 @@ async def test_project_mcp_connects_without_workspace_trust(
         await client.wait_for_required_mcp()
         record = (await client.inspect_extension("mcp_server:project"))[0]
 
-        assert record.trusted
+        assert not record.trusted
         assert record.enabled
+        initial_status = client.mcp_startup_status
+
+        await client.trust_extension_workspace(workspace, True)
+        assert not (await client.inspect_extension("mcp_server:project"))[0].trusted
+
+        await client.reload_extensions()
+        await client.wait_for_required_mcp()
+        record = (await client.inspect_extension("mcp_server:project"))[0]
+
+        assert record.trusted
+        assert client.mcp_startup_status.total == initial_status.total + 1
+        assert client.mcp_startup_status.loaded == initial_status.loaded + 1

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 
+from windcode.domain.errors import RequiredExtensionError
 from windcode.domain.tools import ToolEffect
 from windcode.extensions.hooks.executor import HookExecutor
 from windcode.extensions.hooks.models import HookContext, HookDefinition, HookOutcome
@@ -39,8 +40,8 @@ class HookDispatcher:
                 try:
                     await self._run_one(hook, context)
                 except (TimeoutError, RuntimeError, ValueError, OSError) as exc:
-                    raise RuntimeError(
-                        f"required Hook failed: {hook.source_id}/{hook.hook_id}: {exc}"
+                    raise RequiredExtensionError(
+                        (f"{hook.source_id}/{hook.hook_id}",), extension_kind="Hook"
                     ) from exc
             for hook in matched:
                 if hook.required:
@@ -59,8 +60,8 @@ class HookDispatcher:
             except (TimeoutError, RuntimeError, ValueError, OSError) as exc:
                 diagnostics.append(f"{hook.source_id}/{hook.hook_id}: {exc}")
                 if hook.required:
-                    raise RuntimeError(
-                        f"required Hook failed: {hook.source_id}/{hook.hook_id}: {exc}"
+                    raise RequiredExtensionError(
+                        (f"{hook.source_id}/{hook.hook_id}",), extension_kind="Hook"
                     ) from exc
                 if hook.decision_making:
                     rejected = rejected or "security Hook failed closed"

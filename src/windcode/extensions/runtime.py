@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from windcode.auth import CredentialStore
@@ -99,7 +99,7 @@ class RunExtensions:
             if record is None or not record.enabled or not record.trusted:
                 continue
             if record.kind is CapabilityKind.HOOK and isinstance(definition, HookDefinition):
-                hooks.append(definition)
+                hooks.append(replace(definition, required=record.required))
             elif record.kind is CapabilityKind.MCP_SERVER and isinstance(
                 definition, (McpStdioConfig, McpHttpConfig)
             ):
@@ -142,7 +142,7 @@ class RunExtensions:
 
                     client_factory = http_factory
 
-                servers[record.public_name] = (client_factory, definition.required)
+                servers[record.public_name] = (client_factory, record.required)
                 if record.source.plugin_id is not None:
                     server_origins[record.public_name] = record.source.source_id
         runtime = mcp_runtime or McpRuntime(servers)
@@ -163,7 +163,8 @@ class RunExtensions:
             owns_mcp=mcp_runtime is None,
         )
         run_extensions.hooks.observer = run_extensions.observe_hook
-        run_extensions.mcp.observer = run_extensions.observe_mcp
+        if run_extensions.owns_mcp:
+            run_extensions.mcp.observer = run_extensions.observe_mcp
         return run_extensions
 
     def _context(

@@ -1,5 +1,6 @@
 """Stable public types for embedding Windcode."""
 
+from windcode.domain.errors import RequiredExtensionError, RequiredExtensionStartupError
 from windcode.domain.events import (
     AgentEventType,
     ApprovalRequested,
@@ -73,6 +74,8 @@ __all__ = [
     "InstallResult",
     "ManagementAuditRecord",
     "ManagementResult",
+    "RequiredExtensionError",
+    "RequiredExtensionStartupError",
     "RunRequest",
     "RunResponse",
     "RunResult",

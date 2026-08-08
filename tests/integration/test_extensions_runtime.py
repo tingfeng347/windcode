@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -97,6 +98,48 @@ async def test_active_run_keeps_old_snapshot_while_new_run_observes_reload(tmp_p
     )
     assert "review" in transport.requests[0].system_prompt
     assert "review" not in transport.requests[1].system_prompt
+
+
+@pytest.mark.asyncio
+async def test_mcp_direct_tools_are_isolated_across_disable_reload(tmp_path: Path) -> None:
+    server = Path(__file__).parents[1] / "contract" / "mcp" / "server.py"
+    transport = SnapshotTransport()
+    config = {
+        "extensions": {
+            "enabled": True,
+            "direct_tool_limit": 2,
+            "mcp_servers": {
+                "contract": {
+                    "transport": "stdio",
+                    "command": sys.executable,
+                    "args": [str(server)],
+                    "required": True,
+                }
+            },
+        }
+    }
+
+    async with Windcode.open(config, state_root=tmp_path / "state") as client:
+        await client.wait_for_required_mcp()
+        client.register_transport("snapshot", "model", transport, primary=True)
+
+        old_handle = client.start_run(RunRequest("old generation", tmp_path))
+        await asyncio.wait_for(transport.first_started.wait(), timeout=5)
+
+        await client.set_extension_enabled("mcp_server:contract", False)
+        await client.reload_extensions()
+        new_handle = client.start_run(RunRequest("new generation", tmp_path))
+        await asyncio.wait_for(new_handle.result(), timeout=5)
+
+        transport.release_first.set()
+        await asyncio.wait_for(old_handle.result(), timeout=5)
+
+    old_tools = {tool.name for tool in transport.requests[0].tools}
+    new_tools = {tool.name for tool in transport.requests[1].tools}
+    assert "mcp_echo" in old_tools
+    assert "mcp_echo" not in new_tools
+    assert "contract" in transport.requests[0].system_prompt
+    assert "contract" not in transport.requests[1].system_prompt
 
 
 @pytest.mark.asyncio

@@ -9,13 +9,11 @@ from typing import Any, cast
 from windcode.domain.tools import ToolEffect
 from windcode.extensions.models import normalize_id
 from windcode.extensions.paths import PathBoundaryError, read_bounded, resolve_beneath
+from windcode.version import VERSION
 
 MANIFEST_PATH = Path(".windcode-plugin/plugin.toml")
 _VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$")
-_COMPATIBILITY = re.compile(
-    r"^(?:\*|(?:>=|>|<=|<|==)?[0-9]+(?:\.[0-9]+){1,2}"
-    r"(?:,(?:>=|>|<=|<|==)?[0-9]+(?:\.[0-9]+){1,2})*)$"
-)
+_COMPARATOR = re.compile(r"(>=|>|<=|<|==)?([0-9]+(?:\.[0-9]+){1,2})")
 _ALLOWED = {
     "manifest_version",
     "id",
@@ -60,6 +58,40 @@ class PluginManifest:
     network_hosts: tuple[str, ...]
     persistent_data: bool
     root: Path
+
+
+def _version_tuple(value: str) -> tuple[int, int, int]:
+    parts = value.split(".")
+    return int(parts[0]), int(parts[1]), int(parts[2]) if len(parts) == 3 else 0
+
+
+def _is_compatible(value: str) -> bool:
+    if value == "*":
+        return True
+    current = _version_tuple(VERSION)
+    constraints = value.split(",")
+    for item in constraints:
+        match = _COMPARATOR.fullmatch(item)
+        if match is None:
+            return False
+        operator = match.group(1) or "=="
+        target = _version_tuple(match.group(2))
+        match operator:
+            case "==":
+                compatible = current == target
+            case ">=":
+                compatible = current >= target
+            case ">":
+                compatible = current > target
+            case "<=":
+                compatible = current <= target
+            case "<":
+                compatible = current < target
+            case _:
+                return False
+        if not compatible:
+            return False
+    return True
 
 
 def _components(root: Path, raw: object, label: str) -> tuple[PluginComponent, ...]:
@@ -143,7 +175,7 @@ def parse_plugin_manifest(root: Path, *, max_bytes: int = 65_536) -> PluginManif
     name, version, compatibility = str(raw["name"]), str(raw["version"]), str(raw["windcode"])
     if not name.strip() or len(name) > 100 or not _VERSION.fullmatch(version):
         raise ValueError("invalid plugin name or version")
-    if not _COMPATIBILITY.fullmatch(compatibility):
+    if not _is_compatible(compatibility):
         raise ValueError(f"incompatible Windcode version range: {compatibility}")
     permissions = cast(dict[str, object], raw.get("permissions", {}))
     if set(permissions) - {"effects", "network_hosts"}:

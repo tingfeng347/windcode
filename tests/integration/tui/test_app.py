@@ -42,7 +42,11 @@ from windcode.tui.widgets import (
 class EchoTransport:
     name = "echo"
 
+    def __init__(self) -> None:
+        self.calls = 0
+
     async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        self.calls += 1
         prompt = next(
             block.text
             for message in reversed(request.messages)
@@ -209,7 +213,7 @@ async def test_invalid_provider_credentials_do_not_exit_tui(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_required_mcp_startup_failure_does_not_block_first_reply(tmp_path: Path) -> None:
+async def test_required_mcp_startup_failure_blocks_first_reply(tmp_path: Path) -> None:
     config = AppConfig.model_validate(
         {
             "extensions": {
@@ -227,21 +231,26 @@ async def test_required_mcp_startup_failure_does_not_block_first_reply(tmp_path:
     )
     app = WindcodeApp(config, workspace=tmp_path, state_root=tmp_path / "state")
     async with app.run_test(size=(100, 32)) as pilot:
-        app.client.register_transport("echo", "model", EchoTransport(), primary=True)
+        transport = EchoTransport()
+        app.client.register_transport("echo", "model", transport, primary=True)
         prompt = app.query_one("#chat-input", ChatInput)
         prompt.insert("继续运行")
         await pilot.press("enter")
         for _ in range(100):
-            replies = list(app.query(Markdown).filter(".ai-message"))
-            if replies and not app.client.required_mcp_loading:
+            errors = tuple(app.query(".error-message").results(Static))
+            if errors and app.handle is not None and app.handle.done:
                 break
             await pilot.pause(0.02)
 
         replies = list(app.query(Markdown).filter(".ai-message"))
-        reply_text = " ".join(str(part.content) for part in replies[0].query(Static))
-        assert "回复:继续运行" in reply_text
+        errors = " ".join(
+            str(message.content) for message in app.query(".error-message").results(Static)
+        )
+        assert not replies
+        assert transport.calls == 0
+        assert "required MCP startup blocked by: blocked" in errors
+        assert "Check configuration, credentials, network policy" in errors
         assert app.client.mcp_startup_status.failed_servers == ("blocked",)
-        assert not tuple(app.query(".error-message").results(Static))
         assert app.is_running
         assert app.handle is not None and app.handle.done
 
