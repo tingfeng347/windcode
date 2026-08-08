@@ -25,9 +25,18 @@ from windcode.domain.models import (
     ToolCallDelta,
 )
 from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
+from windcode.extensions.hooks import HookEvent
+from windcode.extensions.mcp import McpRuntime
+from windcode.extensions.mcp.tools import McpCapabilityService
+from windcode.extensions.runtime import RunExtensions
 from windcode.sdk import RunHandle
-from windcode.sessions import SessionStore
-from windcode.types import SubagentRecord, SubagentStatus
+from windcode.sessions import SessionStatus, SessionStore
+from windcode.types import (
+    RequiredExtensionError,
+    RequiredExtensionStartupError,
+    SubagentRecord,
+    SubagentStatus,
+)
 
 
 class CustomInput(BaseModel):
@@ -152,7 +161,7 @@ async def test_custom_tool_and_transport_use_public_runtime_path(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_run_does_not_wait_for_background_mcp_startup(tmp_path: Path) -> None:
+async def test_run_waits_for_required_mcp_before_model_request(tmp_path: Path) -> None:
     transport = HistoryTransport("immediate")
     startup_gate = asyncio.Event()
 
@@ -166,13 +175,249 @@ async def test_run_does_not_wait_for_background_mcp_startup(tmp_path: Path) -> N
         )
         client.register_transport("history", "model", transport, primary=True)
 
-        result = await asyncio.wait_for(
-            client.start_run(RunRequest("reply now", tmp_path)).result(), timeout=1
-        )
+        handle = client.start_run(RunRequest("reply after startup", tmp_path))
+        await asyncio.sleep(0)
+
+        assert client.required_mcp_loading
+        assert transport.requests == []
+        startup_gate.set()
+        result = await asyncio.wait_for(handle.result(), timeout=1)
 
         assert result.final_text == "immediate"
-        assert client.required_mcp_loading
+        assert len(transport.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelling_run_does_not_cancel_shared_required_mcp_startup(tmp_path: Path) -> None:
+    transport = HistoryTransport("immediate", "subsequent")
+    startup_gate = asyncio.Event()
+
+    async def delayed_startup() -> None:
+        await startup_gate.wait()
+
+    async with Windcode.open(state_root=tmp_path / "state") as client:
+        await client.wait_for_required_mcp()
+        startup_task = asyncio.create_task(delayed_startup())
+        client._mcp_start_task = startup_task  # pyright: ignore[reportPrivateUsage]
+        client.register_transport("history", "model", transport, primary=True)
+
+        cancelled = client.start_run(RunRequest("cancel while starting", tmp_path))
+        surviving = client.start_run(RunRequest("survive startup", tmp_path))
+        await asyncio.sleep(0)
+
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled.cancel()
+        assert not startup_task.cancelled()
+
         startup_gate.set()
+        assert (await asyncio.wait_for(surviving.result(), timeout=1)).status == "completed"
+        subsequent = client.start_run(RunRequest("run after startup", tmp_path))
+        assert (await asyncio.wait_for(subsequent.result(), timeout=1)).status == "completed"
+        assert len(transport.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_required_mcp_failure_blocks_run_before_model_request(tmp_path: Path) -> None:
+    transport = HistoryTransport("must not be used")
+    config = {
+        "extensions": {
+            "enabled": True,
+            "mcp_servers": {
+                "blocked": {
+                    "transport": "streamable_http",
+                    "url": "https://example.test/mcp",
+                    "required": True,
+                }
+            },
+        },
+        "sandbox": {"network_enabled": False},
+    }
+
+    async with Windcode.open(config, state_root=tmp_path / "state") as client:
+        client.register_transport("history", "model", transport, primary=True)
+        handle = client.start_run(RunRequest("must be blocked", tmp_path))
+
+        with pytest.raises(RequiredExtensionStartupError) as error:
+            await handle.result()
+
+        assert error.value.failed_sources == ("blocked",)
+        assert transport.requests == []
+        session = SessionStore.open(
+            client.state_root / "sessions", client.list_sessions()[0].session_id
+        )
+        assert session.metadata.status is SessionStatus.FAILED
+        failed = [
+            record
+            for record in session.load_records()
+            if record.record_type == "agent_event" and record.payload.get("kind") == "run_failed"
+        ]
+        assert len(failed) == 1
+        assert failed[0].payload["category"] == "extension"
+
+
+@pytest.mark.asyncio
+async def test_required_mcp_catalog_failure_records_sourced_terminal_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transport = HistoryTransport("must not be used")
+
+    async def activate_required(runtime: McpRuntime, *, concurrency: int = 4) -> tuple[str, ...]:
+        del concurrency
+        return runtime.required_server_ids
+
+    async def fail_catalog(service: McpCapabilityService, server_id: str) -> tuple[object, ...]:
+        del service
+        if server_id == "bad":
+            raise TimeoutError("catalog timed out")
+        return ()
+
+    monkeypatch.setattr(McpRuntime, "activate_required", activate_required)
+    monkeypatch.setattr(McpCapabilityService, "tool_catalog", fail_catalog)
+    config = {
+        "extensions": {
+            "enabled": True,
+            "mcp_servers": {
+                "bad": {
+                    "transport": "streamable_http",
+                    "url": "https://example.test/mcp",
+                    "required": True,
+                },
+                "healthy": {
+                    "transport": "streamable_http",
+                    "url": "https://example.test/mcp",
+                    "required": True,
+                },
+            },
+        },
+        "sandbox": {"network_enabled": False},
+    }
+
+    async with Windcode.open(config, state_root=tmp_path / "state") as client:
+        client.register_transport("history", "model", transport, primary=True)
+        handle = client.start_run(RunRequest("must be blocked", tmp_path))
+
+        with pytest.raises(RequiredExtensionStartupError) as error:
+            await handle.result()
+
+        assert error.value.failed_sources == ("bad",)
+        assert transport.requests == []
+        session = SessionStore.open(
+            client.state_root / "sessions", client.list_sessions()[0].session_id
+        )
+        assert session.metadata.status is SessionStatus.FAILED
+        terminals = [
+            record.payload.get("kind")
+            for record in session.load_records()
+            if record.record_type == "agent_event"
+            and record.payload.get("kind") in {"run_completed", "run_failed"}
+        ]
+        assert terminals == ["run_failed"]
+
+
+@pytest.mark.asyncio
+async def test_required_hook_startup_failure_records_terminal_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transport = HistoryTransport("must not be used")
+    original_lifecycle = RunExtensions.lifecycle
+
+    async def fail_required_hook(
+        extensions: RunExtensions, event: HookEvent, *, status: str | None = None
+    ) -> None:
+        if event is HookEvent.RUN_START:
+            raise RequiredExtensionError(
+                ("plugin:guard/run-start",), extension_kind="Hook", stage="execution"
+            )
+        await original_lifecycle(extensions, event, status=status)
+
+    monkeypatch.setattr(RunExtensions, "lifecycle", fail_required_hook)
+    async with Windcode.open(state_root=tmp_path / "state") as client:
+        client.register_transport("history", "model", transport, primary=True)
+        handle = client.start_run(RunRequest("blocked by Hook", tmp_path))
+
+        with pytest.raises(RequiredExtensionError) as error:
+            await handle.result()
+
+        assert error.value.failed_sources == ("plugin:guard/run-start",)
+        assert transport.requests == []
+        session = SessionStore.open(
+            client.state_root / "sessions", client.list_sessions()[0].session_id
+        )
+        assert session.metadata.status is SessionStatus.FAILED
+        failed = [
+            record
+            for record in session.load_records()
+            if record.record_type == "agent_event" and record.payload.get("kind") == "run_failed"
+        ]
+        assert len(failed) == 1
+        assert failed[0].payload["category"] == "extension"
+
+
+@pytest.mark.asyncio
+async def test_required_run_end_hook_failure_has_one_failed_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transport = HistoryTransport("finished")
+    original_lifecycle = RunExtensions.lifecycle
+
+    async def fail_required_hook(
+        extensions: RunExtensions, event: HookEvent, *, status: str | None = None
+    ) -> None:
+        if event is HookEvent.RUN_END:
+            raise RequiredExtensionError(
+                ("plugin:guard/run-end",), extension_kind="Hook", stage="execution"
+            )
+        await original_lifecycle(extensions, event, status=status)
+
+    monkeypatch.setattr(RunExtensions, "lifecycle", fail_required_hook)
+    async with Windcode.open(state_root=tmp_path / "state") as client:
+        client.register_transport("history", "model", transport, primary=True)
+        result = await client.start_run(RunRequest("finish through Hook", tmp_path)).result()
+
+        assert result.status == "failed"
+        session = SessionStore.open(
+            client.state_root / "sessions", client.list_sessions()[0].session_id
+        )
+        assert session.metadata.status is SessionStatus.FAILED
+        terminals = [
+            record.payload.get("kind")
+            for record in session.load_records()
+            if record.record_type == "agent_event"
+            and record.payload.get("kind") in {"run_completed", "run_failed"}
+        ]
+        assert terminals == ["run_failed"]
+
+
+@pytest.mark.asyncio
+async def test_session_end_hook_failure_does_not_skip_extension_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transport = HistoryTransport("finished")
+    original_lifecycle = RunExtensions.lifecycle
+    original_aclose = RunExtensions.aclose
+    closed_run_ids: list[str] = []
+
+    async def fail_session_end(
+        extensions: RunExtensions, event: HookEvent, *, status: str | None = None
+    ) -> None:
+        if event is HookEvent.SESSION_END:
+            raise RequiredExtensionError(
+                ("plugin:guard/session-end",), extension_kind="Hook", stage="execution"
+            )
+        await original_lifecycle(extensions, event, status=status)
+
+    async def record_close(extensions: RunExtensions) -> None:
+        closed_run_ids.append(extensions.run_id)
+        await original_aclose(extensions)
+
+    monkeypatch.setattr(RunExtensions, "lifecycle", fail_session_end)
+    monkeypatch.setattr(RunExtensions, "aclose", record_close)
+    async with Windcode.open(state_root=tmp_path / "state") as client:
+        client.register_transport("history", "model", transport, primary=True)
+        result = await client.start_run(RunRequest("finish before cleanup", tmp_path)).result()
+
+        assert result.status == "completed"
+        assert any(run_id != "startup" for run_id in closed_run_ids)
 
 
 def test_start_run_requires_async_context(tmp_path: Path) -> None:

@@ -184,6 +184,22 @@ def collect() -> dict[str, object]:
 
     module_scc = _strongly_connected(graph)
     component_scc = _strongly_connected(component_graph)
+    tools_to_runtime_edges = tuple(
+        sorted(
+            f"{source} -> {target}"
+            for source, targets in graph.items()
+            for target in targets
+            if source.startswith("windcode.tools") and target.startswith("windcode.runtime")
+        )
+    )
+    extensions_to_runtime_edges = tuple(
+        sorted(
+            f"{source} -> {target}"
+            for source, targets in graph.items()
+            for target in targets
+            if source.startswith("windcode.extensions") and target.startswith("windcode.runtime")
+        )
+    )
     return {
         "module_count": len(modules),
         "component_scc_count": len(component_scc),
@@ -192,16 +208,10 @@ def collect() -> dict[str, object]:
         "max_module_scc_size": max((len(group) for group in module_scc), default=0),
         "modules_with_fanout_over_20": sum(len(targets) > 20 for targets in graph.values()),
         "max_constructor_parameters": max(constructors, default=0),
-        "tools_to_runtime_edges": sum(
-            source.startswith("windcode.tools") and target.startswith("windcode.runtime")
-            for source, targets in graph.items()
-            for target in targets
-        ),
-        "extensions_to_runtime_edges": sum(
-            source.startswith("windcode.extensions") and target.startswith("windcode.runtime")
-            for source, targets in graph.items()
-            for target in targets
-        ),
+        "tools_to_runtime_edges": len(tools_to_runtime_edges),
+        "tools_to_runtime_edge_list": tools_to_runtime_edges,
+        "extensions_to_runtime_edges": len(extensions_to_runtime_edges),
+        "extensions_to_runtime_edge_list": extensions_to_runtime_edges,
         "key_function_complexity": {
             name: complexities[name] for name in sorted(KEY_FUNCTIONS) if name in complexities
         },
@@ -210,7 +220,9 @@ def collect() -> dict[str, object]:
     }
 
 
-def _check(actual: Mapping[str, object], baseline: Mapping[str, object]) -> list[str]:
+def check_against_baseline(
+    actual: Mapping[str, object], baseline: Mapping[str, object]
+) -> list[str]:
     failures: list[str] = []
     ceilings = cast(Mapping[str, object], baseline.get("ceilings", {}))
     for name, expected in ceilings.items():
@@ -221,8 +233,23 @@ def _check(actual: Mapping[str, object], baseline: Mapping[str, object]) -> list
     actual_complexity = cast(Mapping[str, object], actual["key_function_complexity"])
     for name, expected in expected_complexity.items():
         value = actual_complexity.get(name)
-        if isinstance(value, int) and isinstance(expected, int) and value > expected:
+        if value is None:
+            failures.append(f"{name}: tracked function is missing")
+        elif isinstance(value, int) and isinstance(expected, int) and value > expected:
             failures.append(f"{name}: complexity {value} exceeds {expected}")
+    allowed_scc_members = cast(Mapping[str, object], baseline.get("allowed_scc_members", {}))
+    for level in ("component", "module"):
+        groups = cast(tuple[tuple[str, ...], ...], actual[f"{level}_sccs"])
+        members = {member for group in groups for member in group}
+        allowed = set(cast(list[str], allowed_scc_members.get(level, [])))
+        if unexpected := sorted(members - allowed):
+            failures.append(f"{level} SCC has new members: {', '.join(unexpected)}")
+    allowed_edges = cast(Mapping[str, object], baseline.get("allowed_edges", {}))
+    for direction in ("tools_to_runtime", "extensions_to_runtime"):
+        edges = set(cast(tuple[str, ...], actual[f"{direction}_edge_list"]))
+        allowed = set(cast(list[str], allowed_edges.get(direction, [])))
+        if unexpected := sorted(edges - allowed):
+            failures.append(f"{direction} has new edges: {', '.join(unexpected)}")
     return failures
 
 
@@ -235,7 +262,7 @@ def main() -> int:
     if options.check is None:
         return 0
     baseline = cast(dict[str, object], json.loads(options.check.read_text(encoding="utf-8")))
-    failures = _check(metrics, baseline)
+    failures = check_against_baseline(metrics, baseline)
     for failure in failures:
         print(f"architecture regression: {failure}")
     return int(bool(failures))

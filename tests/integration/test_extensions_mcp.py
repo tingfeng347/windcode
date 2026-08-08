@@ -66,7 +66,6 @@ async def test_required_stdio_mcp_direct_exposure_events_and_cleanup(tmp_path: P
         "extensions": {
             "enabled": True,
             "direct_tool_limit": 2,
-            "project_mcp_servers": ["contract"],
             "mcp_servers": {
                 "contract": {
                     "transport": "stdio",

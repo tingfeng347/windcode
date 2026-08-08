@@ -1,5 +1,8 @@
 import json
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from windcode.sandbox import SandboxPolicy, SandboxPreset, SeatbeltSandbox, WindowsSandbox
 
@@ -32,28 +35,79 @@ def test_windows_helper_without_complete_capabilities_fails_closed(tmp_path: Pat
     assert sandbox.status.warning is not None
 
 
-def test_windows_helper_exposes_native_remediation(tmp_path: Path) -> None:
+def test_windows_helper_exposes_native_remediation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     helper = tmp_path / "windcode-sandbox"
-    helper.write_text(
-        "#!/bin/sh\nprintf '%s\\n' '"
-        + json.dumps(
-            {
-                "version": 1,
-                "ready": False,
-                "capabilities": {
-                    "filesystem_isolation": False,
-                    "network_isolation": False,
-                    "process_isolation": True,
-                },
-                "warning": "administrator initialization is required",
-                "remediation": "windcode sandbox setup",
-            }
-        )
-        + "'\n"
+    helper.touch()
+    response = {
+        "version": 1,
+        "ready": False,
+        "capabilities": {
+            "filesystem_isolation": False,
+            "network_isolation": False,
+            "process_isolation": True,
+        },
+        "warning": "administrator initialization is required",
+        "remediation": "windcode sandbox setup",
+    }
+
+    def helper_response(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del args, kwargs
+        return subprocess.CompletedProcess((str(helper),), 0, json.dumps(response), "")
+
+    monkeypatch.setattr(
+        "windcode.sandbox.windows.subprocess.run",
+        helper_response,
     )
-    helper.chmod(0o755)
 
     sandbox = WindowsSandbox(tmp_path, helper=str(helper))
 
     assert not sandbox.status.available
     assert sandbox.status.remediation == "windcode sandbox setup"
+
+
+def test_windows_helper_rejects_truthy_non_boolean_capabilities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    helper = tmp_path / "windcode-sandbox"
+    helper.touch()
+    response = {
+        "version": 1,
+        "ready": True,
+        "capabilities": {
+            "filesystem_isolation": "false",
+            "network_isolation": "false",
+            "process_isolation": "false",
+        },
+    }
+
+    def helper_response(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del args, kwargs
+        return subprocess.CompletedProcess((str(helper),), 0, json.dumps(response), "")
+
+    monkeypatch.setattr(
+        "windcode.sandbox.windows.subprocess.run",
+        helper_response,
+    )
+
+    assert not WindowsSandbox(tmp_path, helper=str(helper)).status.available
+
+
+def test_windows_helper_timeout_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    helper = tmp_path / "windcode-sandbox"
+    helper.touch()
+
+    def timeout(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del args, kwargs
+        raise subprocess.TimeoutExpired(str(helper), 30)
+
+    monkeypatch.setattr("windcode.sandbox.windows.subprocess.run", timeout)
+
+    sandbox = WindowsSandbox(tmp_path, helper=str(helper))
+
+    assert not sandbox.status.available
+    assert sandbox.status.warning is not None
+    assert "timed out" in sandbox.status.warning

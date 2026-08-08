@@ -13,6 +13,7 @@ from windcode.domain.errors import ErrorCategory, WindcodeError
         (ErrorCategory.CONTEXT_OVERFLOW, False, True),
         (ErrorCategory.INVALID_REQUEST, False, False),
         (ErrorCategory.CONTENT_POLICY, False, False),
+        (ErrorCategory.EXTENSION, False, False),
         (ErrorCategory.CANCELLED, False, False),
     ],
 )

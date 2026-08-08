@@ -21,7 +21,7 @@ def _plugin(tmp_path: Path, extra: str = "") -> Path:
 id = "com.example.review"
 name = "Review Helper"
 version = "1.0.0"
-windcode = ">=0.1,<0.2"
+windcode = ">=0.2,<0.3"
 skills = [{ id = "review", path = "skills/review" }]
 hooks = [{ id = "guard", path = "hooks/guard.toml" }]
 commands = [{ name = "review", target = "skill:review" }]
@@ -49,10 +49,18 @@ def test_parse_complete_declarative_manifest(tmp_path: Path) -> None:
 
 def test_manifest_accepts_current_minor_compatibility_range(tmp_path: Path) -> None:
     root = _plugin(tmp_path)
-    path = root / ".windcode-plugin" / "plugin.toml"
-    path.write_text(path.read_text().replace(">=0.1,<0.2", ">=0.2,<0.3"))
 
     assert parse_plugin_manifest(root).windcode == ">=0.2,<0.3"
+
+
+@pytest.mark.parametrize("compatibility", [">=0.1,<0.2", ">=1.0,<2.0", "not-a-range"])
+def test_manifest_rejects_incompatible_version_range(tmp_path: Path, compatibility: str) -> None:
+    root = _plugin(tmp_path)
+    path = root / ".windcode-plugin" / "plugin.toml"
+    path.write_text(path.read_text().replace(">=0.2,<0.3", compatibility))
+
+    with pytest.raises(ValueError, match="incompatible Windcode version range"):
+        parse_plugin_manifest(root)
 
 
 def test_manifest_rejects_arbitrary_command_fields(tmp_path: Path) -> None:

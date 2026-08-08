@@ -250,7 +250,7 @@ async def test_toggling_plugin_clears_legacy_component_overrides(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_project_mcp_is_immediately_trusted_without_workspace_trust(
+async def test_project_mcp_requires_workspace_trust_and_explicit_reload(
     tmp_path: Path,
 ) -> None:
     service = ExtensionService(
@@ -267,6 +267,14 @@ async def test_project_mcp_is_immediately_trusted_without_workspace_trust(
     await service.reload()
     record = (await service.inspect("mcp_server:project"))[0]
     assert record.source.scope is ExtensionScope.PROJECT
+    assert not record.trusted
+    assert record.activation is ActivationState.UNTRUSTED
+
+    await service.trust_workspace(tmp_path, True)
+    assert not (await service.inspect("mcp_server:project"))[0].trusted
+
+    await service.reload()
+    record = (await service.inspect("mcp_server:project"))[0]
     assert record.trusted
     assert record.activation is ActivationState.AVAILABLE
 

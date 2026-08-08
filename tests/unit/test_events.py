@@ -1,8 +1,11 @@
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast, get_args
 
 from windcode.domain.events import (
+    AgentEvent,
+    AgentEventType,
     ApprovalRequested,
     RunRequest,
     RunStarted,
@@ -54,6 +57,18 @@ def test_event_round_trip() -> None:
     restored = event_from_dict(event_to_dict(event))
 
     assert restored == event
+
+
+def test_all_30_event_types_round_trip() -> None:
+    event_types = cast(tuple[type[AgentEvent], ...], get_args(AgentEventType))
+    assert len(event_types) == 30
+
+    for event_type in event_types:
+        event = cast(
+            AgentEventType,
+            event_type(event_id="event", session_id="session", run_id="run", turn=1),
+        )
+        assert event_from_dict(event_to_dict(event)) == event, event_type
 
 
 def test_event_serialization_normalizes_exception_values() -> None:

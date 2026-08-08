@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from windcode.domain.errors import RequiredExtensionStartupError
 from windcode.extensions.mcp.client import McpClient
 
 
@@ -45,10 +47,20 @@ class McpRuntime:
         self._closed = False
         self._retirements: set[asyncio.Task[None]] = set()
         self.observer = observer
+        self._context_observer: ContextVar[McpObserver | None] = ContextVar(
+            f"mcp_observer_{id(self)}", default=None
+        )
 
     async def _observe(self, action: str, server_id: str, status: str) -> None:
-        if self.observer is not None:
-            await self.observer(action, server_id, status)
+        observer = self._context_observer.get() or self.observer
+        if observer is not None:
+            await observer(action, server_id, status)
+
+    def bind_observer(self, observer: McpObserver) -> Token[McpObserver | None]:
+        return self._context_observer.set(observer)
+
+    def reset_observer(self, token: Token[McpObserver | None]) -> None:
+        self._context_observer.reset(token)
 
     def state(self, server_id: str) -> McpServerState:
         return self._servers[server_id].state
@@ -183,11 +195,15 @@ class McpRuntime:
             *(activate_one(server_id) for server_id in required),
             return_exceptions=True,
         )
-        return tuple(
+        ready = tuple(
             server_id
             for server_id in required
             if self._servers[server_id].state is McpServerState.READY
         )
+        failed = tuple(server_id for server_id in required if server_id not in ready)
+        if failed:
+            raise RequiredExtensionStartupError(failed, extension_kind="MCP")
+        return ready
 
     async def aclose(self) -> None:
         if self._closed:

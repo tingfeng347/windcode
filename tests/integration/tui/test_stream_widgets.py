@@ -257,8 +257,8 @@ async def test_tool_block_tracks_result_metadata() -> None:
 
 @pytest.mark.asyncio
 async def test_tool_block_treats_command_and_progress_as_plain_text() -> None:
-    command = "printf '%s\\n' \"[/home/tingfeng/code/windcode']\""
-    message = "running [/home/tingfeng/code/windcode']\n"
+    command = "printf '%s\\n' \"[/workspace/windcode']\""
+    message = "running [/workspace/windcode']\n"
     started = ToolStarted(
         event_id="start",
         session_id="session",
