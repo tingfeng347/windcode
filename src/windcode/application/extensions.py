@@ -122,7 +122,6 @@ class ExtensionApplication:
         return self._current
 
     async def open(self) -> None:
-        self._opened = True
         config = self.configuration.current
         extension_root = self.state_root / "extensions"
         self.service = ExtensionService(
@@ -134,9 +133,12 @@ class ExtensionApplication:
         )
         await self.service.reload()
         self._current = self._create_generation()
+        self._opened = True
 
     def _create_generation(self) -> _ExtensionGeneration:
-        service = self._require_service()
+        service = self.service
+        if service is None:
+            raise RuntimeError("extension service is not initialized")
         config = self.configuration.current
         catalogs: dict[str, tuple[McpToolDefinition, ...]] = {}
         selected_tools: set[str] = set()
@@ -277,6 +279,7 @@ class ExtensionApplication:
     async def aclose(self) -> None:
         current = self._current
         if current is None:
+            self._opened = False
             return
         await self._stop_startup(current)
         await current.idle.wait()
