@@ -1,0 +1,7 @@
+id = "notice"
+event = "tool_after"
+priority = 10
+
+[action]
+type = "notify"
+message = "complete plugin observed a tool result"

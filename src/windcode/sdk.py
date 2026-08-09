@@ -16,6 +16,7 @@ from windcode.config import (
     save_model_config,
 )
 from windcode.context import TokenEstimator
+from windcode.domain.errors import RequiredExtensionError, RequiredExtensionStartupError
 from windcode.domain.events import (
     AgentEventType,
     ApprovalResponse,
@@ -243,8 +244,6 @@ class Windcode:
         self._client_extensions: RunExtensions | None = None
         self._mcp_tool_catalogs: dict[str, tuple[McpToolDefinition, ...]] = {}
         self._mcp_selected_tools: set[str] = set()
-        self._mcp_direct_servers: tuple[str, ...] = ()
-        self._mcp_ready_required_servers: tuple[str, ...] = ()
         self._mcp_start_task: asyncio.Task[None] | None = None
         self._mcp_retirement_tasks: set[asyncio.Task[None]] = set()
         self.memory_service: MemoryService | None = None
@@ -330,7 +329,9 @@ class Windcode:
         )
         await self.extension_service.reload()
         self._client_extensions = self._create_client_extensions()
-        self._mcp_start_task = asyncio.create_task(self._start_required_mcp())
+        self._mcp_start_task = asyncio.create_task(
+            self._start_required_mcp(self._client_extensions)
+        )
         return self
 
     def _create_client_extensions(self) -> RunExtensions:
@@ -362,22 +363,27 @@ class Windcode:
         extensions.mcp.observer = None
         await extensions.aclose()
 
-    async def _start_required_mcp(self) -> None:
-        if self._client_extensions is None or self.tool_registry is None:
-            return
-        self._mcp_ready_required_servers = await self._client_extensions.mcp.activate_required()
-        registered = await self._client_extensions.mcp_capabilities.register_direct_tools(
-            self.tool_registry,
-            direct_tool_limit=self.config.extensions.direct_tool_limit,
-            server_ids=self._mcp_ready_required_servers,
-        )
-        if registered:
-            self._mcp_direct_servers = self._mcp_ready_required_servers
+    async def _start_required_mcp(self, extensions: RunExtensions) -> None:
+        try:
+            ready_required_servers = await extensions.mcp.activate_required()
+            await extensions.mcp_capabilities.register_direct_tools(
+                ToolRegistry(),
+                direct_tool_limit=self.config.extensions.direct_tool_limit,
+                server_ids=ready_required_servers,
+                strict=True,
+            )
+        except RequiredExtensionError:
+            raise
+        except Exception as exc:
+            raise RequiredExtensionStartupError(
+                extensions.mcp.required_server_ids,
+                extension_kind="MCP",
+            ) from exc
 
     async def wait_for_required_mcp(self) -> None:
         """Wait for the single client-level MCP startup task."""
         if self._mcp_start_task is not None:
-            await self._mcp_start_task
+            await asyncio.shield(self._mcp_start_task)
 
     @property
     def required_mcp_loading(self) -> bool:
@@ -427,12 +433,12 @@ class Windcode:
         previous = self._client_extensions
         previous_startup = self._mcp_start_task
         active_handles = tuple(handle for handle in self._handles if not handle.done)
-        self._mcp_tool_catalogs.clear()
-        self._mcp_selected_tools.clear()
-        self._mcp_direct_servers = ()
-        self._mcp_ready_required_servers = ()
+        self._mcp_tool_catalogs = {}
+        self._mcp_selected_tools = set()
         self._client_extensions = self._create_client_extensions()
-        self._mcp_start_task = asyncio.create_task(self._start_required_mcp())
+        self._mcp_start_task = asyncio.create_task(
+            self._start_required_mcp(self._client_extensions)
+        )
         if previous is not None:
             retirement = asyncio.create_task(
                 self._retire_client_extensions(previous, active_handles, previous_startup)
@@ -705,6 +711,10 @@ class Windcode:
         run_id = uuid4().hex
         artifact_store = ArtifactStore(session.session_dir)
         extension_snapshot = self._extensions().snapshot
+        client_extensions = self._client_extensions
+        startup_task = self._mcp_start_task
+        mcp_tool_catalogs = self._mcp_tool_catalogs
+        mcp_selected_tools = self._mcp_selected_tools
         extension_redactor = DynamicRedactor()
         run_extensions = RunExtensions.create(
             extension_snapshot,
@@ -717,8 +727,8 @@ class Windcode:
             observe_secret=extension_redactor.register,
             artifact_store=artifact_store,
             network_enabled=self.config.sandbox.network_enabled,
-            mcp_runtime=(None if self._client_extensions is None else self._client_extensions.mcp),
-            mcp_tool_catalogs=self._mcp_tool_catalogs,
+            mcp_runtime=(None if client_extensions is None else client_extensions.mcp),
+            mcp_tool_catalogs=mcp_tool_catalogs,
         )
         trace = TraceStore(
             run_id,
@@ -754,12 +764,12 @@ class Windcode:
         register_mcp_status_tool(
             run_registry,
             extension_snapshot.capabilities,
-            self._mcp_tool_catalogs,
-            self._mcp_selected_tools,
+            mcp_tool_catalogs,
+            mcp_selected_tools,
         )
         if run_extensions.mcp.server_ids:
             register_mcp_management_tools(
-                run_registry, run_extensions.mcp_capabilities, self._mcp_selected_tools
+                run_registry, run_extensions.mcp_capabilities, mcp_selected_tools
             )
         run_registry.register(
             ShellTool(
@@ -1176,6 +1186,14 @@ class Windcode:
                         durable=True,
                     )
 
+        run_end_observed = False
+
+        async def complete_run(result: RunResult) -> None:
+            nonlocal run_end_observed
+            run_end_observed = True
+            await run_extensions.lifecycle(HookEvent.RUN_END, status=result.status)
+            await extract_memories(result)
+
         loop = AgentLoop(
             session_id=session.metadata.session_id,
             run_id=run_id,
@@ -1197,20 +1215,21 @@ class Windcode:
             close_event_bus=False,
             sourced_context_provider=run_extensions.drain_context,
             compact_observer=run_extensions.compact_lifecycle,
-            completion_observer=extract_memories,
+            completion_observer=complete_run,
         )
         after_sequence = session.metadata.next_sequence - 1
 
         async def run_with_subagents() -> RunResult:
+            observer_token = run_extensions.mcp.bind_observer(run_extensions.observe_mcp)
             try:
-                # MCP startup is intentionally background work. A normal model turn must not wait
-                # for every required server; expose only the servers that were ready when this run
-                # started, while the remaining servers stay available through on-demand search.
-                startup_finished = not self.required_mcp_loading
-                ready_required_servers = (
-                    self._mcp_ready_required_servers if startup_finished else ()
+                if startup_task is not None:
+                    await asyncio.shield(startup_task)
+                ready_required_servers = tuple(
+                    server_id
+                    for server_id in run_extensions.mcp.required_server_ids
+                    if run_extensions.mcp.state(server_id) is McpServerState.READY
                 )
-                await run_extensions.mcp_capabilities.register_direct_tools(
+                direct_tools = await run_extensions.mcp_capabilities.register_direct_tools(
                     run_registry,
                     direct_tool_limit=self.config.extensions.direct_tool_limit,
                     server_ids=ready_required_servers,
@@ -1221,17 +1240,16 @@ class Windcode:
                     server_ids=ready_required_servers,
                 )
                 await run_extensions.mcp_capabilities.register_selected_tools(
-                    run_registry, self._mcp_selected_tools
+                    run_registry, mcp_selected_tools
                 )
                 await run_extensions.mcp_capabilities.register_selected_tools(
-                    child_tools, self._mcp_selected_tools
+                    child_tools, mcp_selected_tools
                 )
-                direct_servers = self._mcp_direct_servers if startup_finished else ()
-                failed_servers = set(self.mcp_startup_status.failed_servers)
+                direct_servers = ready_required_servers if direct_tools else ()
                 search_servers = tuple(
                     server_id
                     for server_id in run_extensions.mcp.server_ids
-                    if server_id not in set(direct_servers) and server_id not in failed_servers
+                    if server_id not in set(direct_servers)
                 )
                 loop.system_prompt = make_system_prompt(direct_servers, search_servers)
                 if memory_context:
@@ -1260,17 +1278,35 @@ class Windcode:
                 if existing_session:
                     await coordinator.recover()
                 result = await loop.run(request.prompt, workspace, initial_messages)
-                await run_extensions.lifecycle(HookEvent.RUN_END, status=result.status)
+                if not run_end_observed:
+                    try:
+                        await run_extensions.lifecycle(HookEvent.RUN_END, status=result.status)
+                    except RequiredExtensionError:
+                        # A primary failed/cancelled terminal record already owns the outcome.
+                        pass
                 return result
+            except RequiredExtensionError as exc:
+                await loop.record_startup_failure(exc)
+                try:
+                    await run_extensions.lifecycle(HookEvent.RUN_ERROR, status="error")
+                except BaseException:
+                    pass
+                raise
             except BaseException:
-                await run_extensions.lifecycle(HookEvent.RUN_ERROR, status="error")
+                try:
+                    await run_extensions.lifecycle(HookEvent.RUN_ERROR, status="error")
+                except BaseException:
+                    pass
                 raise
             finally:
-                await coordinator.shutdown("parent run ended")
-                await run_extensions.lifecycle(HookEvent.SESSION_END)
-                await run_extensions.aclose()
-                # The MCP runtime outlives this run; do not retain its closed event bus.
-                run_extensions.mcp.observer = None
+                await asyncio.gather(
+                    coordinator.shutdown("parent run ended"), return_exceptions=True
+                )
+                await asyncio.gather(
+                    run_extensions.lifecycle(HookEvent.SESSION_END), return_exceptions=True
+                )
+                await asyncio.gather(run_extensions.aclose(), return_exceptions=True)
+                run_extensions.mcp.reset_observer(observer_token)
                 extension_redactor.clear()
                 await bus.close()
 

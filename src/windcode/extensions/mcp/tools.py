@@ -19,6 +19,7 @@ from mcp.types import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 
+from windcode.domain.errors import RequiredExtensionStartupError
 from windcode.domain.messages import SourcedContextMessage
 from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
 from windcode.extensions.mcp.adapter import McpToolAdapter
@@ -296,15 +297,25 @@ class McpCapabilityService:
         *,
         direct_tool_limit: int,
         server_ids: tuple[str, ...] | None = None,
+        strict: bool = False,
     ) -> tuple[str, ...]:
         selected_servers = self.runtime.required_server_ids if server_ids is None else server_ids
         tool_lists: list[tuple[McpToolDefinition, ...]] = []
+        failed_servers: list[str] = []
+        first_failure: Exception | None = None
         for server_id in selected_servers:
             try:
                 tool_lists.append(await self.tool_catalog(server_id))
-            except Exception:
+            except Exception as exc:
+                if strict:
+                    failed_servers.append(server_id)
+                    first_failure = first_failure or exc
                 # Direct registration is best-effort across independent MCP servers.
                 continue
+        if failed_servers:
+            raise RequiredExtensionStartupError(
+                tuple(failed_servers), extension_kind="MCP"
+            ) from first_failure
         definitions = tuple(tool for tools in tool_lists for tool in tools)
         if len(definitions) > direct_tool_limit:
             return ()

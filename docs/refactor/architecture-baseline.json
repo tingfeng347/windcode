@@ -1,0 +1,58 @@
+{
+  "allowed_edges": {
+    "extensions_to_runtime": [
+      "windcode.extensions.runtime -> windcode.runtime.scheduler"
+    ],
+    "tools_to_runtime": [
+      "windcode.tools.agent_collaboration -> windcode.runtime.subagents.collaboration",
+      "windcode.tools.builtins -> windcode.runtime.subagents.coordinator",
+      "windcode.tools.shell -> windcode.runtime.process",
+      "windcode.tools.subagents -> windcode.runtime.subagents.coordinator",
+      "windcode.tools.subagents.cancel -> windcode.runtime.subagents.coordinator",
+      "windcode.tools.subagents.collaborate -> windcode.runtime.subagents.coordinator",
+      "windcode.tools.subagents.collaborate -> windcode.runtime.subagents.teamwork",
+      "windcode.tools.subagents.integrate -> windcode.runtime.subagents.coordinator",
+      "windcode.tools.subagents.list -> windcode.runtime.subagents.coordinator",
+      "windcode.tools.subagents.spawn -> windcode.runtime.subagents.coordinator",
+      "windcode.tools.subagents.wait -> windcode.runtime.subagents.coordinator"
+    ]
+  },
+  "allowed_scc_members": {
+    "component": [
+      "extensions",
+      "runtime",
+      "tools"
+    ],
+    "module": [
+      "windcode.runtime.prompts",
+      "windcode.runtime.subagents.coordinator",
+      "windcode.runtime.subagents.factory",
+      "windcode.runtime.subagents.teamwork",
+      "windcode.tools",
+      "windcode.tools.builtins",
+      "windcode.tools.subagents",
+      "windcode.tools.subagents.cancel",
+      "windcode.tools.subagents.collaborate",
+      "windcode.tools.subagents.integrate",
+      "windcode.tools.subagents.list",
+      "windcode.tools.subagents.spawn",
+      "windcode.tools.subagents.wait"
+    ]
+  },
+  "ceilings": {
+    "component_scc_count": 1,
+    "extensions_to_runtime_edges": 1,
+    "max_component_scc_size": 3,
+    "max_constructor_parameters": 18,
+    "max_module_scc_size": 13,
+    "module_scc_count": 1,
+    "modules_with_fanout_over_20": 2,
+    "tools_to_runtime_edges": 11
+  },
+  "key_function_complexity": {
+    "windcode.runtime.loop:AgentLoop.run": 41,
+    "windcode.runtime.subagents.factory:ChildRuntimeFactory.create": 24,
+    "windcode.sdk:Windcode.start_run": 31,
+    "windcode.tui.app:WindcodeApp._command": 88
+  }
+}

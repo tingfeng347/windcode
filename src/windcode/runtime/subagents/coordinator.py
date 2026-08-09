@@ -499,10 +499,7 @@ class SubagentCoordinator:
             baseline: GitBaseline | None = None
             if any(spec.kind is SubagentTaskKind.WRITE for spec in specs):
                 try:
-                    baseline = await self.worktrees.validate_parent(
-                        self.workspace,
-                        require_clean=False,
-                    )
+                    baseline = await self.worktrees.validate_parent(self.workspace)
                 except Exception as exc:
                     raise SubagentCoordinatorError("write_workspace_blocked", str(exc)) from exc
 

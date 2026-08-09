@@ -238,7 +238,7 @@ class ExtensionService:
                 result = discover_skills(
                     tuple(roots), max_metadata_bytes=self.config.max_metadata_bytes
                 )
-                result = self._with_configured_mcp(result)
+                result = self._with_configured_mcp(result, workspace_trusted=trusted)
                 result = self._with_installed_plugins(result)
             candidate = build_candidate(
                 result,
@@ -260,7 +260,12 @@ class ExtensionService:
             published = self._snapshots.publish(candidate)
             return ManagementResult(published, False, candidate.snapshot.diagnostics)
 
-    def _with_configured_mcp(self, result: DiscoveryResult) -> DiscoveryResult:
+    def _with_configured_mcp(
+        self,
+        result: DiscoveryResult,
+        *,
+        workspace_trusted: bool,
+    ) -> DiscoveryResult:
         records = list(result.records)
         definitions = dict(result.definitions)
         for server_id, definition in sorted(self.config.mcp_servers.items()):
@@ -276,6 +281,7 @@ class ExtensionService:
                 else self._state.enabled.get(stable_id, definition.enabled)
             )
             effective_definition = definition.model_copy(update={"enabled": enabled})
+            trusted = not project_source or workspace_trusted
             records.append(
                 CapabilityRecord(
                     stable_id,
@@ -283,10 +289,14 @@ class ExtensionService:
                     CapabilityKind.MCP_SERVER,
                     source,
                     enabled=enabled,
-                    trusted=True,
+                    trusted=trusted,
                     required=definition.required,
                     activation=(
-                        ActivationState.INACTIVE if not enabled else ActivationState.AVAILABLE
+                        ActivationState.INACTIVE
+                        if not enabled
+                        else (
+                            ActivationState.UNTRUSTED if not trusted else ActivationState.AVAILABLE
+                        )
                     ),
                     permissions=PermissionRequirement(
                         network=definition.transport == "streamable_http",

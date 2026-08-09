@@ -8,7 +8,7 @@ from typing import Any, Protocol, cast
 from uuid import uuid4
 
 from windcode.context import TokenEstimator, compact_context, truncate_context
-from windcode.domain.errors import WindcodeError
+from windcode.domain.errors import RequiredExtensionError, WindcodeError
 from windcode.domain.events import (
     ApprovalRequested,
     ApprovalResponse,
@@ -295,6 +295,24 @@ class AgentLoop:
         self.event_bus.session_store.set_status(SessionStatus.FAILED)
         return result
 
+    async def record_startup_failure(self, error: WindcodeError) -> None:
+        await self.event_bus.publish(
+            RunFailed(**self._common(0), message=str(error), category=error.category.value),
+            durable=True,
+        )
+        self.event_bus.session_store.set_status(SessionStatus.FAILED)
+
+    async def _observe_completion(self, result: RunResult) -> None:
+        if self.completion_observer is None:
+            return
+        try:
+            await self.completion_observer(result)
+        except RequiredExtensionError:
+            raise
+        except Exception:
+            # Learning is best-effort and must never change task success.
+            pass
+
     async def run(
         self,
         prompt: str,
@@ -478,12 +496,7 @@ class AgentLoop:
                                 )
                             continue
                     result = build_run_result(final_text, tuple(records), usage=total_usage)
-                    if self.completion_observer is not None:
-                        try:
-                            await self.completion_observer(result)
-                        except Exception:
-                            # Learning is best-effort and must never change task success.
-                            pass
+                    await self._observe_completion(result)
                     await self.event_bus.publish(
                         RunCompleted(**self._common(), result=result), durable=True
                     )

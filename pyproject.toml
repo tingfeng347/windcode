@@ -74,8 +74,9 @@ select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
 [tool.pyright]
 typeCheckingMode = "strict"
 pythonVersion = "3.11"
-include = ["src"]
+include = ["src", "tests"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+pythonpath = ["."]
 testpaths = ["tests"]
