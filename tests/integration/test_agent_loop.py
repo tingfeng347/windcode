@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict
 from windcode.config import PermissionMode
 from windcode.domain.errors import ErrorCategory, WindcodeError
 from windcode.domain.events import (
+    ModelStarted,
     ReasoningStatus,
     RunCompleted,
     RunFailed,
@@ -33,12 +34,14 @@ from windcode.policy import PolicyEngine
 from windcode.providers import ModelTarget
 from windcode.runtime import (
     AgentLoop,
+    ContextWindow,
     EventBus,
     ModelSession,
     RunBudgets,
     RunControl,
     RunIdentity,
     RunJournal,
+    RunObservers,
     ToolRuntime,
     ToolScheduler,
 )
@@ -156,10 +159,13 @@ async def test_model_turn_runner_assembles_streamed_response_through_its_interfa
             "run_id": "run",
             "turn": 1,
         },
+        ToolScheduler(ToolRegistry(), PolicyEngine(PermissionMode.DEFAULT)),
+        ContextWindow(),
+        RunObservers(),
     )
 
     outcome = await runner.execute(
-        ModelRequest(model="model", messages=(), system_prompt="system"),
+        (),
         Usage(10, 20),
     )
     await bus.close()
@@ -173,6 +179,7 @@ async def test_model_turn_runner_assembles_streamed_response_through_its_interfa
         "_error": "Expecting value: line 1 column 2 (char 1)",
     }
     assert [type(event) for event in events] == [
+        ModelStarted,
         TextDeltaEvent,
         ReasoningStatus,
         UsageUpdated,
