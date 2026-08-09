@@ -14,7 +14,7 @@
     "max_constructor_parameters": 11,
     "max_module_scc_size": 0,
     "module_scc_count": 0,
-    "modules_with_fanout_over_20": 2,
+    "modules_with_fanout_over_20": 1,
     "tools_to_runtime_edges": 0
   },
   "key_function_complexity": {

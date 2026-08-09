@@ -5,9 +5,9 @@ from pathlib import Path
 
 from windcode.application.configuration import ConfigurationApplication
 from windcode.application.extensions import ExtensionApplication
+from windcode.application.memory import MemoryApplication
 from windcode.application.providers import ProviderApplication
 from windcode.application.runs import RunApplication
-from windcode.memory import MemoryService
 
 
 class ApplicationLifecycle:
@@ -19,12 +19,13 @@ class ApplicationLifecycle:
         providers: ProviderApplication,
         extensions: ExtensionApplication,
         runs: RunApplication,
+        memory: MemoryApplication,
     ) -> None:
         self.configuration = configuration
         self.providers = providers
         self.extensions = extensions
         self.runs = runs
-        self.memory_service: MemoryService | None = None
+        self.memory = memory
         self._lock = asyncio.Lock()
         self._opened = False
         self._closing = False
@@ -39,8 +40,7 @@ class ApplicationLifecycle:
             state_root.mkdir(  # noqa: ASYNC240 - local state is initialized before concurrent work
                 parents=True, exist_ok=True
             )
-            if self.configuration.current.memory.enabled:
-                self.memory_service = MemoryService(state_root, workspace)
+            self.memory.open(state_root=state_root, workspace=workspace)
             await self.providers.open()
             self.runs.open()
             await self.extensions.open()
