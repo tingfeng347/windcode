@@ -92,17 +92,15 @@ from windcode.runtime.loop import (
     ToolRuntime,
 )
 from windcode.runtime.prompts import build_system_prompt
-from windcode.runtime.resources import RunResources
+from windcode.runtime.run_builder import RunBuilder
 from windcode.runtime.run_handle import RunHandle
 from windcode.runtime.scheduler import ScheduledCall, ToolScheduler
 from windcode.runtime.subagents import (
-    ChildRunScope,
     SubagentCoordinator,
     VerificationRunner,
 )
 from windcode.sandbox import SandboxPreset, create_sandbox_backend
 from windcode.sessions import (
-    ArtifactStore,
     EventRecord,
     SessionMetadata,
     SessionStore,
@@ -588,36 +586,14 @@ class Windcode:
     def start_run(self, request: RunRequest) -> RunHandle:
         if not self._entered or self.tool_registry is None:
             raise RuntimeError("start runs inside the Windcode async context")
-        workspace = request.workspace.expanduser().resolve()
-        if not workspace.is_dir():
-            raise ValueError(f"workspace is not a directory: {workspace}")
-        sessions_root = self.state_root / "sessions"
-        existing_session = (
-            request.session_id is not None
-            and (sessions_root / request.session_id / "meta.json").exists()
-        )
-        if existing_session:
-            assert request.session_id is not None
-            session = SessionStore.open(sessions_root, request.session_id)
-        else:
-            session = SessionStore.create(sessions_root, request.session_id)
-        if not session.metadata.summary:
-            session.set_summary(self._session_summary(request.prompt))
-        initial_messages: tuple[Message, ...] = ()
-        if existing_session and session.metadata.head_record_id is not None:
-            records = ancestor_chain(
-                session.load_records(),
-                session.metadata.head_record_id,
-            )
-            initial_messages = heal_dangling_tool_calls(
-                tuple(
-                    message_from_dict(record.payload)
-                    for record in records
-                    if record.record_type == "conversation_message"
-                )
-            )
-        run_id = uuid4().hex
-        artifact_store = ArtifactStore(session.session_dir)
+        builder = RunBuilder(self.config, state_root=self.state_root, model_chain=self._model_chain)
+        preparation = builder.prepare_parent(request)
+        workspace = preparation.workspace
+        existing_session = preparation.existing_session
+        session = preparation.session
+        initial_messages = preparation.initial_messages
+        run_id = preparation.run_id
+        artifact_store = preparation.artifact_store
         extension_snapshot = self._extensions().snapshot
         client_extensions = self._client_extensions
         startup_task = self._mcp_start_task
@@ -638,14 +614,7 @@ class Windcode:
             mcp_runtime=(None if client_extensions is None else client_extensions.mcp),
             mcp_tool_catalogs=mcp_tool_catalogs,
         )
-        resources = RunResources.create(
-            session=session,
-            run_id=run_id,
-            state_root=self.state_root,
-            artifact_store=artifact_store,
-            trace_config=self.config.trace,
-            context_config=self.config.context,
-        )
+        resources = builder.resources(preparation)
         bus = resources.event_bus
         run_extensions.event_observer = lambda event: bus.publish(event, durable=True)
         mode = (
@@ -786,12 +755,10 @@ class Windcode:
         control = RunControl(budgets)
         if request.compact_before_run:
             control.request_compaction()
-        child_scope = ChildRunScope(
-            config=self.config,
-            state_root=self.state_root,
-            parent_tools=child_tools,
-            model_chain=lambda model: self._model_chain(model or request.model),
-            extension_snapshot=extension_snapshot,
+        child_scope = builder.child_scope(
+            child_tools,
+            extension_snapshot,
+            default_model=request.model,
         )
         coordinator = SubagentCoordinator(
             parent_session_id=session.metadata.session_id,
