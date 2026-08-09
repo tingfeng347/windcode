@@ -121,6 +121,7 @@ class WindcodeApp(App[None]):
         self.pending_extension_mutation: tuple[str, str | None] | None = None
         self.prompt_queue: deque[str] = deque()
         self._escape_interrupt_deadline = 0.0
+        self._unmounting = False
         self.ui_mode: Literal["welcome", "chat"] = "chat"
 
     def _display_model(self) -> str:
@@ -230,12 +231,15 @@ class WindcodeApp(App[None]):
         self.set_class(event.size.width < 60, "narrow")
 
     async def on_unmount(self) -> None:
+        self._unmounting = True
         self.prompt_queue.clear()
         if self.handle is not None and not self.handle.done:
             await self.handle.cancel()
         await self.client.aclose()
 
     def _update_status(self, state: str) -> None:
+        if self._unmounting:
+            return
         self.query_one("#status-bar", StatusBar).set_state(
             model=self._display_model(),
             permission=self.permission_mode,
