@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -23,6 +23,7 @@ from windcode.policy import ApprovalChoice, PolicyDecision, PolicyEngine, Policy
 from windcode.policy.rules import CommandRuleStore
 from windcode.providers import ModelTarget
 from windcode.runtime.control import BudgetExceeded, RunBudgets, RunControl
+from windcode.runtime.event_bus import EventBus
 from windcode.runtime.loop import (
     AgentBlocked,
     AgentLoop,
@@ -209,6 +210,16 @@ def build_child_prompt(record: SubagentRecord) -> str:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _ChildToolPlan:
+    registry: ToolRegistry
+    allowed_names: frozenset[str]
+    configured_preset: SandboxPreset
+    effective_preset: SandboxPreset
+    effective_permission: PermissionMode
+    sandbox_available: bool
+
+
 class ChildRunScope:
     def __init__(
         self,
@@ -225,18 +236,14 @@ class ChildRunScope:
         self.model_chain = model_chain
         self.extension_snapshot = extension_snapshot or ExtensionSnapshot(0, "empty")
 
-    def create(
+    def _prepare_tools(
         self,
         record: SubagentRecord,
-        *,
         workspace: Path,
         parent_permission: PermissionMode,
-        aggregate_budget: AggregateBudget,
-        approval_router: ApprovalRouter,
-        collaboration: BoundSubagentCollaboration | None = None,
-    ) -> ChildRuntime:
+        collaboration: BoundSubagentCollaboration | None,
+    ) -> _ChildToolPlan:
         spec = record.spec
-        policy = ROLE_POLICIES[spec.role]
         names = resolve_role_tools(
             spec.role,
             spec.kind,
@@ -252,27 +259,27 @@ class ChildRunScope:
         if collaboration is not None and spec.coordination_id is not None:
             register_coordination_tool(registry, collaboration)
 
-        git_common = (
-            _git_common_directory(workspace) if spec.kind is SubagentTaskKind.WRITE else None
-        )
         configured_preset = SandboxPreset(self.config.sandbox.preset)
-        preset = configured_preset
+        effective_preset = configured_preset
         if (
             spec.kind is SubagentTaskKind.READ
             and configured_preset is not SandboxPreset.DANGER_FULL_ACCESS
         ):
-            preset = SandboxPreset.READ_ONLY
+            effective_preset = SandboxPreset.READ_ONLY
         writable_roots = tuple(
             (workspace / value).resolve()
             if not Path(value).is_absolute()
             else Path(value).resolve()
             for value in self.config.sandbox.writable_roots
         )
+        git_common = (
+            _git_common_directory(workspace) if spec.kind is SubagentTaskKind.WRITE else None
+        )
         if git_common is not None:
             writable_roots = (*writable_roots, git_common)
         sandbox, sandbox_policy = create_sandbox_backend(
             workspace,
-            preset=preset,
+            preset=effective_preset,
             writable_roots=writable_roots,
             network_enabled=self.config.sandbox.network_enabled,
         )
@@ -288,6 +295,101 @@ class ChildRunScope:
         effective_permission = parent_permission
         if spec.kind is SubagentTaskKind.READ and sandbox is None:
             effective_permission = PermissionMode.PLAN
+        return _ChildToolPlan(
+            registry,
+            names,
+            configured_preset,
+            effective_preset,
+            effective_permission,
+            sandbox is not None and sandbox.status.available,
+        )
+
+    def _register_skills(
+        self,
+        plan: _ChildToolPlan,
+        event_bus: EventBus,
+        *,
+        session_id: str,
+        run_id: str,
+    ) -> SkillRuntime:
+        skill_runtime = SkillRuntime(
+            SkillCatalog(
+                self.extension_snapshot,
+                SkillLoader(max_content_bytes=self.config.extensions.max_content_bytes),
+            )
+        )
+
+        async def activate_skill(selector: str) -> SkillActivationResult:
+            result = skill_runtime.activate(selector)
+            await event_bus.publish(
+                extension_event(
+                    event_id=uuid4().hex,
+                    session_id=session_id,
+                    run_id=run_id,
+                    turn=0,
+                    action="skill_loaded",
+                    snapshot_generation=self.extension_snapshot.generation,
+                    extension_id=result.name,
+                    source_id=result.source_id,
+                    status="loaded" if result.loaded else "already_loaded",
+                ),
+                durable=True,
+            )
+            return result
+
+        if {"search_skills", "load_skill"} <= plan.allowed_names:
+            register_skill_tools(plan.registry, skill_runtime, activate_skill, replace=True)
+        return skill_runtime
+
+    @staticmethod
+    def _system_prompt(
+        record: SubagentRecord,
+        workspace: Path,
+        plan: _ChildToolPlan,
+        skill_runtime: SkillRuntime,
+    ) -> str:
+        system_prompt = build_system_prompt(
+            workspace=workspace,
+            permission_mode=plan.effective_permission,
+            instructions=load_instructions(workspace, workspace_root=workspace),
+            tools=plan.registry,
+            is_subagent=True,
+            skills=(skill_runtime.search() if "load_skill" in plan.registry.names() else ()),
+            mcp_direct_servers=_mcp_server_ids(plan.registry),
+        )
+        spec = record.spec
+        if spec.coordination_id is not None:
+            collaboration = (
+                "This is synchronized team work. You must use exchange_round for every round "
+                "required by the task before finishing; generic peer messaging is disabled."
+            )
+        elif spec.peer_collaboration:
+            collaboration = (
+                "You can communicate with sibling subagents through the dedicated collaboration "
+                "tools. Messages are asynchronous and arrive at model-step boundaries; do not "
+                "poll or create unbounded chat loops."
+            )
+        else:
+            collaboration = "Peer communication tools are disabled for this task."
+        return (
+            f"{system_prompt}\n\n## Temporary subagent role\n"
+            f"{ROLE_POLICIES[spec.role].system_instructions}\n"
+            "You are a temporary child agent. You cannot create or manage subagents or directly "
+            f"ask the user. {collaboration}"
+        )
+
+    def create(
+        self,
+        record: SubagentRecord,
+        *,
+        workspace: Path,
+        parent_permission: PermissionMode,
+        aggregate_budget: AggregateBudget,
+        approval_router: ApprovalRouter,
+        collaboration: BoundSubagentCollaboration | None = None,
+    ) -> ChildRuntime:
+        spec = record.spec
+        plan = self._prepare_tools(record, workspace, parent_permission, collaboration)
 
         child_session_id = record.child_session_id or uuid4().hex
         child_record = replace(record, child_session_id=child_session_id)
@@ -302,39 +404,18 @@ class ChildRunScope:
             context_config=self.config.context,
         )
         event_bus = resources.event_bus
-        skill_runtime = SkillRuntime(
-            SkillCatalog(
-                self.extension_snapshot,
-                SkillLoader(max_content_bytes=self.config.extensions.max_content_bytes),
-            )
+        skill_runtime = self._register_skills(
+            plan,
+            event_bus,
+            session_id=child_session_id,
+            run_id=child_run_id,
         )
-
-        async def activate_skill(selector: str) -> SkillActivationResult:
-            result = skill_runtime.activate(selector)
-            await event_bus.publish(
-                extension_event(
-                    event_id=uuid4().hex,
-                    session_id=child_session_id,
-                    run_id=child_run_id,
-                    turn=0,
-                    action="skill_loaded",
-                    snapshot_generation=self.extension_snapshot.generation,
-                    extension_id=result.name,
-                    source_id=result.source_id,
-                    status="loaded" if result.loaded else "already_loaded",
-                ),
-                durable=True,
-            )
-            return result
-
-        if {"search_skills", "load_skill"} <= names:
-            register_skill_tools(registry, skill_runtime, activate_skill, replace=True)
         scheduler = ChildToolScheduler(
-            registry,
+            plan.registry,
             PolicyEngine(
-                effective_permission,
-                sandbox_enabled=preset is not SandboxPreset.DANGER_FULL_ACCESS,
-                sandbox_available=sandbox is not None and sandbox.status.available,
+                plan.effective_permission,
+                sandbox_enabled=plan.effective_preset is not SandboxPreset.DANGER_FULL_ACCESS,
+                sandbox_available=plan.sandbox_available,
                 rule_store=CommandRuleStore(self.state_root, workspace),
             ),
         )
@@ -344,33 +425,7 @@ class ChildRunScope:
             max_runtime_seconds=self.config.subagents.max_runtime_seconds,
         )
         control = AggregateRunControl(budgets, aggregate_budget)
-        instructions = load_instructions(workspace, workspace_root=workspace)
-        system_prompt = build_system_prompt(
-            workspace=workspace,
-            permission_mode=effective_permission,
-            instructions=instructions,
-            tools=registry,
-            is_subagent=True,
-            skills=(skill_runtime.search() if "load_skill" in registry.names() else ()),
-            mcp_direct_servers=_mcp_server_ids(registry),
-        )
-        collaboration_instructions = (
-            "This is synchronized team work. You must use exchange_round for every round required "
-            "by the task before finishing; generic peer messaging is disabled."
-            if spec.coordination_id is not None
-            else (
-                "You can communicate with sibling subagents through the dedicated collaboration "
-                "tools. Messages are asynchronous and arrive at model-step boundaries; do not "
-                "poll or create unbounded chat loops."
-                if spec.peer_collaboration
-                else "Peer communication tools are disabled for this task."
-            )
-        )
-        system_prompt += (
-            f"\n\n## Temporary subagent role\n{policy.system_instructions}\n"
-            "You are a temporary child agent. You cannot create or manage subagents or directly "
-            f"ask the user. {collaboration_instructions}"
-        )
+        system_prompt = self._system_prompt(record, workspace, plan, skill_runtime)
         loop = ChildAgentLoop(
             record=child_record,
             approval_router=approval_router,
@@ -400,7 +455,7 @@ class ChildRunScope:
             build_child_prompt(child_record),
             force_plan_on_permission_update=_force_plan_on_permission_update(
                 spec.kind,
-                configured_preset,
+                plan.configured_preset,
                 sandbox_available=scheduler.policy.sandbox_available,
             ),
         )
