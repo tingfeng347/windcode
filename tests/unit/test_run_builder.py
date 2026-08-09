@@ -2,11 +2,12 @@ from pathlib import Path
 
 import pytest
 
+from windcode.auth import FileCredentialStore
 from windcode.config import AppConfig
 from windcode.domain.events import RunRequest
 from windcode.domain.messages import Message, Role, TextBlock, message_to_dict
 from windcode.extensions import ExtensionSnapshot
-from windcode.runtime.run_builder import RunBuilder
+from windcode.runtime.run_builder import RunBuilder, RunExtensionState
 from windcode.tools import ToolRegistry
 
 
@@ -14,8 +15,18 @@ def builder(state_root: Path) -> RunBuilder:
     return RunBuilder(
         AppConfig(),
         state_root=state_root,
+        user_storage_root=state_root / "user",
         base_tools=ToolRegistry(),
         model_chain=lambda _model: (),
+        extensions=RunExtensionState(
+            ExtensionSnapshot(0, "test"),
+            FileCredentialStore(state_root / "auth.json"),
+            None,
+            None,
+            {},
+            set(),
+            24,
+        ),
     )
 
 
