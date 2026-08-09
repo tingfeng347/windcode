@@ -165,6 +165,23 @@ def test_sdk_delegates_cross_module_lifecycle_to_application() -> None:
     assert {"_lifecycle_lock", "_entered", "_closing"}.isdisjoint(sdk_attributes)
 
 
+def test_sdk_depends_only_on_public_facades_and_contracts() -> None:
+    sdk_tree = ast.parse(Path("src/windcode/sdk.py").read_text(encoding="utf-8"))
+    imported_modules = {
+        node.module
+        for node in ast.walk(sdk_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module is not None
+        and node.module.startswith("windcode")
+    }
+
+    assert len(imported_modules) <= 5
+    assert not any(
+        module.startswith(("windcode.extensions", "windcode.providers", "windcode.runtime"))
+        for module in imported_modules
+    )
+
+
 def test_assembly_boundary_resolves_import_and_assignment_aliases() -> None:
     tree = ast.parse(
         """

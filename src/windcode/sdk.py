@@ -10,31 +10,20 @@ from windcode.application import (
     ConfigurationApplication,
     ExtensionApplication,
     McpStartupStatus,
+    MemoryApplication,
     ProviderApplication,
     RunApplication,
+    SessionApplication,
 )
-from windcode.auth import CredentialStore, FileCredentialStore
-from windcode.config import AppConfig
-from windcode.domain.events import RunRequest
-from windcode.domain.messages import (
-    Message,
-    Role,
-    TextBlock,
-    heal_dangling_tool_calls,
-    message_from_dict,
-)
-from windcode.domain.tools import Tool
-from windcode.extensions.commands import CommandRoute
-from windcode.extensions.models import (
+from windcode.application.contracts import (
     CapabilityRecord,
+    CommandRoute,
+    EventRecord,
+    ExtensionService,
     ExtensionSnapshot,
+    InstallResult,
+    ManagementAuditRecord,
     ManagementResult,
-)
-from windcode.extensions.plugins.installer import InstallResult
-from windcode.extensions.service import ExtensionService
-from windcode.extensions.skills.tools import SkillSearchResult
-from windcode.extensions.state import ManagementAuditRecord
-from windcode.memory import (
     MemoryActivation,
     MemoryKind,
     MemoryRecord,
@@ -42,23 +31,19 @@ from windcode.memory import (
     MemoryService,
     MemorySource,
     MemoryStatus,
-)
-from windcode.providers import (
+    Message,
     ModelTransport,
+    RunHandle,
+    RunRequest,
+    SessionMetadata,
+    SkillSearchResult,
+    Tool,
+    ToolRegistry,
     TransportRegistry,
 )
-from windcode.runtime.run_handle import RunHandle
+from windcode.auth import CredentialStore, FileCredentialStore
+from windcode.config import AppConfig
 from windcode.sandbox import SandboxPreset, create_sandbox_backend
-from windcode.sessions import (
-    EventRecord,
-    SessionMetadata,
-    SessionStore,
-    ancestor_chain,
-    create_branch,
-)
-from windcode.tools import (
-    ToolRegistry,
-)
 
 
 class Windcode:
@@ -91,11 +76,14 @@ class Windcode:
             workspace=self.workspace,
             state_root=self.state_root,
         )
+        self._memory_application = MemoryApplication(self._configuration)
+        self._sessions = SessionApplication(self.state_root)
         self._lifecycle = ApplicationLifecycle(
             self._configuration,
             self._providers,
             self._extension_application,
             self._runs,
+            self._memory_application,
         )
 
     @property
@@ -125,14 +113,16 @@ class Windcode:
         self._state_root = value
         if hasattr(self, "_runs"):
             self._runs.state_root = value
+        if hasattr(self, "_sessions"):
+            self._sessions.state_root = value
 
     @property
     def memory_service(self) -> MemoryService | None:
-        return self._lifecycle.memory_service
+        return self._memory_application.service
 
     @memory_service.setter
     def memory_service(self, value: MemoryService | None) -> None:
-        self._lifecycle.memory_service = value
+        self._memory_application.service = value
 
     @property
     def transport_registry(self) -> TransportRegistry:
@@ -298,27 +288,14 @@ class Windcode:
     def can_resolve_model(self, requested: str | None = None) -> bool:
         return self._providers.can_resolve(requested)
 
-    def _memory(self) -> MemoryService:
-        if not self.config.memory.enabled or self.memory_service is None:
-            raise RuntimeError("long-term memory is disabled")
-        return self.memory_service
-
     def list_memories(self, *, status: MemoryStatus | None = None) -> tuple[MemoryRecord, ...]:
-        service = self._memory()
-        return service.store.list(status=status, project_id=service.project_id)
+        return self._memory_application.list(status=status)
 
     def search_memories(self, query: str, *, limit: int | None = None) -> tuple[MemoryRecord, ...]:
-        service = self._memory()
-        results = service.store.search(
-            query,
-            project_id=service.project_id,
-            limit=limit or self.config.memory.recall_limit,
-            statuses=(MemoryStatus.ACTIVE, MemoryStatus.CANDIDATE),
-        )
-        return tuple(result.record for result in results)
+        return self._memory_application.search(query, limit=limit)
 
     def get_memory(self, memory_id: str) -> MemoryRecord:
-        return self._memory().store.get(memory_id)
+        return self._memory_application.get(memory_id)
 
     def create_memory_candidate(
         self,
@@ -335,7 +312,7 @@ class Windcode:
         activation: MemoryActivation | None = None,
         priority: int | None = None,
     ) -> MemoryRecord:
-        return self._memory().create_candidate(
+        return self._memory_application.create_candidate(
             kind=kind,
             scope=scope,
             title=title,
@@ -350,98 +327,56 @@ class Windcode:
         )
 
     def confirm_memory(self, memory_id: str) -> MemoryRecord:
-        return self._memory().store.transition(memory_id, MemoryStatus.ACTIVE)
+        return self._memory_application.transition(memory_id, MemoryStatus.ACTIVE)
 
     def reject_memory(self, memory_id: str) -> MemoryRecord:
-        return self._memory().store.transition(memory_id, MemoryStatus.REJECTED)
+        return self._memory_application.transition(memory_id, MemoryStatus.REJECTED)
 
     def archive_memory(self, memory_id: str) -> MemoryRecord:
-        return self._memory().store.transition(memory_id, MemoryStatus.ARCHIVED)
+        return self._memory_application.transition(memory_id, MemoryStatus.ARCHIVED)
 
     def update_memory(self, memory_id: str, **changes: Any) -> MemoryRecord:
-        return self._memory().store.update(memory_id, **changes)
+        return self._memory_application.update(memory_id, **changes)
 
     def set_memory_activation(
         self, memory_id: str, activation: MemoryActivation | str
     ) -> MemoryRecord:
-        value = (
-            activation if isinstance(activation, MemoryActivation) else MemoryActivation(activation)
-        )
-        return self._memory().store.update(memory_id, activation=value)
+        return self._memory_application.set_activation(memory_id, activation)
 
     def delete_memory(self, memory_id: str) -> None:
-        self._memory().store.delete(memory_id)
+        self._memory_application.delete(memory_id)
 
     def rebuild_memory_index(self) -> int:
-        return self._memory().store.rebuild()
+        return self._memory_application.rebuild_index()
 
     def export_project_memories(self, destination: Path) -> tuple[Path, ...]:
-        service = self._memory()
-        return service.store.export_project(service.project_id, destination)
+        return self._memory_application.export_project(destination)
 
     def draft_skill_from_memory(self, memory_id: str) -> str:
-        return self._memory().draft_skill(memory_id)
+        return self._memory_application.draft_skill(memory_id)
 
     def set_memory_enabled(self, enabled: bool, *, config_file: Path) -> None:
-        self._configuration.set_memory_enabled(enabled, config_file=config_file)
-        self.memory_service = MemoryService(self.state_root, self.workspace) if enabled else None
-
-    @staticmethod
-    def _session_summary(prompt: str, *, limit: int = 60) -> str:
-        summary = " ".join(prompt.split())
-        if len(summary) <= limit:
-            return summary
-        return summary[: limit - 3].rstrip() + "..."
-
-    def _session_store(self, session_id: str) -> SessionStore:
-        return SessionStore.open(self.state_root / "sessions", session_id)
-
-    def session_exists(self, session_id: str) -> bool:
-        return (self.state_root / "sessions" / session_id / "meta.json").is_file()
-
-    def load_session_records(self, session_id: str) -> tuple[EventRecord, ...]:
-        store = self._session_store(session_id)
-        if store.metadata.head_record_id is None:
-            return ()
-        return ancestor_chain(store.load_records(), store.metadata.head_record_id)
-
-    def load_session_messages(self, session_id: str) -> tuple[Message, ...]:
-        return heal_dangling_tool_calls(
-            tuple(
-                message_from_dict(record.payload)
-                for record in self.load_session_records(session_id)
-                if record.record_type == "conversation_message"
-            )
+        self._memory_application.set_enabled(
+            enabled,
+            config_file=config_file,
+            state_root=self.state_root,
+            workspace=self.workspace,
         )
 
-    def _ensure_session_summary(self, store: SessionStore) -> SessionMetadata:
-        if store.metadata.summary:
-            return store.metadata
-        for message in self.load_session_messages(store.metadata.session_id):
-            if message.role is not Role.USER:
-                continue
-            text = "".join(
-                block.text for block in message.content if isinstance(block, TextBlock)
-            ).strip()
-            if text:
-                store.set_summary(self._session_summary(text))
-                break
-        return store.metadata
+    def session_exists(self, session_id: str) -> bool:
+        return self._sessions.exists(session_id)
+
+    def load_session_records(self, session_id: str) -> tuple[EventRecord, ...]:
+        return self._sessions.load_records(session_id)
+
+    def load_session_messages(self, session_id: str) -> tuple[Message, ...]:
+        return self._sessions.load_messages(session_id)
 
     def start_run(self, request: RunRequest) -> RunHandle:
         return self._runs.start(request)
 
     def list_sessions(self) -> tuple[SessionMetadata, ...]:
-        sessions_root = self.state_root / "sessions"
-        if not sessions_root.exists():
-            return ()
-        sessions: list[SessionMetadata] = []
-        for path in sessions_root.iterdir():
-            if not path.is_dir() or not (path / "meta.json").is_file():
-                continue
-            store = SessionStore.open(sessions_root, path.name)
-            sessions.append(self._ensure_session_summary(store))
-        return tuple(sorted(sessions, key=lambda item: item.updated_at, reverse=True))
+        return self._sessions.list()
 
     def rewind_session(
         self,
@@ -450,26 +385,10 @@ class Windcode:
         *,
         include_selected: bool = False,
     ) -> EventRecord:
-        store = SessionStore.open(self.state_root / "sessions", session_id)
-        parent_id = record_id
-        if include_selected:
-            records = {record.record_id: record for record in store.load_records()}
-            try:
-                parent_id = records[record_id].parent_id
-            except KeyError as exc:
-                raise ValueError(f"unknown session record id: {record_id}") from exc
-            if parent_id is None:
-                return store.append(
-                    "branch_point",
-                    {"source_record_id": record_id},
-                    root=True,
-                    durable=True,
-                )
-        return create_branch(
-            store,
-            parent_id,
-            "branch_point",
-            {"source_record_id": record_id},
+        return self._sessions.rewind(
+            session_id,
+            record_id,
+            include_selected=include_selected,
         )
 
     async def aclose(self) -> None:
