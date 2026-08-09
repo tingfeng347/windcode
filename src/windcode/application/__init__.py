@@ -5,6 +5,7 @@ from windcode.application.extensions import (
     McpStartupStatus,
 )
 from windcode.application.providers import ProviderApplication
+from windcode.application.runs import RunApplication
 
 __all__ = [
     "ConfigurationApplication",
@@ -12,4 +13,5 @@ __all__ = [
     "ExtensionRunLease",
     "McpStartupStatus",
     "ProviderApplication",
+    "RunApplication",
 ]

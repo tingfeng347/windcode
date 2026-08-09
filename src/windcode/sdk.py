@@ -11,6 +11,7 @@ from windcode.application import (
     ExtensionApplication,
     McpStartupStatus,
     ProviderApplication,
+    RunApplication,
 )
 from windcode.auth import CredentialStore, FileCredentialStore
 from windcode.config import AppConfig
@@ -46,8 +47,6 @@ from windcode.providers import (
     ModelTransport,
     TransportRegistry,
 )
-from windcode.runtime.parent_run import RunExtensionState
-from windcode.runtime.run_builder import RunBuilder
 from windcode.runtime.run_handle import RunHandle
 from windcode.sandbox import SandboxPreset, create_sandbox_backend
 from windcode.sessions import (
@@ -59,7 +58,6 @@ from windcode.sessions import (
 )
 from windcode.tools import (
     ToolRegistry,
-    create_builtin_registry,
 )
 
 
@@ -77,8 +75,8 @@ class Windcode:
         self.credential_store = credential_store or FileCredentialStore()
         self._configuration = ConfigurationApplication(config)
         self._providers = ProviderApplication(self._configuration, self.credential_store)
-        self.workspace = (workspace or Path.cwd()).expanduser().resolve()
-        self.state_root = self._resolve_state_root(state_root)
+        self._workspace = (workspace or Path.cwd()).expanduser().resolve()
+        self._state_root = self._resolve_state_root(state_root)
         self._extension_application = ExtensionApplication(
             self._configuration,
             self.credential_store,
@@ -86,8 +84,13 @@ class Windcode:
             state_root=self.state_root,
             user_skill_root=self._user_storage_root() / "skills",
         )
-        self.tool_registry: ToolRegistry | None = None
-        self._handles: set[RunHandle] = set()
+        self._runs = RunApplication(
+            self._configuration,
+            self._providers,
+            self._extension_application,
+            workspace=self.workspace,
+            state_root=self.state_root,
+        )
         self._lifecycle_lock = asyncio.Lock()
         self._entered = False
         self._closing = False
@@ -100,6 +103,26 @@ class Windcode:
     @config.setter
     def config(self, value: AppConfig) -> None:
         self._configuration.current = value
+
+    @property
+    def workspace(self) -> Path:
+        return self._workspace
+
+    @workspace.setter
+    def workspace(self, value: Path) -> None:
+        self._workspace = value
+        if hasattr(self, "_runs"):
+            self._runs.workspace = value
+
+    @property
+    def state_root(self) -> Path:
+        return self._state_root
+
+    @state_root.setter
+    def state_root(self, value: Path) -> None:
+        self._state_root = value
+        if hasattr(self, "_runs"):
+            self._runs.state_root = value
 
     @property
     def transport_registry(self) -> TransportRegistry:
@@ -125,6 +148,14 @@ class Windcode:
     def extension_service(self, value: ExtensionService | None) -> None:
         self._extension_application.service = value
 
+    @property
+    def tool_registry(self) -> ToolRegistry | None:
+        return self._runs.registry
+
+    @tool_registry.setter
+    def tool_registry(self, value: ToolRegistry | None) -> None:
+        self._runs.registry = value
+
     def _resolve_state_root(self, explicit_root: Path | None) -> Path:
         if explicit_root is not None:
             return explicit_root.expanduser().resolve()
@@ -141,8 +172,7 @@ class Windcode:
         return project_root.resolve()
 
     def _user_storage_root(self) -> Path:
-        configured = self.config.storage.user_storage_root
-        return self._configured_state_path(configured)
+        return self._configuration.user_storage_root(self.workspace)
 
     def sandbox_status(self, workspace: Path | None = None) -> str:
         selected_workspace = (workspace or self.workspace).expanduser().resolve()
@@ -180,9 +210,7 @@ class Windcode:
             if self.config.memory.enabled:
                 self.memory_service = MemoryService(self.state_root, self.workspace)
             await self._providers.open()
-            self.tool_registry = create_builtin_registry(
-                shell_timeout=self.config.budgets.shell_timeout_seconds,
-            )
+            self._runs.open()
             await self._extension_application.open()
             return self
 
@@ -244,9 +272,7 @@ class Windcode:
         await self.aclose()
 
     def register_tool(self, tool: Tool, *, replace_existing: bool = False) -> None:
-        if self.tool_registry is None:
-            raise RuntimeError("register tools inside the Windcode async context")
-        self.tool_registry.register(tool, replace=replace_existing)
+        self._runs.register_tool(tool, replace_existing=replace_existing)
 
     def register_transport(
         self,
@@ -266,7 +292,7 @@ class Windcode:
         )
 
     async def reconfigure_models(self, config: AppConfig, *, config_file: Path) -> None:
-        if any(not handle.done for handle in self._handles):
+        if self._runs.has_active_runs():
             raise RuntimeError("cannot configure models while a run is active")
         await self._providers.reconfigure(config, config_file=config_file)
 
@@ -404,29 +430,7 @@ class Windcode:
         return store.metadata
 
     def start_run(self, request: RunRequest) -> RunHandle:
-        if not self._accepting_runs():
-            raise RuntimeError("start runs inside the Windcode async context")
-        handle = self._extension_application.bind_run(
-            lambda extensions: self._run_builder(extensions).start(request)
-        )
-        self._handles.add(handle)
-        handle.add_done_callback(self._handles.discard)
-        return handle
-
-    def _accepting_runs(self) -> bool:
-        return self._entered and not self._closing and self.tool_registry is not None
-
-    def _run_builder(self, extensions: RunExtensionState) -> RunBuilder:
-        if self.tool_registry is None:
-            raise RuntimeError("run builder requires an initialized tool registry")
-        return RunBuilder(
-            self.config,
-            state_root=self.state_root,
-            user_storage_root=self._user_storage_root(),
-            base_tools=self.tool_registry,
-            model_chain=self._providers.resolve,
-            extensions=extensions,
-        )
+        return self._runs.start(request)
 
     def list_sessions(self) -> tuple[SessionMetadata, ...]:
         sessions_root = self.state_root / "sessions"
@@ -474,18 +478,20 @@ class Windcode:
             if not self._entered:
                 return
             self._closing = True
+            self._runs.begin_close()
             try:
-                handles = tuple(self._handles)
-                await asyncio.gather(*(handle.cancel() for handle in handles))
+                await self._runs.cancel_all()
                 await asyncio.gather(
                     self._extension_application.aclose(),
                     self._providers.aclose(),
                     return_exceptions=True,
                 )
             except BaseException:
+                self._runs.abort_close()
                 self._closing = False
                 raise
             else:
+                self._runs.finish_close()
                 self._entered = False
                 self._closing = False
 
