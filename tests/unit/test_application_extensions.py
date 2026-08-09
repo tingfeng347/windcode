@@ -255,10 +255,12 @@ async def test_cancelled_generation_close_can_be_retried(
     finish_close = asyncio.Event()
     original_close = RunExtensions.aclose
     close_count = 0
+    close_targets: list[RunExtensions] = []
 
     async def delayed_close(extensions: RunExtensions) -> None:
         nonlocal close_count
         close_count += 1
+        close_targets.append(extensions)
         close_entered.set()
         await finish_close.wait()
         await original_close(extensions)
@@ -275,7 +277,10 @@ async def test_cancelled_generation_close_can_be_retried(
 
     with pytest.raises(RuntimeError, match="extension runtime is not initialized"):
         application.acquire_run()
+    with pytest.raises(RuntimeError, match="already initialized"):
+        await application.open()
 
     finish_close.set()
     await application.aclose()
     assert close_count == 2
+    assert close_targets[0] is close_targets[1]
