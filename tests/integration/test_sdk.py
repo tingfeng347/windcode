@@ -8,6 +8,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from windcode import Windcode
+from windcode.application import ExtensionApplication, ProviderApplication
 from windcode.domain.events import (
     AgentEventType,
     ApprovalRequested,
@@ -231,6 +232,133 @@ async def test_cancelling_run_does_not_cancel_shared_required_mcp_startup(
         subsequent = client.start_run(RunRequest("run after startup", tmp_path))
         assert (await asyncio.wait_for(subsequent.result(), timeout=1)).status == "completed"
         assert len(transport.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_close_rejects_new_runs_after_handle_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    startup_gate = asyncio.Event()
+
+    async def delayed_startup(runtime: McpRuntime, *, concurrency: int = 4) -> tuple[str, ...]:
+        del concurrency
+        await startup_gate.wait()
+        return runtime.required_server_ids
+
+    monkeypatch.setattr(McpRuntime, "activate_required", delayed_startup)
+    client = Windcode.open(state_root=tmp_path / "state")
+    await client.__aenter__()
+    client.register_transport("history", "model", HistoryTransport("unused"), primary=True)
+    handle = client.start_run(RunRequest("active during close", tmp_path))
+    cancel_entered = asyncio.Event()
+    finish_cancel = asyncio.Event()
+    original_cancel = handle.cancel
+
+    async def delayed_cancel() -> None:
+        cancel_entered.set()
+        await finish_cancel.wait()
+        await original_cancel()
+
+    monkeypatch.setattr(handle, "cancel", delayed_cancel)
+    close_task = asyncio.create_task(client.aclose())
+    await cancel_entered.wait()
+
+    with pytest.raises(RuntimeError, match="async context"):
+        client.start_run(RunRequest("late run", tmp_path))
+    with pytest.raises(RuntimeError, match="already open"):
+        await client.__aenter__()
+
+    finish_cancel.set()
+    with pytest.raises(asyncio.CancelledError):
+        await close_task
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_close_waits_for_active_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = Windcode.open(state_root=tmp_path / "state")
+    await client.__aenter__()
+    close_entered = asyncio.Event()
+    finish_close = asyncio.Event()
+    original_close = ExtensionApplication.aclose
+
+    async def delayed_close(application: ExtensionApplication) -> None:
+        close_entered.set()
+        await finish_close.wait()
+        await original_close(application)
+
+    monkeypatch.setattr(ExtensionApplication, "aclose", delayed_close)
+    first_close = asyncio.create_task(client.aclose())
+    await close_entered.wait()
+    second_close = asyncio.create_task(client.aclose())
+    await asyncio.sleep(0)
+
+    assert not second_close.done()
+
+    finish_close.set()
+    await asyncio.gather(first_close, second_close)
+
+
+@pytest.mark.asyncio
+async def test_close_waits_for_open_to_finish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = Windcode.open(state_root=tmp_path / "state")
+    open_entered = asyncio.Event()
+    finish_open = asyncio.Event()
+    original_open = ProviderApplication.open
+
+    async def delayed_open(application: ProviderApplication) -> None:
+        open_entered.set()
+        await finish_open.wait()
+        await original_open(application)
+
+    monkeypatch.setattr(ProviderApplication, "open", delayed_open)
+    open_task = asyncio.create_task(client.__aenter__())
+    await open_entered.wait()
+    close_task = asyncio.create_task(client.aclose())
+    await asyncio.sleep(0)
+
+    assert not close_task.done()
+
+    finish_open.set()
+    assert await open_task is client
+    await close_task
+    with pytest.raises(RuntimeError, match="async context"):
+        client.start_run(RunRequest("after close", tmp_path))
+
+
+@pytest.mark.asyncio
+async def test_cancelled_extension_close_can_be_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    close_entered = asyncio.Event()
+    finish_close = asyncio.Event()
+    original_close = RunExtensions.aclose
+    close_count = 0
+
+    async def delayed_close(extensions: RunExtensions) -> None:
+        nonlocal close_count
+        close_count += 1
+        close_entered.set()
+        await finish_close.wait()
+        await original_close(extensions)
+
+    monkeypatch.setattr(RunExtensions, "aclose", delayed_close)
+    client = Windcode.open(state_root=tmp_path / "state")
+    await client.__aenter__()
+
+    close_task = asyncio.create_task(client.aclose())
+    await close_entered.wait()
+    close_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await close_task
+
+    finish_close.set()
+    await client.aclose()
+    assert close_count == 2
 
 
 @pytest.mark.asyncio

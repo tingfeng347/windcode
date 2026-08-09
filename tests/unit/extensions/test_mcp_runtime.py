@@ -135,6 +135,43 @@ async def test_close_failure_does_not_skip_other_servers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancelled_close_can_retry_remaining_servers() -> None:
+    close_entered = asyncio.Event()
+    finish_close = asyncio.Event()
+
+    class DelayedCloseClient(FakeClient):
+        async def aclose(self) -> None:
+            self.close_count += 1
+            close_entered.set()
+            await finish_close.wait()
+            self.is_connected = False
+
+    first = FakeClient()
+    delayed = DelayedCloseClient()
+    runtime = McpRuntime({"first": (lambda: first, False), "second": (lambda: delayed, False)})
+    await runtime.activate("first")
+    await runtime.activate("second")
+
+    close_task = asyncio.create_task(runtime.aclose())
+    await close_entered.wait()
+    close_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await close_task
+
+    assert runtime.state("second") is McpServerState.CLOSING
+    assert delayed.connected
+    assert first.close_count == 0
+
+    finish_close.set()
+    await runtime.aclose()
+
+    assert runtime.state("first") is McpServerState.CLOSED
+    assert runtime.state("second") is McpServerState.CLOSED
+    assert first.close_count == 1
+    assert delayed.close_count == 2
+
+
+@pytest.mark.asyncio
 async def test_cancelled_call_retires_client_and_next_call_reconnects() -> None:
     clients: list[FakeClient] = []
 

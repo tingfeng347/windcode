@@ -45,6 +45,7 @@ class McpRuntime:
             for server_id, (factory, required) in sorted(servers.items())
         }
         self._closed = False
+        self._close_lock = asyncio.Lock()
         self._retirements: set[asyncio.Task[None]] = set()
         self.observer = observer
         self._context_observer: ContextVar[McpObserver | None] = ContextVar(
@@ -206,23 +207,27 @@ class McpRuntime:
         return ready
 
     async def aclose(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        for server_id, slot in reversed(tuple(self._servers.items())):
-            async with slot.lock:
-                slot.state = McpServerState.CLOSING
-                client = slot.client
-                try:
-                    if client is not None:
-                        await client.aclose()
-                        if client.close_error is not None:
-                            await self._observe("diagnostic", server_id, "close_failed")
-                except Exception:
-                    await self._observe("diagnostic", server_id, "close_failed")
-                finally:
+        async with self._close_lock:
+            self._closed = True
+            for server_id, slot in reversed(tuple(self._servers.items())):
+                async with slot.lock:
+                    if slot.state is McpServerState.CLOSED:
+                        continue
+                    slot.state = McpServerState.CLOSING
+                    client = slot.client
+                    try:
+                        if client is not None:
+                            await client.aclose()
+                            if client.close_error is not None:
+                                await self._observe("diagnostic", server_id, "close_failed")
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        await self._observe("diagnostic", server_id, "close_failed")
                     slot.client = None
                     slot.state = McpServerState.CLOSED
                     await self._observe("mcp_closed", server_id, "closed")
-        while self._retirements:
-            await asyncio.gather(*tuple(self._retirements), return_exceptions=True)
+            while self._retirements:
+                await asyncio.shield(
+                    asyncio.gather(*tuple(self._retirements), return_exceptions=True)
+                )

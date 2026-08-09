@@ -118,12 +118,14 @@ class ExtensionApplication:
         return self.service
 
     def _require_generation(self) -> _ExtensionGeneration:
-        if self._current is None:
+        if not self._opened or self._current is None:
             raise RuntimeError("extension runtime is not initialized")
         return self._current
 
     async def open(self) -> None:
         async with self._lifecycle_lock:
+            if self._current is not None:
+                raise RuntimeError("extension runtime is already initialized")
             config = self.configuration.current
             extension_root = self.state_root / "extensions"
             self.service = ExtensionService(
@@ -285,13 +287,13 @@ class ExtensionApplication:
             if current is None:
                 self._opened = False
                 return
+            self._opened = False
             await self._stop_startup(current)
             await current.idle.wait()
             if self._retirements:
-                await asyncio.gather(*tuple(self._retirements), return_exceptions=True)
+                await asyncio.shield(
+                    asyncio.gather(*tuple(self._retirements), return_exceptions=True)
+                )
                 self._retirements.clear()
-            try:
-                await self._close_generation(current)
-            finally:
-                self._current = None
-                self._opened = False
+            await self._close_generation(current)
+            self._current = None

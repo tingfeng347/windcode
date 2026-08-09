@@ -133,6 +133,52 @@ async def test_open_failure_does_not_publish_half_initialized_service(
 
 
 @pytest.mark.asyncio
+async def test_repeated_open_does_not_replace_current_generation(tmp_path: Path) -> None:
+    application = extension_application(tmp_path)
+    await application.open()
+    lease = application.acquire_run()
+    current_state = lease.state
+
+    with pytest.raises(RuntimeError, match="already initialized"):
+        await application.open()
+
+    after = application.acquire_run()
+    assert after.state is current_state
+    lease.release()
+    after.release()
+    await application.aclose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_open_waits_then_rejects_second_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reload_entered = asyncio.Event()
+    finish_reload = asyncio.Event()
+    original_reload = ExtensionService.reload
+
+    async def delayed_reload(service: ExtensionService) -> object:
+        reload_entered.set()
+        await finish_reload.wait()
+        return await original_reload(service)
+
+    monkeypatch.setattr(ExtensionService, "reload", delayed_reload)
+    application = extension_application(tmp_path)
+    first_open = asyncio.create_task(application.open())
+    await reload_entered.wait()
+    second_open = asyncio.create_task(application.open())
+    await asyncio.sleep(0)
+    assert not second_open.done()
+
+    finish_reload.set()
+    await first_open
+    with pytest.raises(RuntimeError, match="already initialized"):
+        await second_open
+
+    await application.aclose()
+
+
+@pytest.mark.asyncio
 async def test_close_waits_for_reload_and_closes_both_generations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -172,3 +218,69 @@ async def test_close_waits_for_reload_and_closes_both_generations(
     assert set(closed) == {previous_generation, current_generation}
     with pytest.raises(RuntimeError, match="extension runtime is not initialized"):
         application.acquire_run()
+
+
+@pytest.mark.asyncio
+async def test_close_rejects_new_leases_before_closing_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    close_entered = asyncio.Event()
+    finish_close = asyncio.Event()
+    original_close = RunExtensions.aclose
+
+    async def delayed_close(extensions: RunExtensions) -> None:
+        close_entered.set()
+        await finish_close.wait()
+        await original_close(extensions)
+
+    monkeypatch.setattr(RunExtensions, "aclose", delayed_close)
+    application = extension_application(tmp_path)
+    await application.open()
+
+    close_task = asyncio.create_task(application.aclose())
+    await close_entered.wait()
+
+    with pytest.raises(RuntimeError, match="extension runtime is not initialized"):
+        application.acquire_run()
+
+    finish_close.set()
+    await close_task
+
+
+@pytest.mark.asyncio
+async def test_cancelled_generation_close_can_be_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    close_entered = asyncio.Event()
+    finish_close = asyncio.Event()
+    original_close = RunExtensions.aclose
+    close_count = 0
+    close_targets: list[RunExtensions] = []
+
+    async def delayed_close(extensions: RunExtensions) -> None:
+        nonlocal close_count
+        close_count += 1
+        close_targets.append(extensions)
+        close_entered.set()
+        await finish_close.wait()
+        await original_close(extensions)
+
+    monkeypatch.setattr(RunExtensions, "aclose", delayed_close)
+    application = extension_application(tmp_path)
+    await application.open()
+
+    close_task = asyncio.create_task(application.aclose())
+    await close_entered.wait()
+    close_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await close_task
+
+    with pytest.raises(RuntimeError, match="extension runtime is not initialized"):
+        application.acquire_run()
+    with pytest.raises(RuntimeError, match="already initialized"):
+        await application.open()
+
+    finish_close.set()
+    await application.aclose()
+    assert close_count == 2
+    assert close_targets[0] is close_targets[1]
