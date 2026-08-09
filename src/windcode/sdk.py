@@ -6,7 +6,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
-from uuid import uuid4
 
 from windcode.auth import CredentialStore, CredentialStoreError, FileCredentialStore
 from windcode.config import (
@@ -15,7 +14,7 @@ from windcode.config import (
     save_model_config,
 )
 from windcode.domain.errors import RequiredExtensionError, RequiredExtensionStartupError
-from windcode.domain.events import RunRequest, RunResult
+from windcode.domain.events import RunRequest
 from windcode.domain.messages import (
     Message,
     Role,
@@ -23,13 +22,11 @@ from windcode.domain.messages import (
     heal_dangling_tool_calls,
     message_from_dict,
 )
-from windcode.domain.tools import Tool, ToolContext
+from windcode.domain.tools import Tool
 from windcode.extensions.commands import CommandRoute
-from windcode.extensions.hooks.models import HookContext, HookEvent
 from windcode.extensions.mcp import McpServerState
 from windcode.extensions.mcp.catalog import McpToolDefinition
 from windcode.extensions.models import (
-    CapabilityKind,
     CapabilityRecord,
     ExtensionSnapshot,
     ManagementResult,
@@ -52,33 +49,14 @@ from windcode.memory import (
     MemorySource,
     MemoryStatus,
 )
-from windcode.observability import DynamicRedactor
-from windcode.policy import PolicyRequest
 from windcode.providers import (
     ModelTarget,
     ModelTransport,
     ProviderConfigurationError,
     TransportRegistry,
 )
-from windcode.runtime.control import RunBudgets, RunControl
-from windcode.runtime.loop import (
-    AgentLoop,
-    ContextWindow,
-    ModelSession,
-    RunIdentity,
-    RunJournal,
-    RunObservers,
-    ToolRuntime,
-)
-from windcode.runtime.prompts import build_system_prompt
-from windcode.runtime.run_builder import RunBuilder
+from windcode.runtime.run_builder import RunBuilder, RunExtensionState
 from windcode.runtime.run_handle import RunHandle
-from windcode.runtime.run_memory import RunMemory
-from windcode.runtime.scheduler import ScheduledCall, ToolScheduler
-from windcode.runtime.subagents import (
-    SubagentCoordinator,
-    VerificationRunner,
-)
 from windcode.sandbox import SandboxPreset, create_sandbox_backend
 from windcode.sessions import (
     EventRecord,
@@ -89,10 +67,8 @@ from windcode.sessions import (
 )
 from windcode.tools import (
     ToolRegistry,
-    add_subagent_tools,
     create_builtin_registry,
 )
-from windcode.worktrees import WorktreeManager
 
 
 @dataclass(frozen=True, slots=True)
@@ -564,308 +540,32 @@ class Windcode:
     def start_run(self, request: RunRequest) -> RunHandle:
         if not self._entered or self.tool_registry is None:
             raise RuntimeError("start runs inside the Windcode async context")
-        builder = RunBuilder(
+        handle = self._run_builder().start(request)
+        self._handles.add(handle)
+        handle.add_done_callback(self._handles.discard)
+        return handle
+
+    def _run_builder(self) -> RunBuilder:
+        if self.tool_registry is None:
+            raise RuntimeError("run builder requires an initialized tool registry")
+        return RunBuilder(
             self.config,
             state_root=self.state_root,
+            user_storage_root=self._user_storage_root(),
             base_tools=self.tool_registry,
             model_chain=self._model_chain,
-        )
-        preparation = builder.prepare_parent(request)
-        workspace = preparation.workspace
-        existing_session = preparation.existing_session
-        session = preparation.session
-        initial_messages = preparation.initial_messages
-        run_id = preparation.run_id
-        artifact_store = preparation.artifact_store
-        extension_snapshot = self._extensions().snapshot
-        client_extensions = self._client_extensions
-        startup_task = self._mcp_start_task
-        mcp_tool_catalogs = self._mcp_tool_catalogs
-        mcp_selected_tools = self._mcp_selected_tools
-        extension_redactor = DynamicRedactor()
-        run_extensions = RunExtensions.create(
-            extension_snapshot,
-            session_id=session.metadata.session_id,
-            run_id=run_id,
-            credential_store=self.credential_store,
-            max_content_bytes=self.config.extensions.max_content_bytes,
-            connect_timeout=self.config.extensions.connect_timeout_seconds,
-            call_timeout=self.config.extensions.call_timeout_seconds,
-            observe_secret=extension_redactor.register,
-            artifact_store=artifact_store,
-            network_enabled=self.config.sandbox.network_enabled,
-            mcp_runtime=(None if client_extensions is None else client_extensions.mcp),
-            mcp_tool_catalogs=mcp_tool_catalogs,
-        )
-        resources = builder.resources(preparation)
-        bus = resources.event_bus
-        run_extensions.event_observer = lambda event: bus.publish(event, durable=True)
-        access = builder.prepare_parent_access(
-            preparation,
-            request,
-            run_extensions,
-            extension_snapshot,
-            mcp_tool_catalogs,
-            mcp_selected_tools,
-        )
-        mode = access.permission_mode
-        sandbox = access.sandbox
-        sandbox_policy = access.sandbox_policy
-        run_registry = access.registry
-        policy = access.policy
-        child_tools = access.child_tools
-        instructions = access.instructions
-        model_chain = self._model_chain(request.model)
-        run_memory = RunMemory(
-            self.config.memory,
-            state_root=self.state_root,
-            workspace=workspace,
-            request=request,
-            identity=RunIdentity(session.metadata.session_id, run_id),
-            registry=run_registry,
-            event_bus=bus,
-            model=model_chain[0],
-        )
-        budgets = RunBudgets(
-            max_model_steps=self.config.budgets.max_model_steps,
-            max_tool_calls=self.config.budgets.max_tool_calls,
-            max_runtime_seconds=self.config.budgets.max_runtime_seconds,
-        )
-        control = RunControl(budgets)
-        if request.compact_before_run:
-            control.request_compaction()
-        child_scope = builder.child_scope(
-            child_tools,
-            extension_snapshot,
-            default_model=request.model,
-        )
-        coordinator = SubagentCoordinator(
-            parent_session_id=session.metadata.session_id,
-            parent_run_id=run_id,
-            workspace=workspace,
-            permission_mode=mode,
-            config=self.config.subagents,
-            event_bus=bus,
-            factory=child_scope,
-            worktrees=WorktreeManager(
-                worktrees_root=self.state_root / "worktrees",
-                fallback_worktrees_root=self._user_storage_root() / "worktrees",
-            ),
-            verification=VerificationRunner(
-                sandbox=sandbox,
-                sandbox_policy=sandbox_policy,
-                timeout_seconds=self.config.budgets.shell_timeout_seconds,
-            ),
-            network_enabled=self.config.sandbox.network_enabled,
-            event_observer=run_extensions.subagent_lifecycle,
-        )
-        add_subagent_tools(run_registry, coordinator)
-
-        unavailable_mcp_servers = tuple(
-            (
-                record.public_name,
-                "未信任当前工作区, 需要执行 extensions trust 后 reload",
-            )
-            for record in extension_snapshot.capabilities
-            if record.kind is CapabilityKind.MCP_SERVER and record.enabled and not record.trusted
-        )
-
-        def make_system_prompt(
-            direct_servers: tuple[str, ...], search_servers: tuple[str, ...]
-        ) -> str:
-            startup_unavailable = tuple(
-                (server_id, "启动连接失败, 本轮已降级且不会阻断普通消息")
-                for server_id in self.mcp_startup_status.failed_servers
-            )
-            prompt = build_system_prompt(
-                workspace=workspace,
-                permission_mode=policy.mode,
-                instructions=instructions,
-                tools=run_registry,
-                delegation_mode=self.config.subagents.mode,
-                skills=run_extensions.skills.search(),
-                mcp_direct_servers=direct_servers,
-                mcp_search_servers=search_servers,
-                mcp_unavailable_servers=(*unavailable_mcp_servers, *startup_unavailable),
-                memory_enabled=run_memory.enabled,
-            )
-            if run_memory.context:
-                prompt += f"\n\n{run_memory.context}"
-            return prompt
-
-        # Direct tools are not registered until run start (after activation), so
-        # build a provisional prompt now and refine it once we know which servers
-        # expose their tools directly versus needing the search/select flow.
-        system_prompt = make_system_prompt((), run_extensions.mcp.server_ids)
-
-        def record_session_approval(request: PolicyRequest) -> None:
-            payload: dict[str, object] = {
-                "workspace": str(workspace),
-                "tool_name": request.tool_name,
-            }
-            if request.proposed_rule is not None:
-                payload["rule"] = request.proposed_rule.model_copy(
-                    update={"source": "session"}
-                ).model_dump(mode="json")
-            else:
-                payload["effects"] = sorted(effect.value for effect in request.effects)
-            session.append(
-                "session_approval",
-                payload,
-                durable=True,
-            )
-
-        scheduler = ToolScheduler(
-            run_registry,
-            policy,
-            before_policy=run_extensions.before_policy,
-            permission_observer=run_extensions.permission_requested,
-            after_execute=run_extensions.after_execute,
-            session_approval_recorder=record_session_approval,
-        )
-
-        async def run_hook_command(command: str, origin: str, hook_context: HookContext) -> str:
-            del hook_context
-            scheduled = ScheduledCall(
-                uuid4().hex,
-                "shell",
-                {"command": command},
-                origin=origin,
-            )
-            results = await scheduler.execute(
-                (scheduled,),
-                ToolContext(workspace, run_id, lambda: control.cancelled),
-            )
-            result = results[0].result
-            if result.is_error:
-                raise RuntimeError(result.output)
-            return result.output
-
-        run_extensions.hooks.executor.command_runner = run_hook_command
-        run_end_observed = False
-
-        async def complete_run(result: RunResult) -> None:
-            nonlocal run_end_observed
-            run_end_observed = True
-            await run_extensions.lifecycle(HookEvent.RUN_END, status=result.status)
-            await run_memory.complete(result)
-
-        loop = AgentLoop(
-            identity=RunIdentity(session.metadata.session_id, run_id),
-            model=ModelSession(
-                model_chain,
-                system_prompt,
-                stream_idle_timeout_seconds=(self.config.budgets.model_stream_idle_timeout_seconds),
-            ),
-            tools=ToolRuntime(scheduler, control),
-            journal=RunJournal(bus, close_on_exit=False),
-            context=ContextWindow(
-                token_estimator=resources.token_estimator,
-                artifact_store=resources.artifact_store,
-                preserve_recent_turns=self.config.context.preserve_recent_turns,
-                max_tool_result_chars=self.config.context.max_tool_result_chars,
-            ),
-            observers=RunObservers(
-                sourced_context=run_extensions.drain_context,
-                compact=run_extensions.compact_lifecycle,
-                completion=complete_run,
+            extensions=RunExtensionState(
+                snapshot=self._extensions().snapshot,
+                credential_store=self.credential_store,
+                mcp_runtime=(
+                    None if self._client_extensions is None else self._client_extensions.mcp
+                ),
+                startup_task=self._mcp_start_task,
+                tool_catalogs=self._mcp_tool_catalogs,
+                selected_tools=self._mcp_selected_tools,
+                direct_tool_limit=self.config.extensions.direct_tool_limit,
             ),
         )
-        after_sequence = session.metadata.next_sequence - 1
-
-        async def run_with_subagents() -> RunResult:
-            observer_token = run_extensions.mcp.bind_observer(run_extensions.observe_mcp)
-            try:
-                if startup_task is not None:
-                    await asyncio.shield(startup_task)
-                ready_required_servers = tuple(
-                    server_id
-                    for server_id in run_extensions.mcp.required_server_ids
-                    if run_extensions.mcp.state(server_id) is McpServerState.READY
-                )
-                direct_tools = await run_extensions.mcp_capabilities.register_direct_tools(
-                    run_registry,
-                    direct_tool_limit=self.config.extensions.direct_tool_limit,
-                    server_ids=ready_required_servers,
-                )
-                await run_extensions.mcp_capabilities.register_direct_tools(
-                    child_tools,
-                    direct_tool_limit=self.config.extensions.direct_tool_limit,
-                    server_ids=ready_required_servers,
-                )
-                await run_extensions.mcp_capabilities.register_selected_tools(
-                    run_registry, mcp_selected_tools
-                )
-                await run_extensions.mcp_capabilities.register_selected_tools(
-                    child_tools, mcp_selected_tools
-                )
-                direct_servers = ready_required_servers if direct_tools else ()
-                search_servers = tuple(
-                    server_id
-                    for server_id in run_extensions.mcp.server_ids
-                    if server_id not in set(direct_servers)
-                )
-                loop.system_prompt = make_system_prompt(direct_servers, search_servers)
-                await run_memory.publish_recalled()
-                if not existing_session:
-                    await run_extensions.lifecycle(HookEvent.SESSION_START)
-                await run_extensions.lifecycle(HookEvent.USER_SUBMIT)
-                await run_extensions.lifecycle(HookEvent.RUN_START)
-                prompt_parts = request.prompt.strip().split(maxsplit=1)
-                if prompt_parts and prompt_parts[0].startswith("$"):
-                    await run_extensions.activate_skill(prompt_parts[0])
-                elif prompt_parts and prompt_parts[0].startswith("@prompt:"):
-                    await run_extensions.activate_prompt(prompt_parts[0].removeprefix("@prompt:"))
-                elif prompt_parts and prompt_parts[0].startswith("@capability:"):
-                    run_extensions.activate_capability(prompt_parts[0].removeprefix("@capability:"))
-                if existing_session:
-                    await coordinator.recover()
-                result = await loop.run(request.prompt, workspace, initial_messages)
-                if not run_end_observed:
-                    try:
-                        await run_extensions.lifecycle(HookEvent.RUN_END, status=result.status)
-                    except RequiredExtensionError:
-                        # A primary failed/cancelled terminal record already owns the outcome.
-                        pass
-                return result
-            except RequiredExtensionError as exc:
-                await loop.record_startup_failure(exc)
-                try:
-                    await run_extensions.lifecycle(HookEvent.RUN_ERROR, status="error")
-                except BaseException:
-                    pass
-                raise
-            except BaseException:
-                try:
-                    await run_extensions.lifecycle(HookEvent.RUN_ERROR, status="error")
-                except BaseException:
-                    pass
-                raise
-            finally:
-                await asyncio.gather(
-                    coordinator.shutdown("parent run ended"), return_exceptions=True
-                )
-                await asyncio.gather(
-                    run_extensions.lifecycle(HookEvent.SESSION_END), return_exceptions=True
-                )
-                await asyncio.gather(run_extensions.aclose(), return_exceptions=True)
-                run_extensions.mcp.reset_observer(observer_token)
-                extension_redactor.clear()
-                await bus.close()
-
-        task = asyncio.create_task(run_with_subagents())
-        handle = RunHandle(
-            task,
-            bus,
-            control,
-            after_sequence=after_sequence,
-            coordinator=coordinator,
-            policy=policy,
-            loop=loop,
-        )
-        self._handles.add(handle)
-        task.add_done_callback(lambda _task: self._handles.discard(handle))
-        return handle
 
     def list_sessions(self) -> tuple[SessionMetadata, ...]:
         sessions_root = self.state_root / "sessions"
