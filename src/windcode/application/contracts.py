@@ -18,7 +18,7 @@ from windcode.memory import (
     MemorySource,
     MemoryStatus,
 )
-from windcode.providers import ModelTransport, TransportRegistry
+from windcode.providers import ModelTransport, ProviderService, TransportRegistry, fetch_model_ids
 from windcode.runtime.run_handle import RunHandle
 from windcode.sessions import EventRecord, SessionMetadata
 from windcode.tools import ToolRegistry
@@ -41,6 +41,7 @@ __all__ = [
     "MemoryStatus",
     "Message",
     "ModelTransport",
+    "ProviderService",
     "RunHandle",
     "RunRequest",
     "SessionMetadata",
@@ -48,4 +49,5 @@ __all__ = [
     "Tool",
     "ToolRegistry",
     "TransportRegistry",
+    "fetch_model_ids",
 ]

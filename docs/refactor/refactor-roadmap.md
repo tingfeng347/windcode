@@ -62,25 +62,43 @@
 
 ## 阶段 3：扩展、Provider 与工具
 
+状态：已完成。
+
 - 把 application lifecycle 从 SDK/TUI 移到对应模块。
 - 统一 before/policy/approval/sandbox/after 工具链，不新增 dispatcher。
 - 保持 run-pinned extension snapshot、MCP 后台启动和缓存失效语义。
+- `ProviderApplication`、`ExtensionApplication`、`RunApplication` 与
+  `ApplicationLifecycle` 分别拥有模型、扩展代际、运行和跨模块生命周期。
+- reload/close/open 串行化，取消关闭可重试；活动运行通过 lease 固定扩展代际。
+- SDK 不再导入 provider、extension 或 runtime 具体实现。
 
 ## 阶段 4：子代理协调
 
+状态：已完成。
+
 - 稳定 facade 内部分离队列调度、mailbox/轮次、执行、worktree 集成和恢复清理。
 - 保留并发、FIFO、权限交集、取消传播、冲突停止和确定性结果顺序。
+- 父子运行统一使用 `RunBuilder`，子运行能力、预算、协作和验证由现有专属模块承接。
 
 ## 阶段 5：TUI adapter
 
+状态：已完成。
+
 - Provider、Memory、Extension、Session 命令调用应用 interface。
 - TUI 只负责输入、投影、确认和渲染；快捷键及用户可见行为不变。
+- Provider 管理经 application contract 使用既有配置事务；卸载期间停止后台状态投影，
+  消除 teardown 与运行完成之间的竞态。
 
 ## 阶段 6：收尾
+
+状态：已完成。
 
 - 运行旧状态读取/追加/重开验证和全部外部协议假实现测试。
 - 删除已无调用、非公开、已迁移且门禁通过的旧路径。
 - 更新验证证据、迁移说明和 ADR；完成全矩阵审查。
+- SDK 收缩至 398 行、5 个直接 Windcode 模块依赖和 4 个职责区域；`start_run`
+  复杂度为 1。Python 3.12 全量测试为 632 passed/3 skipped，Ruff、strict Pyright、
+  sdist/wheel build 和架构门禁通过。
 
 ## 暂停条件
 
