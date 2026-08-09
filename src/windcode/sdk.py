@@ -15,11 +15,7 @@ from windcode.config import (
     save_model_config,
 )
 from windcode.domain.errors import RequiredExtensionError, RequiredExtensionStartupError
-from windcode.domain.events import (
-    MemoryEvent,
-    RunRequest,
-    RunResult,
-)
+from windcode.domain.events import RunRequest, RunResult
 from windcode.domain.messages import (
     Message,
     Role,
@@ -55,14 +51,6 @@ from windcode.memory import (
     MemoryService,
     MemorySource,
     MemoryStatus,
-    assess_core_project_fact,
-    assess_experience,
-    classify_memory_intent,
-    explicitly_always_project_fact,
-    has_explicit_memory_intent,
-    is_project_fact,
-    refine_memory,
-    should_assess_experience,
 )
 from windcode.observability import DynamicRedactor
 from windcode.policy import PolicyRequest
@@ -85,6 +73,7 @@ from windcode.runtime.loop import (
 from windcode.runtime.prompts import build_system_prompt
 from windcode.runtime.run_builder import RunBuilder
 from windcode.runtime.run_handle import RunHandle
+from windcode.runtime.run_memory import RunMemory
 from windcode.runtime.scheduler import ScheduledCall, ToolScheduler
 from windcode.runtime.subagents import (
     SubagentCoordinator,
@@ -102,7 +91,6 @@ from windcode.tools import (
     ToolRegistry,
     add_subagent_tools,
     create_builtin_registry,
-    register_memory_tools,
 )
 from windcode.worktrees import WorktreeManager
 
@@ -627,63 +615,17 @@ class Windcode:
         policy = access.policy
         child_tools = access.child_tools
         instructions = access.instructions
-        run_memory = (
-            MemoryService(self.state_root, workspace) if self.config.memory.enabled else None
+        model_chain = self._model_chain(request.model)
+        run_memory = RunMemory(
+            self.config.memory,
+            state_root=self.state_root,
+            workspace=workspace,
+            request=request,
+            identity=RunIdentity(session.metadata.session_id, run_id),
+            registry=run_registry,
+            event_bus=bus,
+            model=model_chain[0],
         )
-        tool_memory_id: str | None = None
-        if run_memory is not None:
-
-            async def observe_memory_tool(action: str, details: dict[str, Any]) -> None:
-                nonlocal tool_memory_id
-                memory_id = details.get("memory_id")
-                if action in {"activated", "candidate_created", "already_exists"} and isinstance(
-                    memory_id, str
-                ):
-                    tool_memory_id = memory_id
-                await bus.publish(
-                    MemoryEvent(
-                        event_id=uuid4().hex,
-                        session_id=session.metadata.session_id,
-                        run_id=run_id,
-                        turn=0,
-                        action=action,
-                        memory_id=memory_id if isinstance(memory_id, str) else None,
-                        memory_kind=str(details.get("kind", "")) or None,
-                        scope=str(details.get("scope", "")) or None,
-                        status=str(details.get("status", "")),
-                        details=details,
-                    ),
-                    durable=True,
-                )
-
-            register_memory_tools(
-                run_registry,
-                run_memory,
-                observe_memory_tool,
-                max_chars=self.config.memory.recall_max_chars,
-                user_prompt=request.prompt,
-                source=MemorySource(session.metadata.session_id, run_id),
-                enabled_kinds=frozenset(
-                    kind
-                    for kind, enabled in {
-                        MemoryKind.USER_PROFILE: self.config.memory.user_profile_enabled,
-                        MemoryKind.PROJECT_KNOWLEDGE: self.config.memory.project_knowledge_enabled,
-                        MemoryKind.EXPERIENCE: self.config.memory.experience_enabled,
-                        MemoryKind.SOP: self.config.memory.sop_enabled,
-                        MemoryKind.REFERENCE: self.config.memory.reference_enabled,
-                    }.items()
-                    if enabled
-                ),
-            )
-        memory_context = ""
-        if run_memory is not None:
-            memory_context = run_memory.build_context(
-                request.prompt,
-                baseline_max_records=self.config.memory.baseline_max_records,
-                baseline_max_chars=self.config.memory.baseline_max_chars,
-                search_limit=self.config.memory.recall_limit,
-                search_max_chars=self.config.memory.recall_max_chars,
-            )
         budgets = RunBudgets(
             max_model_steps=self.config.budgets.max_model_steps,
             max_tool_calls=self.config.budgets.max_tool_calls,
@@ -745,10 +687,10 @@ class Windcode:
                 mcp_direct_servers=direct_servers,
                 mcp_search_servers=search_servers,
                 mcp_unavailable_servers=(*unavailable_mcp_servers, *startup_unavailable),
-                memory_enabled=run_memory is not None,
+                memory_enabled=run_memory.enabled,
             )
-            if memory_context:
-                prompt += f"\n\n{memory_context}"
+            if run_memory.context:
+                prompt += f"\n\n{run_memory.context}"
             return prompt
 
         # Direct tools are not registered until run start (after activation), so
@@ -800,210 +742,13 @@ class Windcode:
             return result.output
 
         run_extensions.hooks.executor.command_runner = run_hook_command
-        model_chain = self._model_chain(request.model)
-
-        async def extract_memories(result: RunResult) -> None:
-            if (
-                not self.config.memory.enabled
-                or not self.config.memory.extraction_enabled
-                or run_memory is None
-            ):
-                return
-            enabled_kinds = {
-                MemoryKind.USER_PROFILE: self.config.memory.user_profile_enabled,
-                MemoryKind.PROJECT_KNOWLEDGE: self.config.memory.project_knowledge_enabled,
-                MemoryKind.EXPERIENCE: self.config.memory.experience_enabled,
-                MemoryKind.SOP: self.config.memory.sop_enabled,
-                MemoryKind.REFERENCE: self.config.memory.reference_enabled,
-            }
-            explicit_experience_id: str | None = None
-            if tool_memory_id is not None:
-                tool_memory = run_memory.store.get(tool_memory_id)
-                if tool_memory.kind is MemoryKind.EXPERIENCE:
-                    explicit_experience_id = tool_memory_id
-            intent_kind = classify_memory_intent(request.prompt)
-            if tool_memory_id is None and intent_kind is not None and enabled_kinds[intent_kind]:
-                project_fact = is_project_fact(request.prompt)
-                scope = (
-                    MemoryScope.USER
-                    if intent_kind is MemoryKind.USER_PROFILE
-                    or (intent_kind is MemoryKind.REFERENCE and not project_fact)
-                    else MemoryScope.PROJECT
-                )
-                refined = await refine_memory(
-                    model_chain[0],
-                    text=request.prompt,
-                    kind=intent_kind,
-                    max_output_tokens=self.config.memory.extraction_max_output_tokens,
-                )
-                activation: MemoryActivation | None = None
-                if intent_kind is MemoryKind.PROJECT_KNOWLEDGE:
-                    core = explicitly_always_project_fact(
-                        request.prompt
-                    ) or await assess_core_project_fact(
-                        model_chain[0],
-                        text=request.prompt,
-                        max_output_tokens=min(256, self.config.memory.extraction_max_output_tokens),
-                    )
-                    activation = MemoryActivation.ALWAYS if core else MemoryActivation.MANUAL
-                priority = 60 if activation is MemoryActivation.ALWAYS else None
-                candidate = run_memory.create_candidate(
-                    kind=intent_kind,
-                    scope=scope,
-                    title=refined.title,
-                    summary=refined.summary,
-                    body=refined.body,
-                    source=MemorySource(session.metadata.session_id, run_id),
-                    tags=refined.tags,
-                    evidence=(
-                        () if intent_kind is MemoryKind.SOP else (f"用户原话: {request.prompt}",)
-                    ),
-                    confidence=0.8,
-                    activation=activation,
-                    priority=priority,
-                )
-                if intent_kind is MemoryKind.SOP:
-                    saved = candidate
-                    action = "candidate_created"
-                    policy = "explicit_sop_candidate"
-                else:
-                    saved = run_memory.store.transition(candidate.memory_id, MemoryStatus.ACTIVE)
-                    if intent_kind is MemoryKind.EXPERIENCE:
-                        explicit_experience_id = saved.memory_id
-                    action = "activated"
-                    policy = (
-                        "explicit_memory_intent"
-                        if has_explicit_memory_intent(request.prompt)
-                        else "stable_user_fact"
-                    )
-                await bus.publish(
-                    MemoryEvent(
-                        event_id=uuid4().hex,
-                        session_id=session.metadata.session_id,
-                        run_id=run_id,
-                        turn=0,
-                        action=action,
-                        memory_id=saved.memory_id,
-                        memory_kind=saved.kind.value,
-                        scope=saved.scope.value,
-                        status=saved.status.value,
-                        details={"policy": policy},
-                    ),
-                    durable=True,
-                )
-            if self.config.memory.experience_enabled and should_assess_experience(
-                status=result.status,
-                changed_files=result.changed_files,
-                verification=result.verification,
-            ):
-                experience_text = (
-                    f"用户请求:\n{request.prompt}\n\n"
-                    f"变更文件:\n{chr(10).join(result.changed_files)}\n\n"
-                    f"任务结果:\n{result.final_text}"
-                )[: self.config.memory.extraction_max_chars]
-                assessment = await assess_experience(
-                    model_chain[0],
-                    text=experience_text,
-                    evidence=result.verification,
-                    max_output_tokens=self.config.memory.extraction_max_output_tokens,
-                )
-                if not assessment.should_store or assessment.memory is None:
-                    return
-                refined = assessment.memory
-                duplicates = tuple(
-                    record
-                    for record in run_memory.store.list(
-                        status=MemoryStatus.ACTIVE,
-                        project_id=run_memory.project_id,
-                    )
-                    if record.kind is MemoryKind.EXPERIENCE
-                    and (
-                        record.title.casefold() == refined.title.casefold()
-                        or record.summary.casefold() == refined.summary.casefold()
-                    )
-                )
-                if duplicates:
-                    existing = duplicates[0]
-                    if explicit_experience_id is not None:
-                        run_memory.store.delete(explicit_experience_id)
-                    evidence = tuple(dict.fromkeys((*existing.evidence, *result.verification)))
-                    run_memory.store.update(existing.memory_id, evidence=evidence)
-                    run_memory.store.record_outcome(existing.memory_id, success=True)
-                    return
-                if explicit_experience_id is not None:
-                    experience = run_memory.store.update(
-                        explicit_experience_id,
-                        title=refined.title,
-                        summary=refined.summary,
-                        body=refined.body,
-                        tags=refined.tags,
-                        evidence=result.verification,
-                        confidence=0.8,
-                    )
-                else:
-                    experience = run_memory.create_candidate(
-                        kind=MemoryKind.EXPERIENCE,
-                        scope=MemoryScope.PROJECT,
-                        title=refined.title,
-                        summary=refined.summary,
-                        body=refined.body,
-                        source=MemorySource(session.metadata.session_id, run_id),
-                        tags=refined.tags,
-                        evidence=result.verification,
-                        confidence=0.7,
-                    )
-                verified = run_memory.store.transition(experience.memory_id, MemoryStatus.ACTIVE)
-                await bus.publish(
-                    MemoryEvent(
-                        event_id=uuid4().hex,
-                        session_id=session.metadata.session_id,
-                        run_id=run_id,
-                        turn=0,
-                        action="activated",
-                        memory_id=verified.memory_id,
-                        memory_kind=verified.kind.value,
-                        scope=verified.scope.value,
-                        status=verified.status.value,
-                        details={"verified": True, "policy": "no_execution_no_memory"},
-                    ),
-                    durable=True,
-                )
-                if self.config.memory.sop_enabled and assessment.sop is not None:
-                    sop = assessment.sop
-                    sop_candidate = run_memory.create_candidate(
-                        kind=MemoryKind.SOP,
-                        scope=MemoryScope.PROJECT,
-                        title=sop.title,
-                        summary=sop.summary,
-                        body=sop.body,
-                        source=MemorySource(session.metadata.session_id, run_id),
-                        tags=sop.tags,
-                        evidence=result.verification,
-                        confidence=0.7,
-                    )
-                    await bus.publish(
-                        MemoryEvent(
-                            event_id=uuid4().hex,
-                            session_id=session.metadata.session_id,
-                            run_id=run_id,
-                            turn=0,
-                            action="candidate_created",
-                            memory_id=sop_candidate.memory_id,
-                            memory_kind=sop_candidate.kind.value,
-                            scope=sop_candidate.scope.value,
-                            status=sop_candidate.status.value,
-                            details={"verified": True, "policy": "experience_sop_candidate"},
-                        ),
-                        durable=True,
-                    )
-
         run_end_observed = False
 
         async def complete_run(result: RunResult) -> None:
             nonlocal run_end_observed
             run_end_observed = True
             await run_extensions.lifecycle(HookEvent.RUN_END, status=result.status)
-            await extract_memories(result)
+            await run_memory.complete(result)
 
         loop = AgentLoop(
             identity=RunIdentity(session.metadata.session_id, run_id),
@@ -1061,18 +806,7 @@ class Windcode:
                     if server_id not in set(direct_servers)
                 )
                 loop.system_prompt = make_system_prompt(direct_servers, search_servers)
-                if memory_context:
-                    await bus.publish(
-                        MemoryEvent(
-                            event_id=uuid4().hex,
-                            session_id=session.metadata.session_id,
-                            run_id=run_id,
-                            turn=0,
-                            action="recalled",
-                            status="active",
-                            details={"characters": len(memory_context)},
-                        )
-                    )
+                await run_memory.publish_recalled()
                 if not existing_session:
                     await run_extensions.lifecycle(HookEvent.SESSION_START)
                 await run_extensions.lifecycle(HookEvent.USER_SUBMIT)
