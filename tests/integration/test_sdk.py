@@ -8,6 +8,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from windcode import Windcode
+from windcode.application import ExtensionApplication, ProviderApplication
 from windcode.domain.events import (
     AgentEventType,
     ApprovalRequested,
@@ -271,6 +272,62 @@ async def test_close_rejects_new_runs_after_handle_snapshot(
     with pytest.raises(asyncio.CancelledError):
         await close_task
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_close_waits_for_active_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = Windcode.open(state_root=tmp_path / "state")
+    await client.__aenter__()
+    close_entered = asyncio.Event()
+    finish_close = asyncio.Event()
+    original_close = ExtensionApplication.aclose
+
+    async def delayed_close(application: ExtensionApplication) -> None:
+        close_entered.set()
+        await finish_close.wait()
+        await original_close(application)
+
+    monkeypatch.setattr(ExtensionApplication, "aclose", delayed_close)
+    first_close = asyncio.create_task(client.aclose())
+    await close_entered.wait()
+    second_close = asyncio.create_task(client.aclose())
+    await asyncio.sleep(0)
+
+    assert not second_close.done()
+
+    finish_close.set()
+    await asyncio.gather(first_close, second_close)
+
+
+@pytest.mark.asyncio
+async def test_close_waits_for_open_to_finish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = Windcode.open(state_root=tmp_path / "state")
+    open_entered = asyncio.Event()
+    finish_open = asyncio.Event()
+    original_open = ProviderApplication.open
+
+    async def delayed_open(application: ProviderApplication) -> None:
+        open_entered.set()
+        await finish_open.wait()
+        await original_open(application)
+
+    monkeypatch.setattr(ProviderApplication, "open", delayed_open)
+    open_task = asyncio.create_task(client.__aenter__())
+    await open_entered.wait()
+    close_task = asyncio.create_task(client.aclose())
+    await asyncio.sleep(0)
+
+    assert not close_task.done()
+
+    finish_open.set()
+    assert await open_task is client
+    await close_task
+    with pytest.raises(RuntimeError, match="async context"):
+        client.start_run(RunRequest("after close", tmp_path))
 
 
 @pytest.mark.asyncio
