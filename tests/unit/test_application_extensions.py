@@ -8,6 +8,7 @@ from windcode.auth import FileCredentialStore
 from windcode.config import AppConfig
 from windcode.extensions.mcp import McpRuntime
 from windcode.extensions.runtime import RunExtensions
+from windcode.extensions.service import ExtensionService
 
 
 def extension_application(tmp_path: Path) -> ExtensionApplication:
@@ -110,3 +111,22 @@ async def test_close_cancels_current_startup_before_waiting_for_retirement(
 
     retiring_lease.release()
     await asyncio.wait_for(close_task, timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_open_failure_does_not_publish_half_initialized_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fail_reload(service: ExtensionService) -> None:
+        del service
+        raise OSError("reload failed")
+
+    monkeypatch.setattr(ExtensionService, "reload", fail_reload)
+    application = extension_application(tmp_path)
+
+    with pytest.raises(OSError, match="reload failed"):
+        await application.open()
+    with pytest.raises(RuntimeError, match="inside the Windcode async context"):
+        await application.list_capabilities()
+
+    await application.aclose()
