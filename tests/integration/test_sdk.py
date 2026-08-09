@@ -234,6 +234,46 @@ async def test_cancelling_run_does_not_cancel_shared_required_mcp_startup(
 
 
 @pytest.mark.asyncio
+async def test_close_rejects_new_runs_after_handle_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    startup_gate = asyncio.Event()
+
+    async def delayed_startup(runtime: McpRuntime, *, concurrency: int = 4) -> tuple[str, ...]:
+        del concurrency
+        await startup_gate.wait()
+        return runtime.required_server_ids
+
+    monkeypatch.setattr(McpRuntime, "activate_required", delayed_startup)
+    client = Windcode.open(state_root=tmp_path / "state")
+    await client.__aenter__()
+    client.register_transport("history", "model", HistoryTransport("unused"), primary=True)
+    handle = client.start_run(RunRequest("active during close", tmp_path))
+    cancel_entered = asyncio.Event()
+    finish_cancel = asyncio.Event()
+    original_cancel = handle.cancel
+
+    async def delayed_cancel() -> None:
+        cancel_entered.set()
+        await finish_cancel.wait()
+        await original_cancel()
+
+    monkeypatch.setattr(handle, "cancel", delayed_cancel)
+    close_task = asyncio.create_task(client.aclose())
+    await cancel_entered.wait()
+
+    with pytest.raises(RuntimeError, match="async context"):
+        client.start_run(RunRequest("late run", tmp_path))
+    with pytest.raises(RuntimeError, match="already open"):
+        await client.__aenter__()
+
+    finish_cancel.set()
+    with pytest.raises(asyncio.CancelledError):
+        await close_task
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_required_mcp_failure_blocks_run_before_model_request(tmp_path: Path) -> None:
     transport = HistoryTransport("must not be used")
     config = {
