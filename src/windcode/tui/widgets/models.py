@@ -323,18 +323,24 @@ class ProviderManager(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="provider-dialog"):
-            yield Static("Provider 管理", id="provider-manager-title")
+            with Horizontal(id="provider-manager-header"):
+                with Vertical(id="provider-heading"):
+                    yield Static("Providers", id="provider-manager-title")
+                    yield Static("模型连接与默认配置", id="provider-manager-subtitle")
+                yield Button("关闭", id="provider-close", flat=True)
             with Horizontal(id="provider-workspace"):
                 with Vertical(id="provider-sidebar"):
-                    yield Static("PROVIDERS", classes="provider-panel-title")
+                    yield Static("连接", classes="provider-panel-title")
                     yield OptionList(id="provider-list")
                     with Horizontal(id="provider-sidebar-actions"):
-                        yield Button("新增", id="provider-add", variant="primary")
-                        yield Button("默认", id="provider-default")
-                    yield Button("完成", id="provider-close")
+                        yield Button("新增", id="provider-add", variant="primary", flat=True)
+                        yield Button("设为默认", id="provider-default", flat=True)
                 with Vertical(id="provider-editor"):
-                    yield Static("连接配置", classes="provider-panel-title")
-                    yield Static("标签在上, 修改将保存到当前 Provider。", id="provider-editor-hint")
+                    with Horizontal(id="provider-editor-header"):
+                        yield Static("连接配置", classes="provider-panel-title")
+                        yield Static("保存后生效", id="provider-editor-hint")
+                    with Vertical(id="provider-inspector"):
+                        yield Static("", id="provider-details")
                     with VerticalScroll(id="provider-form-scroll"):
                         with Vertical(id="provider-form"):
                             with Vertical(classes="provider-field"):
@@ -347,6 +353,23 @@ class ProviderManager(ModalScreen[None]):
                                     allow_blank=False,
                                     value="openai",
                                     id="provider-preset",
+                                )
+                            with Vertical(classes="provider-field"):
+                                yield _field_label("API Key")
+                                yield Input(
+                                    placeholder="API Key", password=True, id="provider-api-key"
+                                )
+                            with Vertical(classes="provider-field"):
+                                yield _field_label("模型 ID")
+                                with Horizontal(id="provider-model-controls"):
+                                    yield Input(
+                                        placeholder="例如 deepseek-chat", id="provider-model"
+                                    )
+                                    yield Button("加载", id="provider-load-models")
+                                yield Select[str](
+                                    (),
+                                    prompt="从已加载模型中选择",
+                                    id="provider-model-options",
                                 )
                             with Vertical(classes="provider-field"):
                                 yield _field_label("配置别名")
@@ -363,41 +386,26 @@ class ProviderManager(ModalScreen[None]):
                                     id="provider-protocol",
                                 )
                             with Vertical(classes="provider-field"):
-                                yield _field_label("模型 ID")
-                                with Horizontal(id="provider-model-controls"):
-                                    yield Input(
-                                        placeholder="例如 deepseek-chat", id="provider-model"
-                                    )
-                                    yield Button("加载", id="provider-load-models")
-                                yield Select[str](
-                                    (),
-                                    prompt="从已加载模型中选择",
-                                    id="provider-model-options",
-                                )
-                            with Vertical(classes="provider-field"):
                                 yield _field_label("Base URL")
                                 yield Input(
                                     placeholder="https://api.example.com/v1", id="provider-base-url"
-                                )
-                            with Vertical(classes="provider-field"):
-                                yield _field_label("API Key")
-                                yield Input(
-                                    placeholder="API Key", password=True, id="provider-api-key"
                                 )
                             with Vertical(classes="provider-field"):
                                 yield _field_label("环境变量")
                                 yield Input(
                                     placeholder="例如 DEEPSEEK_API_KEY", id="provider-api-key-env"
                                 )
-                            yield Static("", id="provider-editor-error")
-                with Vertical(id="provider-inspector"):
-                    yield Static("检查器", classes="provider-panel-title")
-                    yield Static("", id="provider-details")
-            with Horizontal(id="provider-editor-actions"):
-                yield Button("保存", id="provider-save", variant="primary")
-                yield Button("取消", id="provider-cancel")
-                yield Button("断开", id="provider-delete", variant="error")
-                yield Button("确认断开", id="provider-confirm-delete", variant="error")
+                    yield Static("", id="provider-editor-error")
+                    with Horizontal(id="provider-editor-actions"):
+                        yield Button("保存更改", id="provider-save", variant="primary", flat=True)
+                        yield Button("取消", id="provider-cancel", flat=True)
+                        yield Button("断开连接", id="provider-delete", variant="error", flat=True)
+                        yield Button(
+                            "确认断开",
+                            id="provider-confirm-delete",
+                            variant="error",
+                            flat=True,
+                        )
 
     def on_mount(self) -> None:
         self.query_one("#provider-confirm-delete", Button).display = False
@@ -411,16 +419,16 @@ class ProviderManager(ModalScreen[None]):
             text = Text()
             health = self.health[alias]
             text.append(
-                "●",
+                "● ",
                 style=(
-                    "green"
+                    "#9ece6a"
                     if health.status is ProviderStatus.READY
-                    else "red"
+                    else "#f7768e"
                     if health.status is ProviderStatus.ERROR
-                    else "yellow"
+                    else "#e0af68"
                 ),
             )
-            text.append(f" {alias}", style="bold")
+            text.append(alias, style="bold")
             text.append(f"\n  {provider.model}", style="dim")
             if health.is_default:
                 text.append(" 默认", style="cyan")
@@ -440,36 +448,48 @@ class ProviderManager(ModalScreen[None]):
         if alias is None:
             if self._draft_health is not None:
                 health = self._draft_health
-                self.query_one("#provider-details", Static).update(
-                    f"{health.alias}\n连接测试成功\n\n连接状态\n已连接\n\n协议\n"
-                    f"{PROTOCOL_LABELS[health.provider.protocol]}\n\n环境变量\n"
-                    f"{health.provider.api_key_env or '仅密钥库'} "
-                    f"({'已设置' if health.environment_set else '未设置'})\n\n"
-                    f"已加载模型\n{health.loaded_model_count}"
-                )
+                self.query_one("#provider-details", Static).update(self._health_summary(health))
                 return
-            self.query_one("#provider-details", Static).update(
-                "新建 Provider\n\n协议\n待选择\n\n环境变量\n待配置\n\n已加载模型\n0"
-            )
+            details = Text()
+            details.append("○ 新建连接", style="bold cyan")
+            details.append("  选择厂商模板并填写模型与凭据", style="dim")
+            self.query_one("#provider-details", Static).update(details)
             return
         health = self.health[alias]
+        self.query_one("#provider-details", Static).update(self._health_summary(health))
+
+    def _health_summary(self, health: ProviderHealth) -> Text:
         provider = health.provider
         preset = provider_preset(provider)
         platform = preset.name if preset is not None else "自定义 Provider"
-        env_name = provider.api_key_env
-        env_status = "已设置" if health.environment_set else "未设置"
-        endpoint = provider.base_url or "官方端点"
         connection = {
             ProviderStatus.READY: "已连接",
             ProviderStatus.DISCONNECTED: "未连接",
             ProviderStatus.ERROR: "错误",
         }[health.status]
-        self.query_one("#provider-details", Static).update(
-            f"{alias}\n{platform}\n\n连接状态\n{connection}\n\n协议\n"
-            f"{PROTOCOL_LABELS[provider.protocol]}\n\n环境变量\n"
-            f"{env_name or '仅密钥库'} ({env_status})\n\n端点\n{endpoint}\n\n"
-            f"已加载模型\n{health.loaded_model_count}"
+        status_style = {
+            ProviderStatus.READY: "#9ece6a",
+            ProviderStatus.DISCONNECTED: "#e0af68",
+            ProviderStatus.ERROR: "#f7768e",
+        }[health.status]
+        details = Text()
+        details.append("● ", style=status_style)
+        details.append(connection, style="bold")
+        if health.is_default:
+            details.append(" · 默认", style="bold cyan")
+        details.append(f"  {platform} · {PROTOCOL_LABELS[provider.protocol]}", style="dim")
+        details.append("\n")
+        details.append(health.alias, style="bold")
+        details.append(f" · {provider.model}", style="dim")
+        credential = provider.api_key_env or "密钥库"
+        credential_status = "已设置" if health.credential_source else "未设置"
+        details.append(
+            f"\n{credential} · {credential_status} · {health.loaded_model_count} 个模型",
+            style="dim",
         )
+        if health.diagnostic:
+            details.append(f"\n{health.diagnostic}", style="red")
+        return details
 
     def show_error(self, message: str) -> None:
         self.query_one("#provider-editor-error", Static).update(message)
@@ -561,7 +581,7 @@ class ProviderManager(ModalScreen[None]):
         model_options.set_options(())
         model_options.clear()
         self._update_details(alias)
-        alias_input.focus()
+        self.query_one("#provider-api-key", Input).focus()
 
     def _apply_preset(self, preset: ProviderPreset) -> None:
         self.query_one("#provider-alias", Input).value = preset.id

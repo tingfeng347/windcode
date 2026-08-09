@@ -412,13 +412,13 @@ ExtensionManager {
 }
 
 #provider-dialog {
-    width: 118;
-    max-width: 96%;
-    height: 90%;
-    max-height: 90%;
-    padding: 1 1;
-    background: #1a1f23;
-    border: round #4a555d;
+    width: 108;
+    max-width: 94%;
+    height: 88%;
+    max-height: 92%;
+    padding: 0;
+    background: #17191b;
+    border: round #353b40;
 }
 
 #model-manager-title,
@@ -430,8 +430,33 @@ ExtensionManager {
 }
 
 #provider-manager-title {
-    padding: 0 1;
+    height: 1;
     color: #e4e9ed;
+}
+
+#provider-manager-header {
+    width: 100%;
+    height: 4;
+    padding: 1 2 0 2;
+    background: #1d2023;
+    border-bottom: solid #30363b;
+}
+
+#provider-heading {
+    width: 1fr;
+    height: 2;
+}
+
+#provider-manager-subtitle {
+    width: 100%;
+    height: 1;
+    color: #778087;
+}
+
+#provider-close {
+    width: 8;
+    min-width: 8;
+    height: 3;
 }
 
 #model-search,
@@ -489,32 +514,43 @@ ExtensionManager {
     width: 100%;
     height: 1fr;
     min-height: 12;
-    background: #1a1f23;
+    background: #17191b;
 }
 
 #provider-sidebar {
-    width: 25;
-    min-width: 21;
+    width: 24;
+    min-width: 20;
     height: 100%;
-    padding: 0 1;
-    background: #20262b;
-    border-right: tall #39434a;
+    padding: 0 1 1 1;
+    background: #1d2023;
+    border-right: solid #30363b;
 }
 
 .provider-panel-title {
     width: 100%;
     height: 2;
     padding: 1 0 0 0;
-    color: #aab3ba;
+    color: #8d969d;
     text-style: bold;
 }
 
 #provider-list {
     width: 100%;
     height: 1fr;
-    margin: 1 0;
-    background: #171b1e;
+    margin: 0 0 1 0;
+    padding: 0;
+    background: #1d2023;
     border: none;
+}
+
+#provider-list > .option-list--option {
+    padding: 1;
+}
+
+#provider-list > .option-list--option-highlighted {
+    color: #eef2f5;
+    background: #2a3035;
+    text-style: none;
 }
 
 #provider-sidebar-actions {
@@ -522,54 +558,85 @@ ExtensionManager {
     height: 3;
 }
 
-#provider-sidebar-actions Button,
-#provider-close {
+#provider-sidebar-actions Button {
     width: 1fr;
     min-width: 0;
 }
 
-#provider-close {
+#provider-dialog Button {
     height: 3;
+    color: #b7c0c7;
+    background: #24292d;
+    border: none;
+    text-style: none;
+}
+
+#provider-dialog Button:hover,
+#provider-dialog Button:focus {
+    color: #eef2f5;
+    background: #30373d;
+    text-style: bold;
+}
+
+#provider-dialog Button.-primary {
+    color: #dcecff;
+    background: #27445c;
+    border: none;
+}
+
+#provider-dialog Button.-error {
+    color: #f0b6b6;
+    background: #402829;
+    border: none;
 }
 
 #provider-editor {
     width: 1fr;
     height: 100%;
-    padding: 0 2;
-    background: #1a1f23;
+    padding: 0 2 1 2;
+    background: #17191b;
+}
+
+#provider-editor-header {
+    width: 100%;
+    height: 3;
+    border-bottom: solid #292e32;
 }
 
 #provider-editor-hint {
-    width: 100%;
+    width: 1fr;
     height: 2;
-    color: #88939b;
+    padding-top: 1;
+    color: #778087;
+    text-align: right;
 }
 
 #provider-form-scroll {
     width: 100%;
     height: 1fr;
+    padding: 0 2;
     scrollbar-size-vertical: 1;
-    scrollbar-color: #39434a;
+    scrollbar-color: #353c42;
 }
 
 #provider-form {
-    width: 70;
+    width: 68;
     max-width: 100%;
     height: auto;
-    padding: 0 1 1 1;
+    padding: 1 0;
 }
 
 .provider-field {
     width: 100%;
     height: auto;
-    margin: 0 0 1 0;
+    margin: 0;
 }
 
 .provider-field-label {
     width: 100%;
     height: 1;
     padding: 0;
-    color: #aab3ba;
+    color: #959ea5;
 }
 
 .provider-field Input,
@@ -597,30 +664,27 @@ ExtensionManager {
 }
 
 #provider-inspector {
-    width: 25;
-    min-width: 21;
-    height: 100%;
-    padding: 0 1;
-    background: #20262b;
-    border-left: tall #39434a;
+    width: 100%;
+    height: 4;
+    min-height: 3;
+    padding: 1 2 0 2;
+    background: #1d2023;
+    border-bottom: solid #292e32;
 }
 
 #provider-details {
     width: 100%;
     height: 1fr;
-    padding: 1 0;
-    color: #aab3ba;
+    padding: 0;
+    color: #aeb6bc;
     overflow-y: auto;
     scrollbar-size-vertical: 1;
 }
 
 #provider-editor-actions {
-    dock: bottom;
     width: 100%;
     height: 3;
-    padding: 0 1;
-    background: #20262b;
-    border-top: tall #39434a;
+    background: #17191b;
 }
 
 #provider-editor-actions Button {
@@ -731,7 +795,7 @@ ExtensionManager {
     max-width: 100%;
     height: 100%;
     max-height: 100%;
-    padding: 1;
+    padding: 0;
 }
 
 .narrow #provider-workspace {
@@ -740,11 +804,11 @@ ExtensionManager {
 
 .narrow #provider-sidebar {
     width: 100%;
-    height: 9;
-    min-height: 9;
+    height: 7;
+    min-height: 7;
     padding: 0 1;
     border-right: none;
-    border-bottom: tall #39434a;
+    border-bottom: solid #30363b;
 }
 
 .narrow #provider-sidebar .provider-panel-title {
@@ -758,7 +822,7 @@ ExtensionManager {
 }
 
 .narrow #provider-sidebar-actions {
-    width: 18;
+    width: 100%;
     height: 3;
 }
 
@@ -769,7 +833,9 @@ ExtensionManager {
 }
 
 .narrow #provider-inspector {
-    display: none;
+    height: 5;
+    min-height: 3;
+    padding: 1 1 0 1;
 }
 
 .narrow #provider-form {

@@ -49,7 +49,7 @@ async def test_model_command_persists_secret_and_selects_profile(tmp_path: Path)
 
     async with app.run_test(size=(110, 40)) as pilot:
         manager = await open_provider_manager(app, pilot)
-        assert manager.query_one("#provider-alias", Input).has_focus
+        assert manager.query_one("#provider-api-key", Input).has_focus
         manager.query_one("#provider-alias", Input).value = "codex"
         manager.query_one("#provider-model", Input).value = "gpt-test"
         manager.query_one("#provider-api-key", Input).value = "stored-secret"
@@ -257,11 +257,11 @@ async def test_builtin_provider_preset_fills_connection_fields(tmp_path: Path) -
         )
         assert labels == (
             "厂商模板",
+            "API Key",
+            "模型 ID",
             "配置别名",
             "接口协议",
-            "模型 ID",
             "Base URL",
-            "API Key",
             "环境变量",
         )
 
@@ -291,12 +291,12 @@ async def test_provider_manager_uses_persistent_workspace_regions(tmp_path: Path
         assert manager.query_one("#provider-editor", Vertical).display
         assert manager.query_one("#provider-inspector", Vertical).display
         assert "OpenAI Responses" in str(manager.query_one("#provider-details", Static).content)
-        workspace = manager.query_one("#provider-workspace", Horizontal)
+        editor = manager.query_one("#provider-editor", Vertical)
+        inspector = manager.query_one("#provider-inspector", Vertical)
         actions = manager.query_one("#provider-editor-actions", Horizontal)
-        assert workspace.region.bottom <= actions.region.y
-        assert (
-            actions.region.bottom <= manager.query_one("#provider-dialog", Vertical).region.bottom
-        )
+        assert editor.region.contains_region(inspector.region)
+        assert editor.region.contains_region(actions.region)
+        assert inspector.region.bottom <= actions.region.y
 
 
 @pytest.mark.asyncio
@@ -378,11 +378,13 @@ async def test_model_dialogs_fit_terminal_width(tmp_path: Path, width: int) -> N
         save = manager.query_one("#provider-save", Button)
         cancel = manager.query_one("#provider-cancel", Button)
         dialog = manager.query_one("#provider-dialog", Vertical)
+        editor = manager.query_one("#provider-editor", Vertical)
         form = manager.query_one("#provider-form", Vertical)
         actions = manager.query_one("#provider-editor-actions", Horizontal)
         assert abs(dialog.region.center[0] - app.screen.region.center[0]) <= 0.5
         assert abs(dialog.region.center[1] - app.screen.region.center[1]) <= 0.5
-        assert abs(form.region.center[0] - dialog.region.center[0]) <= 0.5
-        assert abs(actions.region.center[0] - dialog.region.center[0]) <= 0.5
+        assert editor.region.x <= form.region.x
+        assert form.region.right <= editor.region.right
+        assert editor.region.contains_region(actions.region)
         assert save.region.bottom <= app.screen.region.bottom
         assert cancel.region.right <= app.screen.region.right
