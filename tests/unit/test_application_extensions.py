@@ -199,3 +199,37 @@ async def test_close_rejects_new_leases_before_closing_generation(
 
     finish_close.set()
     await close_task
+
+
+@pytest.mark.asyncio
+async def test_cancelled_generation_close_can_be_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    close_entered = asyncio.Event()
+    finish_close = asyncio.Event()
+    original_close = RunExtensions.aclose
+    close_count = 0
+
+    async def delayed_close(extensions: RunExtensions) -> None:
+        nonlocal close_count
+        close_count += 1
+        close_entered.set()
+        await finish_close.wait()
+        await original_close(extensions)
+
+    monkeypatch.setattr(RunExtensions, "aclose", delayed_close)
+    application = extension_application(tmp_path)
+    await application.open()
+
+    close_task = asyncio.create_task(application.aclose())
+    await close_entered.wait()
+    close_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await close_task
+
+    with pytest.raises(RuntimeError, match="extension runtime is not initialized"):
+        application.acquire_run()
+
+    finish_close.set()
+    await application.aclose()
+    assert close_count == 2

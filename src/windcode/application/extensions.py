@@ -289,9 +289,9 @@ class ExtensionApplication:
             await self._stop_startup(current)
             await current.idle.wait()
             if self._retirements:
-                await asyncio.gather(*tuple(self._retirements), return_exceptions=True)
+                await asyncio.shield(
+                    asyncio.gather(*tuple(self._retirements), return_exceptions=True)
+                )
                 self._retirements.clear()
-            try:
-                await self._close_generation(current)
-            finally:
-                self._current = None
+            await self._close_generation(current)
+            self._current = None
