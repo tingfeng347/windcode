@@ -7,7 +7,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
-from typing import Any, cast
+from typing import Any, Protocol, cast
 from uuid import uuid4
 
 from windcode.config import PermissionMode, SubagentConfig
@@ -57,9 +57,22 @@ from windcode.runtime.subagents.collaboration import (
     BoundSubagentCollaboration,
     CoordinationSession,
 )
-from windcode.runtime.subagents.factory import ChildRuntime, ChildRuntimeFactory
+from windcode.runtime.subagents.runtime import ChildRuntime
 from windcode.runtime.subagents.verification import VerificationRunner
 from windcode.worktrees import GitBaseline, WorktreeError, WorktreeLease, WorktreeManager
+
+
+class ChildRunPreparer(Protocol):
+    def create(
+        self,
+        record: SubagentRecord,
+        *,
+        workspace: Path,
+        parent_permission: PermissionMode,
+        aggregate_budget: AggregateBudget,
+        approval_router: ApprovalRouter,
+        collaboration: BoundSubagentCollaboration | None = None,
+    ) -> ChildRuntime: ...
 
 
 class SubagentCoordinator:
@@ -72,7 +85,7 @@ class SubagentCoordinator:
         permission_mode: PermissionMode,
         config: SubagentConfig,
         event_bus: EventBus,
-        factory: ChildRuntimeFactory,
+        factory: ChildRunPreparer,
         worktrees: WorktreeManager,
         verification: VerificationRunner,
         network_enabled: bool = False,
@@ -121,19 +134,7 @@ class SubagentCoordinator:
         previous = self.permission_mode
         self.permission_mode = mode
         for runtime in self._runtimes.values():
-            policy = runtime.loop.scheduler.policy
-            if runtime.record.spec.kind is SubagentTaskKind.READ and (
-                self.factory.config.sandbox.preset == "danger_full_access"
-                or not policy.sandbox_available
-            ):
-                effective = PermissionMode.PLAN
-            else:
-                effective = mode
-            policy.set_mode(effective)
-            runtime.loop.system_prompt = runtime.loop.system_prompt.replace(
-                f"权限模式: {previous.value}.",
-                f"权限模式: {effective.value}.",
-            )
+            runtime.set_parent_permission(previous, mode)
 
     async def _publish_approval(self, event: ApprovalRequested) -> None:
         await self.event_bus.publish(event, durable=True)

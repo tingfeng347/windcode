@@ -96,7 +96,7 @@ from windcode.runtime.resources import RunResources
 from windcode.runtime.run_handle import RunHandle
 from windcode.runtime.scheduler import ScheduledCall, ToolScheduler
 from windcode.runtime.subagents import (
-    ChildRuntimeFactory,
+    ChildRunScope,
     SubagentCoordinator,
     VerificationRunner,
 )
@@ -786,7 +786,7 @@ class Windcode:
         control = RunControl(budgets)
         if request.compact_before_run:
             control.request_compaction()
-        factory = ChildRuntimeFactory(
+        child_scope = ChildRunScope(
             config=self.config,
             state_root=self.state_root,
             parent_tools=child_tools,
@@ -800,7 +800,7 @@ class Windcode:
             permission_mode=mode,
             config=self.config.subagents,
             event_bus=bus,
-            factory=factory,
+            factory=child_scope,
             worktrees=WorktreeManager(
                 worktrees_root=self.state_root / "worktrees",
                 fallback_worktrees_root=self._user_storage_root() / "worktrees",

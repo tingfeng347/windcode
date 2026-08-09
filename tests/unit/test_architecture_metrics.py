@@ -1,8 +1,10 @@
 import json
+from inspect import signature
 from pathlib import Path
 from typing import cast
 
 from scripts.architecture_metrics import check_against_baseline, collect
+from windcode.runtime.loop import AgentLoop
 
 BASELINE_PATH = Path("docs/refactor/architecture-baseline.json")
 
@@ -22,6 +24,10 @@ def test_runtime_boundaries_have_no_cycles_or_reverse_dependencies() -> None:
     assert actual["module_sccs"] == ()
     assert actual["tools_to_runtime_edge_list"] == ()
     assert actual["extensions_to_runtime_edge_list"] == ()
+
+
+def test_agent_loop_constructor_stays_narrow() -> None:
+    assert len(signature(AgentLoop).parameters) <= 10
 
 
 def test_architecture_check_rejects_missing_tracked_function() -> None:

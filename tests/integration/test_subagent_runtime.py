@@ -22,7 +22,7 @@ from windcode.runtime.scheduler import ScheduledCall
 from windcode.runtime.subagents.approvals import ApprovalRouter
 from windcode.runtime.subagents.budgets import AggregateBudget
 from windcode.runtime.subagents.collaboration import BoundSubagentCollaboration
-from windcode.runtime.subagents.factory import ChildRuntimeFactory
+from windcode.runtime.subagents.factory import ChildRunScope
 from windcode.sessions import SessionStatus, SessionStore
 from windcode.tools import create_builtin_registry
 
@@ -113,7 +113,7 @@ async def test_child_factory_creates_fresh_isolated_runtime(tmp_path: Path) -> N
     target = ModelTarget("recording", "model", transport)
     state = tmp_path / "state"
     registry = create_builtin_registry()
-    factory = ChildRuntimeFactory(
+    factory = ChildRunScope(
         config=AppConfig(),
         state_root=state,
         parent_tools=registry,
@@ -193,7 +193,7 @@ async def test_worker_read_runtime_does_not_register_write_tools(tmp_path: Path)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     transport = RecordingTransport()
-    factory = ChildRuntimeFactory(
+    factory = ChildRunScope(
         config=AppConfig(),
         state_root=tmp_path / "state",
         parent_tools=create_builtin_registry(),
@@ -231,7 +231,7 @@ async def test_read_child_rejects_shell_write_and_preserves_workspace(tmp_path: 
     original = workspace / "original.txt"
     original.write_text("unchanged\n", encoding="utf-8")
     transport = RecordingTransport()
-    factory = ChildRuntimeFactory(
+    factory = ChildRunScope(
         config=AppConfig(sandbox=SandboxConfig(enabled=False)),
         state_root=tmp_path / "state",
         parent_tools=create_builtin_registry(),
@@ -276,7 +276,7 @@ async def test_child_user_question_call_becomes_blocked(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     transport = RecordingTransport()
-    factory = ChildRuntimeFactory(
+    factory = ChildRunScope(
         config=AppConfig(),
         state_root=tmp_path / "state",
         parent_tools=create_builtin_registry(),

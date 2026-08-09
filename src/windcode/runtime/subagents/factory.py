@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -23,7 +23,6 @@ from windcode.policy import ApprovalChoice, PolicyDecision, PolicyEngine, Policy
 from windcode.policy.rules import CommandRuleStore
 from windcode.providers import ModelTarget
 from windcode.runtime.control import BudgetExceeded, RunBudgets, RunControl
-from windcode.runtime.event_bus import EventBus
 from windcode.runtime.loop import (
     AgentBlocked,
     AgentLoop,
@@ -42,6 +41,7 @@ from windcode.runtime.subagents.approvals import ApprovalRouter
 from windcode.runtime.subagents.budgets import AggregateBudget, AggregateBudgetExceeded
 from windcode.runtime.subagents.collaboration import BoundSubagentCollaboration
 from windcode.runtime.subagents.roles import ROLE_POLICIES, resolve_role_tools
+from windcode.runtime.subagents.runtime import ChildRuntime
 from windcode.sandbox import SandboxPreset, create_sandbox_backend
 from windcode.sessions import ArtifactStore, SessionStore
 from windcode.tools import ToolRegistry
@@ -80,6 +80,17 @@ def _git_common_directory(workspace: Path) -> Path | None:
         return git_directory
     common = Path(common_marker.read_text(encoding="utf-8").strip())
     return (git_directory / common).resolve()
+
+
+def _force_plan_on_permission_update(
+    task_kind: SubagentTaskKind,
+    preset: SandboxPreset,
+    *,
+    sandbox_available: bool,
+) -> bool:
+    return task_kind is SubagentTaskKind.READ and (
+        preset is SandboxPreset.DANGER_FULL_ACCESS or not sandbox_available
+    )
 
 
 class AggregateRunControl(RunControl):
@@ -163,16 +174,6 @@ class ChildAgentLoop(AgentLoop):
         raise AgentBlocked("subagents cannot ask the user directly; clarification is required")
 
 
-@dataclass(slots=True)
-class ChildRuntime:
-    record: SubagentRecord
-    control: RunControl
-    event_bus: EventBus
-    loop: AgentLoop
-    workspace: Path
-    prompt: str
-
-
 def build_child_prompt(record: SubagentRecord) -> str:
     spec = record.spec
     verification = "\n".join(f"- {item}" for item in spec.verification)
@@ -208,7 +209,7 @@ def build_child_prompt(record: SubagentRecord) -> str:
     )
 
 
-class ChildRuntimeFactory:
+class ChildRunScope:
     def __init__(
         self,
         *,
@@ -397,4 +398,9 @@ class ChildRuntimeFactory:
             loop,
             workspace,
             build_child_prompt(child_record),
+            force_plan_on_permission_update=_force_plan_on_permission_update(
+                spec.kind,
+                configured_preset,
+                sandbox_available=scheduler.policy.sandbox_available,
+            ),
         )

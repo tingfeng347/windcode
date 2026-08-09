@@ -31,7 +31,7 @@ from windcode.runtime.subagents.coordinator import (
     SubagentCoordinator,
     SubagentCoordinatorError,
 )
-from windcode.runtime.subagents.factory import ChildRuntimeFactory
+from windcode.runtime.subagents.factory import ChildRunScope
 from windcode.runtime.subagents.verification import VerificationRunner
 from windcode.sessions import SessionStore
 from windcode.tools import create_builtin_registry
@@ -136,7 +136,7 @@ def coordinator(
     transport = CommittingTransport()
     target = ModelTarget("committing", "model", transport)
     app_config = AppConfig()
-    factory = ChildRuntimeFactory(
+    factory = ChildRunScope(
         config=app_config,
         state_root=state,
         parent_tools=create_builtin_registry(),
