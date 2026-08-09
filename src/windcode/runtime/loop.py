@@ -1,19 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
-from windcode.context import TokenEstimator, compact_context, truncate_context
 from windcode.domain.errors import RequiredExtensionError, WindcodeError
 from windcode.domain.events import (
     ApprovalRequested,
     ApprovalResponse,
-    ContextCompacted,
-    ModelStarted,
     RunCancelled,
     RunCompleted,
     RunFailed,
@@ -27,13 +23,11 @@ from windcode.domain.events import (
 from windcode.domain.messages import (
     Message,
     Role,
-    SourcedContextMessage,
     TextBlock,
     ToolResultBlock,
-    heal_dangling_tool_calls,
     message_to_dict,
 )
-from windcode.domain.models import ModelRequest, Usage
+from windcode.domain.models import Usage
 from windcode.domain.tools import ToolContext, ToolEffect
 from windcode.policy import (
     ApprovalChoice,
@@ -43,10 +37,15 @@ from windcode.policy import (
 )
 from windcode.runtime.control import BudgetExceeded, RunControl
 from windcode.runtime.event_bus import EventBus
-from windcode.runtime.model_turn import ModelSession, ModelTurnRunner
+from windcode.runtime.model_turn import (
+    ContextWindow,
+    ModelSession,
+    ModelTurnRunner,
+    RunObservers,
+)
 from windcode.runtime.report import ToolExecutionRecord, build_run_result
 from windcode.runtime.scheduler import ScheduledCall, ToolScheduler
-from windcode.sessions import ArtifactStore, SessionStatus
+from windcode.sessions import SessionStatus
 
 
 class AgentBlocked(RuntimeError):
@@ -75,21 +74,6 @@ class ToolRuntime:
 class RunJournal:
     event_bus: EventBus
     close_on_exit: bool = True
-
-
-@dataclass(frozen=True, slots=True)
-class ContextWindow:
-    token_estimator: TokenEstimator | None = None
-    artifact_store: ArtifactStore | None = None
-    preserve_recent_turns: int = 8
-    max_tool_result_chars: int = 20_000
-
-
-@dataclass(frozen=True, slots=True)
-class RunObservers:
-    sourced_context: Callable[[], tuple[SourcedContextMessage, ...]] | None = None
-    compact: Callable[[str], Awaitable[None]] | None = None
-    completion: Callable[[RunResult], Awaitable[None]] | None = None
 
 
 class AgentLoop:
@@ -132,7 +116,15 @@ class AgentLoop:
         self.completion_observer = observers.completion
         self.inbound_message_source = inbound_message_source
         self._turn = 0
-        self._model_turn = ModelTurnRunner(model, self.control, self.event_bus, self._common)
+        self._model_turn = ModelTurnRunner(
+            model,
+            self.control,
+            self.event_bus,
+            self._common,
+            self.scheduler,
+            context,
+            observers,
+        )
         self.scheduler.approval_handler = self._approval_handler
         self.scheduler.before_execute = self._before_tool_execute
 
@@ -332,72 +324,8 @@ class AgentLoop:
                                 durable=True,
                             )
                 self._turn = self.control.start_model_step()
-                primary = self.model_chain[0]
-                await self.event_bus.publish(ModelStarted(**self._common(), model=primary.model))
-                sourced = (
-                    () if self.sourced_context_provider is None else self.sourced_context_provider()
-                )
-                messages = heal_dangling_tool_calls(messages)
-                extension_messages = tuple(
-                    Message(
-                        Role.SYSTEM,
-                        (TextBlock(f"[extension source: {item.source_id}]\n{item.content}"),),
-                        provider_metadata={"extension_source": item.source_id},
-                    )
-                    for item in sourced
-                )
-                request_messages = (*messages, *extension_messages)
-                request = ModelRequest(
-                    model=primary.model,
-                    messages=request_messages,
-                    system_prompt=self.system_prompt,
-                    tools=self.scheduler.registry.schemas(),
-                    max_output_tokens=self.max_output_tokens,
-                )
-                if self.token_estimator is not None:
-                    before = self.token_estimator.estimate(request)
-                    if before.should_compact or self.control.consume_compaction_request():
-                        if self.compact_observer is not None:
-                            await self.compact_observer("before")
-                        candidate = messages
-                        if self.artifact_store is not None:
-                            candidate = truncate_context(
-                                messages,
-                                self.artifact_store,
-                                max_tool_result_chars=self.max_tool_result_chars,
-                                preserve_recent_turns=self.preserve_recent_turns,
-                            ).messages
-                        compacted = await compact_context(
-                            candidate,
-                            primary.transport,
-                            model=primary.model,
-                            system_prompt=self.system_prompt,
-                            preserve_recent_turns=self.preserve_recent_turns,
-                        )
-                        if compacted.compacted:
-                            messages = compacted.messages
-                            request_messages = (*messages, *extension_messages)
-                            request = ModelRequest(
-                                model=primary.model,
-                                messages=request_messages,
-                                system_prompt=self.system_prompt,
-                                tools=self.scheduler.registry.schemas(),
-                                max_output_tokens=self.max_output_tokens,
-                            )
-                            after = self.token_estimator.estimate(request)
-                            await self.event_bus.publish(
-                                ContextCompacted(
-                                    **self._common(),
-                                    before_tokens=before.estimated_tokens,
-                                    after_tokens=after.estimated_tokens,
-                                ),
-                                durable=True,
-                            )
-                            if self.compact_observer is not None:
-                                await self.compact_observer("after")
-                        elif self.compact_observer is not None:
-                            await self.compact_observer("error")
-                turn = await self._model_turn.execute(request, total_usage)
+                turn = await self._model_turn.execute(messages, total_usage)
+                messages = turn.messages
                 total_usage = turn.total_usage
                 if turn.text:
                     final_text = turn.text

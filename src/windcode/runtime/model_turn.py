@@ -1,21 +1,31 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 from uuid import uuid4
 
+from windcode.context import TokenEstimator, compact_context, truncate_context
 from windcode.domain.errors import WindcodeError
 from windcode.domain.events import (
+    ContextCompacted,
     ModelFallback,
     ModelRetrying,
     ModelStarted,
     ReasoningStatus,
+    RunResult,
     TextDeltaEvent,
     UsageUpdated,
 )
-from windcode.domain.messages import Message, Role, TextBlock, ToolCallBlock
+from windcode.domain.messages import (
+    Message,
+    Role,
+    SourcedContextMessage,
+    TextBlock,
+    ToolCallBlock,
+    heal_dangling_tool_calls,
+)
 from windcode.domain.models import (
     ModelRequest,
     ModelUsage,
@@ -28,7 +38,8 @@ from windcode.providers import ModelTarget
 from windcode.runtime.control import RunControl
 from windcode.runtime.event_bus import EventBus
 from windcode.runtime.retry import stream_with_retry
-from windcode.runtime.scheduler import ScheduledCall
+from windcode.runtime.scheduler import ScheduledCall, ToolScheduler
+from windcode.sessions import ArtifactStore
 
 EventFields = Callable[[], dict[str, Any]]
 
@@ -42,7 +53,23 @@ class ModelSession:
 
 
 @dataclass(frozen=True, slots=True)
+class ContextWindow:
+    token_estimator: TokenEstimator | None = None
+    artifact_store: ArtifactStore | None = None
+    preserve_recent_turns: int = 8
+    max_tool_result_chars: int = 20_000
+
+
+@dataclass(frozen=True, slots=True)
+class RunObservers:
+    sourced_context: Callable[[], tuple[SourcedContextMessage, ...]] | None = None
+    compact: Callable[[str], Awaitable[None]] | None = None
+    completion: Callable[[RunResult], Awaitable[None]] | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ModelTurnOutcome:
+    messages: tuple[Message, ...]
     text: str
     total_usage: Usage
     assistant_message: Message
@@ -68,11 +95,17 @@ class ModelTurnRunner:
         control: RunControl,
         event_bus: EventBus,
         event_fields: EventFields,
+        scheduler: ToolScheduler,
+        context: ContextWindow,
+        observers: RunObservers,
     ) -> None:
         self._model = model
         self._control = control
         self._event_bus = event_bus
         self._event_fields = event_fields
+        self._scheduler = scheduler
+        self._context = context
+        self._observers = observers
 
     async def _on_retry(
         self,
@@ -106,7 +139,88 @@ class ModelTurnRunner:
         )
         await self._event_bus.publish(ModelStarted(**self._event_fields(), model=target.model))
 
-    async def execute(self, request: ModelRequest, previous_usage: Usage) -> ModelTurnOutcome:
+    def _request(
+        self,
+        messages: tuple[Message, ...],
+        extension_messages: tuple[Message, ...],
+    ) -> ModelRequest:
+        return ModelRequest(
+            model=self._model.model_chain[0].model,
+            messages=(*messages, *extension_messages),
+            system_prompt=self._model.system_prompt,
+            tools=self._scheduler.registry.schemas(),
+            max_output_tokens=self._model.max_output_tokens,
+        )
+
+    async def _prepare_request(
+        self,
+        messages: tuple[Message, ...],
+    ) -> tuple[tuple[Message, ...], ModelRequest]:
+        primary = self._model.model_chain[0]
+        await self._event_bus.publish(ModelStarted(**self._event_fields(), model=primary.model))
+        sourced = (
+            () if self._observers.sourced_context is None else self._observers.sourced_context()
+        )
+        messages = heal_dangling_tool_calls(messages)
+        extension_messages = tuple(
+            Message(
+                Role.SYSTEM,
+                (TextBlock(f"[extension source: {item.source_id}]\n{item.content}"),),
+                provider_metadata={"extension_source": item.source_id},
+            )
+            for item in sourced
+        )
+        request = self._request(messages, extension_messages)
+        estimator = self._context.token_estimator
+        if estimator is None:
+            return messages, request
+
+        before = estimator.estimate(request)
+        if not (before.should_compact or self._control.consume_compaction_request()):
+            return messages, request
+        if self._observers.compact is not None:
+            await self._observers.compact("before")
+        candidate = messages
+        if self._context.artifact_store is not None:
+            candidate = truncate_context(
+                messages,
+                self._context.artifact_store,
+                max_tool_result_chars=self._context.max_tool_result_chars,
+                preserve_recent_turns=self._context.preserve_recent_turns,
+            ).messages
+        compacted = await compact_context(
+            candidate,
+            primary.transport,
+            model=primary.model,
+            system_prompt=self._model.system_prompt,
+            preserve_recent_turns=self._context.preserve_recent_turns,
+        )
+        if not compacted.compacted:
+            if self._observers.compact is not None:
+                await self._observers.compact("error")
+            return messages, request
+
+        messages = compacted.messages
+        request = self._request(messages, extension_messages)
+        after = estimator.estimate(request)
+        await self._event_bus.publish(
+            ContextCompacted(
+                **self._event_fields(),
+                before_tokens=before.estimated_tokens,
+                after_tokens=after.estimated_tokens,
+            ),
+            durable=True,
+        )
+        if self._observers.compact is not None:
+            await self._observers.compact("after")
+        return messages, request
+
+    async def execute(
+        self,
+        messages: tuple[Message, ...],
+        previous_usage: Usage,
+    ) -> ModelTurnOutcome:
+        messages, request = await self._prepare_request(messages)
         text_parts: list[str] = []
         call_order: list[str] = []
         calls: dict[str, dict[str, str]] = {}
@@ -170,6 +284,7 @@ class ModelTurnRunner:
             scheduled.append(ScheduledCall(call_id, state["name"], arguments))
 
         return ModelTurnOutcome(
+            messages=messages,
             text=text,
             total_usage=_add_usage(previous_usage, step_usage),
             assistant_message=Message(Role.ASSISTANT, tuple(assistant_content)),
