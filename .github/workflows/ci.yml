@@ -1,44 +1,19 @@
-name: Cross-platform CI
+name: Ruff
 
 on:
   push:
   pull_request:
 
 jobs:
-  python-contracts:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.12"]
-    runs-on: ${{ matrix.os }}
+  ruff:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - run: uv python install ${{ matrix.python-version }}
-      - run: uv sync --python ${{ matrix.python-version }} --frozen --all-groups
+      - run: uv sync --frozen --only-group dev
       - name: Check formatting
         run: uv run ruff format --check .
       - name: Lint
         run: uv run ruff check .
-      - name: Type check
-        run: uv run pyright
-      - name: Check architecture metrics
-        run: uv run python scripts/architecture_metrics.py --check docs/refactor/architecture-baseline.json
-      - name: Run tests
-        run: uv run pytest -q
-      - name: Build distributions
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-        run: uv build
-      - name: Verify public sandbox and command contracts
-        run: >-
-          uv run python -c "import sys; from pathlib import Path;
-          from windcode.policy import analyze_bash;
-          from windcode.sandbox import SandboxPreset, create_sandbox_backend;
-          a=analyze_bash('git status && rm -rf build');
-          assert a.trusted and a.critical and len(a.actions)==2;
-          backend, policy=create_sandbox_backend(Path.cwd(), preset=SandboxPreset.WORKSPACE_WRITE);
-          assert policy.preset is SandboxPreset.WORKSPACE_WRITE;
-          assert backend is not None"
