@@ -22,7 +22,17 @@ from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
 from windcode.observability import TraceStore
 from windcode.policy import PolicyEngine
 from windcode.providers import ModelTarget
-from windcode.runtime import AgentLoop, EventBus, RunBudgets, RunControl, ToolScheduler
+from windcode.runtime import (
+    AgentLoop,
+    EventBus,
+    ModelSession,
+    RunBudgets,
+    RunControl,
+    RunIdentity,
+    RunJournal,
+    ToolRuntime,
+    ToolScheduler,
+)
 from windcode.sessions import SessionStore
 from windcode.tools import ToolRegistry
 
@@ -91,13 +101,10 @@ def build_loop(
         registry, PolicyEngine(PermissionMode.FULL_ACCESS, sandbox_enabled=False)
     )
     loop = AgentLoop(
-        session_id="session",
-        run_id="run",
-        model_chain=(ModelTarget("scripted", "model", transport),),
-        scheduler=scheduler,
-        control=RunControl(budgets),
-        event_bus=bus,
-        system_prompt="system",
+        identity=RunIdentity("session", "run"),
+        model=ModelSession((ModelTarget("scripted", "model", transport),), "system"),
+        tools=ToolRuntime(scheduler, RunControl(budgets)),
+        journal=RunJournal(bus),
     )
     return loop, bus, session
 

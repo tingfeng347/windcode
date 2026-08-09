@@ -87,7 +87,15 @@ from windcode.providers import (
 )
 from windcode.runtime.control import RunBudgets, RunControl
 from windcode.runtime.event_bus import EventBus
-from windcode.runtime.loop import AgentLoop
+from windcode.runtime.loop import (
+    AgentLoop,
+    ContextWindow,
+    ModelSession,
+    RunIdentity,
+    RunJournal,
+    RunObservers,
+    ToolRuntime,
+)
 from windcode.runtime.prompts import build_system_prompt
 from windcode.runtime.resources import RunResources
 from windcode.runtime.scheduler import ScheduledCall, ToolScheduler
@@ -1194,24 +1202,25 @@ class Windcode:
             await extract_memories(result)
 
         loop = AgentLoop(
-            session_id=session.metadata.session_id,
-            run_id=run_id,
-            model_chain=model_chain,
-            scheduler=scheduler,
-            control=control,
-            event_bus=bus,
-            system_prompt=system_prompt,
-            model_stream_idle_timeout_seconds=(
-                self.config.budgets.model_stream_idle_timeout_seconds
+            identity=RunIdentity(session.metadata.session_id, run_id),
+            model=ModelSession(
+                model_chain,
+                system_prompt,
+                stream_idle_timeout_seconds=(self.config.budgets.model_stream_idle_timeout_seconds),
             ),
-            token_estimator=resources.token_estimator,
-            artifact_store=resources.artifact_store,
-            preserve_recent_turns=self.config.context.preserve_recent_turns,
-            max_tool_result_chars=self.config.context.max_tool_result_chars,
-            close_event_bus=False,
-            sourced_context_provider=run_extensions.drain_context,
-            compact_observer=run_extensions.compact_lifecycle,
-            completion_observer=complete_run,
+            tools=ToolRuntime(scheduler, control),
+            journal=RunJournal(bus, close_on_exit=False),
+            context=ContextWindow(
+                token_estimator=resources.token_estimator,
+                artifact_store=resources.artifact_store,
+                preserve_recent_turns=self.config.context.preserve_recent_turns,
+                max_tool_result_chars=self.config.context.max_tool_result_chars,
+            ),
+            observers=RunObservers(
+                sourced_context=run_extensions.drain_context,
+                compact=run_extensions.compact_lifecycle,
+                completion=complete_run,
+            ),
         )
         after_sequence = session.metadata.next_sequence - 1
 
