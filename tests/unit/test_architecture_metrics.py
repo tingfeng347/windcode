@@ -182,6 +182,17 @@ def test_sdk_depends_only_on_public_facades_and_contracts() -> None:
     )
 
 
+def test_tui_provider_management_uses_application_contract() -> None:
+    tui_tree = ast.parse(Path("src/windcode/tui/app.py").read_text(encoding="utf-8"))
+    imports = {
+        node.module
+        for node in ast.walk(tui_tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+
+    assert "windcode.providers" not in imports
+
+
 def test_assembly_boundary_resolves_import_and_assignment_aliases() -> None:
     tree = ast.parse(
         """

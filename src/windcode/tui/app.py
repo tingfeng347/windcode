@@ -14,6 +14,7 @@ from textual.css.query import NoMatches
 from textual.theme import Theme
 from textual.widgets import Static
 
+from windcode.application.contracts import ProviderService, fetch_model_ids
 from windcode.auth import CredentialStore
 from windcode.config import AppConfig, PermissionMode, ProviderConfig, default_user_config_path
 from windcode.domain.events import (
@@ -28,7 +29,6 @@ from windcode.domain.events import (
 )
 from windcode.domain.messages import TextBlock, message_from_dict
 from windcode.memory import MemoryStatus
-from windcode.providers import ProviderService, fetch_model_ids
 from windcode.sdk import RunHandle, Windcode
 from windcode.tui.commands import (
     COMMANDS,
