@@ -30,10 +30,11 @@ from windcode.runtime.event_bus import EventBus
 from windcode.runtime.loop import AgentLoop
 from windcode.runtime.subagents.collaboration import BoundSubagentCollaboration
 from windcode.runtime.subagents.coordinator import (
+    ChildRunPreparer,
     SubagentCoordinator,
     SubagentCoordinatorError,
 )
-from windcode.runtime.subagents.factory import ChildRuntime, ChildRuntimeFactory
+from windcode.runtime.subagents.runtime import ChildRuntime
 from windcode.runtime.subagents.teamwork import run_collaboration
 from windcode.runtime.subagents.verification import VerificationRunner
 from windcode.sessions import SessionStore
@@ -193,7 +194,7 @@ def coordinator(
         permission_mode=PermissionMode.DEFAULT,
         config=config or SubagentConfig(max_tasks=8, max_concurrent=2),
         event_bus=bus,
-        factory=cast(ChildRuntimeFactory, child_factory),
+        factory=cast(ChildRunPreparer, child_factory),
         worktrees=WorktreeManager(worktrees_root=tmp_path / "worktrees"),
         verification=VerificationRunner(),
     )

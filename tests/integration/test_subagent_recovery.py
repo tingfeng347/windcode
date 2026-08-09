@@ -14,7 +14,7 @@ from windcode.observability import TraceStore
 from windcode.providers import ModelTarget
 from windcode.runtime.event_bus import EventBus
 from windcode.runtime.subagents.coordinator import SubagentCoordinator
-from windcode.runtime.subagents.factory import ChildRuntimeFactory
+from windcode.runtime.subagents.factory import ChildRunScope
 from windcode.runtime.subagents.verification import VerificationRunner
 from windcode.sessions import SessionStore
 from windcode.tools import create_builtin_registry
@@ -47,7 +47,7 @@ async def test_recovery_is_idempotent_and_never_starts_a_model(tmp_path: Path) -
         raise AssertionError("recovery must not resolve or call a model")
 
     config = AppConfig()
-    factory = ChildRuntimeFactory(
+    factory = ChildRunScope(
         config=config,
         state_root=state,
         parent_tools=create_builtin_registry(),
