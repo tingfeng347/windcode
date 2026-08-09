@@ -1,5 +1,7 @@
 import os
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -10,6 +12,8 @@ from windcode.extensions.paths import (
     resolve_beneath,
     scan_bounded,
 )
+
+mkfifo = cast(Callable[[Path], None] | None, getattr(os, "mkfifo", None))
 
 
 def test_resolve_beneath_accepts_regular_nested_file(tmp_path: Path) -> None:
@@ -66,11 +70,12 @@ def test_scan_is_sorted_bounded_and_does_not_follow_symlinks(tmp_path: Path) -> 
         list(scan_bounded(root, max_depth=2, max_entries=2))
 
 
-@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO is not supported")
+@pytest.mark.skipif(mkfifo is None, reason="FIFO is not supported")
 def test_scan_rejects_special_files(tmp_path: Path) -> None:
     root = tmp_path / "root"
     root.mkdir()
-    os.mkfifo(root / "pipe")
+    assert mkfifo is not None
+    mkfifo(root / "pipe")
 
     with pytest.raises(PathBoundaryError):
         list(scan_bounded(root, max_depth=1, max_entries=2))
