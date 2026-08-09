@@ -63,3 +63,19 @@ async def test_sdk_instances_do_not_share_extension_state(tmp_path: Path) -> Non
 
         assert await first.list_extensions()
         assert await second.list_extensions() == ()
+
+
+@pytest.mark.asyncio
+async def test_sdk_preserves_extension_service_reference_after_close(tmp_path: Path) -> None:
+    client = Windcode.open(state_root=tmp_path / "state")
+
+    async with client:
+        service = client.extension_service
+        assert service is not None
+
+    assert client.extension_service is service
+    with pytest.raises(RuntimeError, match="inside the Windcode async context"):
+        await client.list_extensions()
+
+    client.extension_service = None
+    assert client.extension_service is None

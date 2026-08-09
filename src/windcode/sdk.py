@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
 
-from windcode.application import ConfigurationApplication, ProviderApplication
+from windcode.application import (
+    ConfigurationApplication,
+    ExtensionApplication,
+    McpStartupStatus,
+    ProviderApplication,
+)
 from windcode.auth import CredentialStore, FileCredentialStore
 from windcode.config import AppConfig
-from windcode.domain.errors import RequiredExtensionError, RequiredExtensionStartupError
 from windcode.domain.events import RunRequest
 from windcode.domain.messages import (
     Message,
@@ -21,22 +24,15 @@ from windcode.domain.messages import (
 )
 from windcode.domain.tools import Tool
 from windcode.extensions.commands import CommandRoute
-from windcode.extensions.mcp import McpServerState
-from windcode.extensions.mcp.catalog import McpToolDefinition
 from windcode.extensions.models import (
     CapabilityRecord,
     ExtensionSnapshot,
     ManagementResult,
 )
 from windcode.extensions.plugins.installer import InstallResult
-from windcode.extensions.runtime import RunExtensions
 from windcode.extensions.service import ExtensionService
-from windcode.extensions.skills.loader import SkillLoader
-from windcode.extensions.skills.tools import (
-    SkillCatalog,
-    SkillSearchResult,
-)
-from windcode.extensions.state import ExtensionStateStore, ManagementAuditRecord
+from windcode.extensions.skills.tools import SkillSearchResult
+from windcode.extensions.state import ManagementAuditRecord
 from windcode.memory import (
     MemoryActivation,
     MemoryKind,
@@ -50,7 +46,8 @@ from windcode.providers import (
     ModelTransport,
     TransportRegistry,
 )
-from windcode.runtime.run_builder import RunBuilder, RunExtensionState
+from windcode.runtime.parent_run import RunExtensionState
+from windcode.runtime.run_builder import RunBuilder
 from windcode.runtime.run_handle import RunHandle
 from windcode.sandbox import SandboxPreset, create_sandbox_backend
 from windcode.sessions import (
@@ -64,14 +61,6 @@ from windcode.tools import (
     ToolRegistry,
     create_builtin_registry,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class McpStartupStatus:
-    total: int = 0
-    loaded: int = 0
-    failed_servers: tuple[str, ...] = ()
-    lazy: int = 0
 
 
 class Windcode:
@@ -90,15 +79,16 @@ class Windcode:
         self._providers = ProviderApplication(self._configuration, self.credential_store)
         self.workspace = (workspace or Path.cwd()).expanduser().resolve()
         self.state_root = self._resolve_state_root(state_root)
+        self._extension_application = ExtensionApplication(
+            self._configuration,
+            self.credential_store,
+            workspace=self.workspace,
+            state_root=self.state_root,
+            user_skill_root=self._user_storage_root() / "skills",
+        )
         self.tool_registry: ToolRegistry | None = None
         self._handles: set[RunHandle] = set()
         self._entered = False
-        self.extension_service: ExtensionService | None = None
-        self._client_extensions: RunExtensions | None = None
-        self._mcp_tool_catalogs: dict[str, tuple[McpToolDefinition, ...]] = {}
-        self._mcp_selected_tools: set[str] = set()
-        self._mcp_start_task: asyncio.Task[None] | None = None
-        self._mcp_retirement_tasks: set[asyncio.Task[None]] = set()
         self.memory_service: MemoryService | None = None
 
     @property
@@ -124,6 +114,14 @@ class Windcode:
     @model_startup_error.setter
     def model_startup_error(self, value: str | None) -> None:
         self._providers.startup_error = value
+
+    @property
+    def extension_service(self) -> ExtensionService | None:
+        return self._extension_application.service
+
+    @extension_service.setter
+    def extension_service(self, value: ExtensionService | None) -> None:
+        self._extension_application.service = value
 
     def _resolve_state_root(self, explicit_root: Path | None) -> Path:
         if explicit_root is not None:
@@ -180,149 +178,56 @@ class Windcode:
         self.tool_registry = create_builtin_registry(
             shell_timeout=self.config.budgets.shell_timeout_seconds,
         )
-        extension_root = self.state_root / "extensions"
-        self.extension_service = ExtensionService(
-            self.config.extensions,
-            self.workspace,
-            ExtensionStateStore(extension_root / "state.json"),
-            extension_root / "plugins",
-            user_skill_root=self._user_storage_root() / "skills",
-        )
-        await self.extension_service.reload()
-        self._client_extensions = self._create_client_extensions()
-        self._mcp_start_task = asyncio.create_task(
-            self._start_required_mcp(self._client_extensions)
-        )
+        await self._extension_application.open()
         return self
-
-    def _create_client_extensions(self) -> RunExtensions:
-        if self.extension_service is None:
-            raise RuntimeError("extension service is not initialized")
-        return RunExtensions.create(
-            self.extension_service.snapshot,
-            session_id="client",
-            run_id="startup",
-            credential_store=self.credential_store,
-            max_content_bytes=self.config.extensions.max_content_bytes,
-            connect_timeout=self.config.extensions.connect_timeout_seconds,
-            call_timeout=self.config.extensions.call_timeout_seconds,
-            network_enabled=self.config.sandbox.network_enabled,
-            mcp_tool_catalogs=self._mcp_tool_catalogs,
-        )
-
-    async def _retire_client_extensions(
-        self,
-        extensions: RunExtensions,
-        handles: tuple[RunHandle, ...],
-        startup: asyncio.Task[None] | None,
-    ) -> None:
-        await asyncio.gather(*(handle.result() for handle in handles), return_exceptions=True)
-        if startup is not None:
-            if not startup.done():
-                startup.cancel()
-            await asyncio.gather(startup, return_exceptions=True)
-        extensions.mcp.observer = None
-        await extensions.aclose()
-
-    async def _start_required_mcp(self, extensions: RunExtensions) -> None:
-        try:
-            ready_required_servers = await extensions.mcp.activate_required()
-            await extensions.mcp_capabilities.register_direct_tools(
-                ToolRegistry(),
-                direct_tool_limit=self.config.extensions.direct_tool_limit,
-                server_ids=ready_required_servers,
-                strict=True,
-            )
-        except RequiredExtensionError:
-            raise
-        except Exception as exc:
-            raise RequiredExtensionStartupError(
-                extensions.mcp.required_server_ids,
-                extension_kind="MCP",
-            ) from exc
 
     async def wait_for_required_mcp(self) -> None:
         """Wait for the single client-level MCP startup task."""
-        if self._mcp_start_task is not None:
-            await asyncio.shield(self._mcp_start_task)
+        await self._extension_application.wait_required()
 
     @property
     def required_mcp_loading(self) -> bool:
-        return self._mcp_start_task is not None and not self._mcp_start_task.done()
+        return self._extension_application.required_loading
 
     @property
     def mcp_startup_status(self) -> McpStartupStatus:
-        if self._client_extensions is None:
-            return McpStartupStatus()
-        runtime = self._client_extensions.mcp
-        loaded = len(runtime.ready_server_ids)
-        failed = runtime.failed_server_ids
-        lazy = sum(
-            runtime.state(server_id) is McpServerState.DISCOVERED
-            for server_id in runtime.server_ids
-        )
-        return McpStartupStatus(len(runtime.server_ids), loaded, failed, lazy)
-
-    def _extensions(self) -> ExtensionService:
-        if not self._entered or self.extension_service is None:
-            raise RuntimeError("manage extensions inside the Windcode async context")
-        return self.extension_service
+        return self._extension_application.startup_status
 
     @property
     def extension_snapshot(self) -> ExtensionSnapshot:
-        return self._extensions().snapshot
+        return self._extension_application.snapshot
 
     async def list_extensions(self) -> tuple[CapabilityRecord, ...]:
-        return await self._extensions().list_capabilities()
+        return await self._extension_application.list_capabilities()
 
     async def inspect_extension(self, identifier: str) -> tuple[CapabilityRecord, ...]:
-        return await self._extensions().inspect(identifier)
+        return await self._extension_application.inspect(identifier)
 
     async def install_extension(self, path: Path, *, enable: bool = False) -> InstallResult:
-        return await self._extensions().install_local(path, enable=enable)
+        return await self._extension_application.install_local(path, enable=enable)
 
     async def set_extension_enabled(self, identifier: str, enabled: bool) -> ManagementResult:
-        return await self._extensions().set_enabled(identifier, enabled)
+        return await self._extension_application.set_enabled(identifier, enabled)
 
     async def trust_extension_workspace(
         self, workspace: Path, trusted: bool = True
     ) -> ManagementResult:
-        return await self._extensions().trust_workspace(workspace, trusted)
+        return await self._extension_application.trust_workspace(workspace, trusted)
 
     async def reload_extensions(self) -> ManagementResult:
-        result = await self._extensions().reload()
-        previous = self._client_extensions
-        previous_startup = self._mcp_start_task
-        active_handles = tuple(handle for handle in self._handles if not handle.done)
-        self._mcp_tool_catalogs = {}
-        self._mcp_selected_tools = set()
-        self._client_extensions = self._create_client_extensions()
-        self._mcp_start_task = asyncio.create_task(
-            self._start_required_mcp(self._client_extensions)
-        )
-        if previous is not None:
-            retirement = asyncio.create_task(
-                self._retire_client_extensions(previous, active_handles, previous_startup)
-            )
-            self._mcp_retirement_tasks.add(retirement)
-            retirement.add_done_callback(self._mcp_retirement_tasks.discard)
-        return result
+        return await self._extension_application.reload()
 
     def extension_commands(
         self, *, reserved: frozenset[str] = frozenset()
     ) -> tuple[CommandRoute, ...]:
-        return self._extensions().command_routes(reserved=reserved)
+        return self._extension_application.command_routes(reserved=reserved)
 
     def search_skills(self, query: str = "") -> tuple[SkillSearchResult, ...]:
         """Return enabled, trusted, unshadowed Skills from the current snapshot."""
-        catalog = SkillCatalog(
-            self.extension_snapshot,
-            SkillLoader(max_content_bytes=self.config.extensions.max_content_bytes),
-        )
-        return catalog.search(query)
+        return self._extension_application.search_skills(query)
 
     def extension_audit(self) -> tuple[ManagementAuditRecord, ...]:
-        return self._extensions().audit_records
+        return self._extension_application.audit_records
 
     async def __aexit__(
         self,
@@ -496,12 +401,14 @@ class Windcode:
     def start_run(self, request: RunRequest) -> RunHandle:
         if not self._entered or self.tool_registry is None:
             raise RuntimeError("start runs inside the Windcode async context")
-        handle = self._run_builder().start(request)
+        handle = self._extension_application.bind_run(
+            lambda extensions: self._run_builder(extensions).start(request)
+        )
         self._handles.add(handle)
         handle.add_done_callback(self._handles.discard)
         return handle
 
-    def _run_builder(self) -> RunBuilder:
+    def _run_builder(self, extensions: RunExtensionState) -> RunBuilder:
         if self.tool_registry is None:
             raise RuntimeError("run builder requires an initialized tool registry")
         return RunBuilder(
@@ -510,17 +417,7 @@ class Windcode:
             user_storage_root=self._user_storage_root(),
             base_tools=self.tool_registry,
             model_chain=self._providers.resolve,
-            extensions=RunExtensionState(
-                snapshot=self._extensions().snapshot,
-                credential_store=self.credential_store,
-                mcp_runtime=(
-                    None if self._client_extensions is None else self._client_extensions.mcp
-                ),
-                startup_task=self._mcp_start_task,
-                tool_catalogs=self._mcp_tool_catalogs,
-                selected_tools=self._mcp_selected_tools,
-                direct_tool_limit=self.config.extensions.direct_tool_limit,
-            ),
+            extensions=extensions,
         )
 
     def list_sessions(self) -> tuple[SessionMetadata, ...]:
@@ -569,29 +466,13 @@ class Windcode:
             return
         handles = tuple(self._handles)
         await asyncio.gather(*(handle.cancel() for handle in handles))
-        if self._mcp_start_task is not None:
-            if not self._mcp_start_task.done():
-                self._mcp_start_task.cancel()
-            await asyncio.gather(self._mcp_start_task, return_exceptions=True)
-            self._mcp_start_task = None
-        if self._mcp_retirement_tasks:
-            await asyncio.gather(*tuple(self._mcp_retirement_tasks), return_exceptions=True)
-            self._mcp_retirement_tasks.clear()
-        if self._client_extensions is not None:
-            self._client_extensions.mcp.observer = None
-        extension_close = (
-            self._client_extensions.aclose()
-            if self._client_extensions is not None
-            else asyncio.sleep(0)
-        )
         try:
             await asyncio.gather(
-                extension_close,
+                self._extension_application.aclose(),
                 self._providers.aclose(),
                 return_exceptions=True,
             )
         finally:
-            self._client_extensions = None
             self._entered = False
 
 
