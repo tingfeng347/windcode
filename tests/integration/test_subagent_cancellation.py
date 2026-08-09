@@ -18,7 +18,7 @@ from windcode.observability import TraceStore
 from windcode.providers import ModelTarget
 from windcode.runtime.event_bus import EventBus
 from windcode.runtime.subagents.coordinator import SubagentCoordinator
-from windcode.runtime.subagents.factory import ChildRuntimeFactory
+from windcode.runtime.subagents.factory import ChildRunScope
 from windcode.runtime.subagents.verification import VerificationRunner
 from windcode.sessions import SessionStore
 from windcode.tools import create_builtin_registry
@@ -74,7 +74,7 @@ def coordinator(tmp_path: Path, transport: ControlledTransport) -> SubagentCoord
     bus = EventBus(session, TraceStore("run", root=state / "traces"))
     target = ModelTarget("controlled", "model", transport)
     config = AppConfig(subagents=SubagentConfig(max_tasks=4, max_concurrent=2))
-    factory = ChildRuntimeFactory(
+    factory = ChildRunScope(
         config=config,
         state_root=state,
         parent_tools=create_builtin_registry(),
