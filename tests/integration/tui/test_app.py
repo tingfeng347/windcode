@@ -553,7 +553,7 @@ async def test_idle_compact_command_is_usable(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_input_regains_focus_after_approved_agent_run(tmp_path: Path) -> None:
     app = WindcodeApp(
-        AppConfig(sandbox=SandboxConfig(enabled=False)),
+        AppConfig(sandbox=SandboxConfig(preset="danger_full_access")),
         workspace=tmp_path,
         state_root=tmp_path / "state",
     )
@@ -586,7 +586,7 @@ async def test_permission_mode_can_cycle_while_agent_is_waiting_for_approval(
     tmp_path: Path,
 ) -> None:
     app = WindcodeApp(
-        AppConfig(sandbox=SandboxConfig(enabled=False)),
+        AppConfig(sandbox=SandboxConfig(preset="danger_full_access")),
         workspace=tmp_path,
         state_root=tmp_path / "state",
     )

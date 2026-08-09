@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,30 @@ from windcode.domain.subagents import (
     SubagentTaskKind,
     SubagentTaskSpec,
 )
-from windcode.worktrees import GitErrorCategory, GitRunner, WorktreeError, WorktreeManager
+from windcode.worktrees import (
+    GitCommandResult,
+    GitErrorCategory,
+    GitRunner,
+    WorktreeError,
+    WorktreeManager,
+)
+
+
+class LocalizedNonRepositoryRunner(GitRunner):
+    async def run(
+        self,
+        arguments: Sequence[str],
+        *,
+        cwd: Path,
+        check: bool = True,
+        timeout_seconds: float | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> GitCommandResult:
+        del timeout_seconds, cancelled
+        result = GitCommandResult(tuple(arguments), cwd, 128, "", "fatal: 不是 Git 仓库")
+        if check:
+            raise WorktreeError(GitErrorCategory.COMMAND_FAILED, result.stderr)
+        return result
 
 
 def git(cwd: Path, *arguments: str) -> str:
@@ -92,6 +116,19 @@ async def test_baseline_rejects_non_git_dirty_and_detached(tmp_path: Path) -> No
     with pytest.raises(WorktreeError) as error:
         await worktrees.validate_parent(detached)
     assert error.value.category is GitErrorCategory.DETACHED_HEAD
+
+
+async def test_baseline_classifies_repository_discovery_without_parsing_git_message(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "localized"
+    workspace.mkdir()
+    worktrees = WorktreeManager(runner=LocalizedNonRepositoryRunner())
+
+    with pytest.raises(WorktreeError) as error:
+        await worktrees.validate_parent(workspace)
+
+    assert error.value.category is GitErrorCategory.NOT_REPOSITORY
 
 
 async def test_create_parallel_leases_keeps_parent_unchanged(tmp_path: Path) -> None:

@@ -90,12 +90,19 @@ class WorktreeManager:
         workspace = _resolve(workspace)
         try:
             repository_result = await self.runner.run(
-                ("rev-parse", "--show-toplevel"), cwd=workspace
+                ("rev-parse", "--show-toplevel"), cwd=workspace, check=False
             )
         except FileNotFoundError as exc:
             raise WorktreeError(
                 GitErrorCategory.WORKTREE_UNAVAILABLE, "Git is unavailable"
             ) from exc
+        if repository_result.returncode != 0:
+            details = (
+                repository_result.stderr.strip()
+                or repository_result.stdout.strip()
+                or f"Not a Git repository: {workspace}"
+            )
+            raise WorktreeError(GitErrorCategory.NOT_REPOSITORY, details)
         repository = _resolve(Path(repository_result.stdout.strip()))
         branch_result = await self.runner.run(
             ("symbolic-ref", "--quiet", "--short", "HEAD"), cwd=repository, check=False

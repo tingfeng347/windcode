@@ -239,7 +239,7 @@ async def test_read_child_rejects_shell_write_and_preserves_workspace(tmp_path: 
     original.write_text("unchanged\n", encoding="utf-8")
     transport = RecordingTransport()
     prepare_child = child_preparer(
-        config=AppConfig(sandbox=SandboxConfig(enabled=False)),
+        config=AppConfig(sandbox=SandboxConfig(preset="danger_full_access")),
         state_root=tmp_path / "state",
         parent_tools=create_builtin_registry(),
         model_chain=lambda _model: (ModelTarget("recording", "model", transport),),
