@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
 
-from windcode.auth import CredentialStore, CredentialStoreError, FileCredentialStore
+from windcode.application import ProviderApplication
+from windcode.auth import CredentialStore, FileCredentialStore
 from windcode.config import (
     AppConfig,
     save_memory_config,
-    save_model_config,
 )
 from windcode.domain.errors import RequiredExtensionError, RequiredExtensionStartupError
 from windcode.domain.events import RunRequest
@@ -50,9 +50,7 @@ from windcode.memory import (
     MemoryStatus,
 )
 from windcode.providers import (
-    ModelTarget,
     ModelTransport,
-    ProviderConfigurationError,
     TransportRegistry,
 )
 from windcode.runtime.run_builder import RunBuilder, RunExtensionState
@@ -90,14 +88,11 @@ class Windcode:
         credential_store: CredentialStore | None = None,
         workspace: Path | None = None,
     ) -> None:
-        self.config = config
         self.credential_store = credential_store or FileCredentialStore()
+        self._providers = ProviderApplication(config, self.credential_store)
         self.workspace = (workspace or Path.cwd()).expanduser().resolve()
         self.state_root = self._resolve_state_root(state_root)
-        self.transport_registry = TransportRegistry()
-        self.model_startup_error: str | None = None
         self.tool_registry: ToolRegistry | None = None
-        self._default_chain: list[str] = []
         self._handles: set[RunHandle] = set()
         self._entered = False
         self.extension_service: ExtensionService | None = None
@@ -107,6 +102,30 @@ class Windcode:
         self._mcp_start_task: asyncio.Task[None] | None = None
         self._mcp_retirement_tasks: set[asyncio.Task[None]] = set()
         self.memory_service: MemoryService | None = None
+
+    @property
+    def config(self) -> AppConfig:
+        return self._providers.config
+
+    @config.setter
+    def config(self, value: AppConfig) -> None:
+        self._providers.config = value
+
+    @property
+    def transport_registry(self) -> TransportRegistry:
+        return self._providers.registry
+
+    @transport_registry.setter
+    def transport_registry(self, value: TransportRegistry) -> None:
+        self._providers.registry = value
+
+    @property
+    def model_startup_error(self) -> str | None:
+        return self._providers.startup_error
+
+    @model_startup_error.setter
+    def model_startup_error(self, value: str | None) -> None:
+        self._providers.startup_error = value
 
     def _resolve_state_root(self, explicit_root: Path | None) -> Path:
         if explicit_root is not None:
@@ -159,23 +178,7 @@ class Windcode:
         self.state_root.mkdir(parents=True, exist_ok=True)
         if self.config.memory.enabled:
             self.memory_service = MemoryService(self.state_root, self.workspace)
-        if self.config.providers:
-            try:
-                self.transport_registry = TransportRegistry.from_config(
-                    self.config,
-                    credential_store=self.credential_store,
-                    allow_missing=True,
-                )
-            except (CredentialStoreError, ProviderConfigurationError) as exc:
-                self.transport_registry = TransportRegistry()
-                self.model_startup_error = str(exc)
-            else:
-                if self.config.primary_provider is not None:
-                    self._default_chain = [
-                        alias
-                        for alias in (self.config.primary_provider, *self.config.fallback_chain)
-                        if alias in self.transport_registry.aliases
-                    ]
+        await self._providers.open()
         self.tool_registry = create_builtin_registry(
             shell_timeout=self.config.budgets.shell_timeout_seconds,
         )
@@ -346,63 +349,21 @@ class Windcode:
         replace_existing: bool = False,
         primary: bool = False,
     ) -> None:
-        self.transport_registry.register(alias, model, transport, replace=replace_existing)
-        self.model_startup_error = None
-        if primary or not self._default_chain:
-            self._default_chain = [alias]
+        self._providers.register(
+            alias,
+            model,
+            transport,
+            replace_existing=replace_existing,
+            primary=primary,
+        )
 
     async def reconfigure_models(self, config: AppConfig, *, config_file: Path) -> None:
         if any(not handle.done for handle in self._handles):
             raise RuntimeError("cannot configure models while a run is active")
-        registry = (
-            TransportRegistry.from_config(
-                config,
-                credential_store=self.credential_store,
-                allow_missing=True,
-            )
-            if config.providers
-            else TransportRegistry()
-        )
-        if config.primary_provider is not None and config.primary_provider not in registry.aliases:
-            await registry.aclose()
-            raise ProviderConfigurationError(
-                f"primary provider {config.primary_provider!r} is not runnable; "
-                "configure its credential or choose a connected provider"
-            )
-        try:
-            save_model_config(config_file, self.config, config)
-        except Exception:
-            await registry.aclose()
-            raise
-
-        previous_registry = self.transport_registry
-        self.transport_registry = registry
-        self.model_startup_error = None
-        self.config = config
-        configured_chain = (
-            (config.primary_provider, *config.fallback_chain)
-            if config.primary_provider is not None
-            else ()
-        )
-        self._default_chain = [
-            alias for alias in configured_chain if alias in self.transport_registry.aliases
-        ]
-        await previous_registry.aclose()
-
-    def _model_chain(self, requested: str | None) -> tuple[ModelTarget, ...]:
-        if requested is not None and requested in self.transport_registry.aliases:
-            return (self.transport_registry.get(requested),)
-        if not self._default_chain:
-            raise ProviderConfigurationError("no runnable model provider is configured")
-        chain = tuple(self.transport_registry.get(alias) for alias in self._default_chain)
-        if requested is not None:
-            chain = (replace(chain[0], model=requested), *chain[1:])
-        return chain
+        await self._providers.reconfigure(config, config_file=config_file)
 
     def can_resolve_model(self, requested: str | None = None) -> bool:
-        return (requested is not None and requested in self.transport_registry.aliases) or bool(
-            self._default_chain
-        )
+        return self._providers.can_resolve(requested)
 
     def _memory(self) -> MemoryService:
         if not self.config.memory.enabled or self.memory_service is None:
@@ -553,7 +514,7 @@ class Windcode:
             state_root=self.state_root,
             user_storage_root=self._user_storage_root(),
             base_tools=self.tool_registry,
-            model_chain=self._model_chain,
+            model_chain=self._providers.resolve,
             extensions=RunExtensionState(
                 snapshot=self._extensions().snapshot,
                 credential_store=self.credential_store,
@@ -631,7 +592,7 @@ class Windcode:
         try:
             await asyncio.gather(
                 extension_close,
-                self.transport_registry.aclose(),
+                self._providers.aclose(),
                 return_exceptions=True,
             )
         finally:
