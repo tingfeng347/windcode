@@ -11,7 +11,12 @@ from windcode.tools import ToolRegistry
 
 
 def builder(state_root: Path) -> RunBuilder:
-    return RunBuilder(AppConfig(), state_root=state_root, model_chain=lambda _model: ())
+    return RunBuilder(
+        AppConfig(),
+        state_root=state_root,
+        base_tools=ToolRegistry(),
+        model_chain=lambda _model: (),
+    )
 
 
 def test_prepare_parent_rejects_invalid_workspace_synchronously(tmp_path: Path) -> None:
