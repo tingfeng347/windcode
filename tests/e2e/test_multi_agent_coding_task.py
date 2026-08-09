@@ -6,6 +6,7 @@ import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+from tests.run_builder_support import child_preparer
 from windcode.config import AppConfig, PermissionMode
 from windcode.domain.messages import Role, TextBlock
 from windcode.domain.models import (
@@ -28,7 +29,6 @@ from windcode.observability import TraceStore
 from windcode.providers import ModelTarget
 from windcode.runtime.event_bus import EventBus
 from windcode.runtime.subagents.coordinator import SubagentCoordinator
-from windcode.runtime.subagents.factory import ChildRunScope
 from windcode.runtime.subagents.verification import VerificationRunner
 from windcode.sessions import SessionStore
 from windcode.tools import create_builtin_registry
@@ -111,7 +111,7 @@ async def test_parallel_children_commit_then_integrate_in_order(tmp_path: Path) 
     parent_bus = EventBus(parent_session, TraceStore("parent-run", root=state / "traces"))
     transport = MultiAgentTransport()
     config = AppConfig()
-    factory = ChildRunScope(
+    prepare_child = child_preparer(
         config=config,
         state_root=state,
         parent_tools=create_builtin_registry(),
@@ -124,7 +124,7 @@ async def test_parallel_children_commit_then_integrate_in_order(tmp_path: Path) 
         permission_mode=PermissionMode.FULL_ACCESS,
         config=config.subagents,
         event_bus=parent_bus,
-        factory=factory,
+        prepare_child=prepare_child,
         worktrees=WorktreeManager(worktrees_root=tmp_path / "worktrees"),
         verification=VerificationRunner(),
     )

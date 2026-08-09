@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
 from windcode.config import AppConfig, PermissionMode
 from windcode.domain.subagents import SubagentRecord, SubagentTaskKind
-from windcode.domain.tools import ToolContext
 from windcode.extensions import ExtensionSnapshot
 from windcode.extensions.events import extension_event
 from windcode.extensions.mcp.adapter import McpToolAdapter
@@ -19,32 +17,11 @@ from windcode.extensions.skills.tools import (
     register_skill_tools,
 )
 from windcode.instructions import load_instructions
-from windcode.policy import ApprovalChoice, PolicyDecision, PolicyEngine, PolicyRequest
-from windcode.policy.rules import CommandRuleStore
-from windcode.providers import ModelTarget
-from windcode.runtime.control import BudgetExceeded, RunBudgets, RunControl
 from windcode.runtime.event_bus import EventBus
-from windcode.runtime.loop import (
-    AgentBlocked,
-    AgentLoop,
-    ContextWindow,
-    InboundMessageSource,
-    ModelSession,
-    RunIdentity,
-    RunJournal,
-    RunObservers,
-    ToolRuntime,
-)
 from windcode.runtime.prompts import build_system_prompt
-from windcode.runtime.resources import RunResources
-from windcode.runtime.scheduler import ScheduledCall, ScheduledResult, ToolScheduler
-from windcode.runtime.subagents.approvals import ApprovalRouter
-from windcode.runtime.subagents.budgets import AggregateBudget, AggregateBudgetExceeded
 from windcode.runtime.subagents.collaboration import BoundSubagentCollaboration
 from windcode.runtime.subagents.roles import ROLE_POLICIES, resolve_role_tools
-from windcode.runtime.subagents.runtime import ChildRuntime
 from windcode.sandbox import SandboxPreset, create_sandbox_backend
-from windcode.sessions import ArtifactStore, SessionStore
 from windcode.tools import ToolRegistry
 from windcode.tools.agent_collaboration import (
     register_collaboration_tools,
@@ -83,7 +60,7 @@ def _git_common_directory(workspace: Path) -> Path | None:
     return (git_directory / common).resolve()
 
 
-def _force_plan_on_permission_update(
+def force_plan_on_permission_update(
     task_kind: SubagentTaskKind,
     preset: SandboxPreset,
     *,
@@ -92,87 +69,6 @@ def _force_plan_on_permission_update(
     return task_kind is SubagentTaskKind.READ and (
         preset is SandboxPreset.DANGER_FULL_ACCESS or not sandbox_available
     )
-
-
-class AggregateRunControl(RunControl):
-    def __init__(self, budgets: RunBudgets, aggregate: AggregateBudget) -> None:
-        super().__init__(budgets)
-        self.aggregate = aggregate
-
-    def check(self) -> None:
-        super().check()
-        try:
-            self.aggregate.check_runtime_nowait()
-        except AggregateBudgetExceeded as exc:
-            raise BudgetExceeded(f"aggregate_{exc.budget}") from exc
-
-    def start_model_step(self) -> int:
-        try:
-            self.aggregate.consume_model_step_nowait()
-        except AggregateBudgetExceeded as exc:
-            raise BudgetExceeded(f"aggregate_{exc.budget}") from exc
-        return super().start_model_step()
-
-    def reserve_tool_calls(self, count: int) -> None:
-        try:
-            self.aggregate.consume_tool_calls_nowait(count)
-        except AggregateBudgetExceeded as exc:
-            raise BudgetExceeded(f"aggregate_{exc.budget}") from exc
-        super().reserve_tool_calls(count)
-
-
-class ChildToolScheduler(ToolScheduler):
-    async def execute(
-        self,
-        calls: tuple[ScheduledCall, ...],
-        context: ToolContext,
-    ) -> tuple[ScheduledResult, ...]:
-        if any(call.tool_name == "ask_user" for call in calls):
-            raise AgentBlocked("subagents cannot ask the user directly; clarification is required")
-        return await super().execute(calls, context)
-
-
-class ChildAgentLoop(AgentLoop):
-    def __init__(
-        self,
-        *,
-        record: SubagentRecord,
-        approval_router: ApprovalRouter,
-        identity: RunIdentity,
-        model: ModelSession,
-        tools: ToolRuntime,
-        journal: RunJournal,
-        context: ContextWindow | None = None,
-        observers: RunObservers | None = None,
-        inbound_message_source: InboundMessageSource | None = None,
-    ) -> None:
-        self.subagent_record = record
-        self.approval_router = approval_router
-        super().__init__(
-            identity=identity,
-            model=model,
-            tools=tools,
-            journal=journal,
-            context=context,
-            observers=observers,
-            inbound_message_source=inbound_message_source,
-        )
-
-    async def _approval_handler(
-        self,
-        request: PolicyRequest,
-        decision: PolicyDecision,
-    ) -> ApprovalChoice:
-        return await self.approval_router.request(
-            self.subagent_record.subagent_id,
-            self.subagent_record.spec.role,
-            request,
-            decision,
-        )
-
-    async def _request_user(self, payload: object) -> object:
-        del payload
-        raise AgentBlocked("subagents cannot ask the user directly; clarification is required")
 
 
 def build_child_prompt(record: SubagentRecord) -> str:
@@ -220,23 +116,21 @@ class _ChildToolPlan:
     sandbox_available: bool
 
 
-class ChildRunScope:
+class ChildRunSupport:
     def __init__(
         self,
         *,
         config: AppConfig,
         state_root: Path,
         parent_tools: ToolRegistry,
-        model_chain: Callable[[str | None], tuple[ModelTarget, ...]],
         extension_snapshot: ExtensionSnapshot | None = None,
     ) -> None:
         self.config = config
         self.state_root = state_root
         self.parent_tools = parent_tools
-        self.model_chain = model_chain
         self.extension_snapshot = extension_snapshot or ExtensionSnapshot(0, "empty")
 
-    def _prepare_tools(
+    def prepare_tools(
         self,
         record: SubagentRecord,
         workspace: Path,
@@ -304,7 +198,7 @@ class ChildRunScope:
             sandbox is not None and sandbox.status.available,
         )
 
-    def _register_skills(
+    def register_skills(
         self,
         plan: _ChildToolPlan,
         event_bus: EventBus,
@@ -342,7 +236,7 @@ class ChildRunScope:
         return skill_runtime
 
     @staticmethod
-    def _system_prompt(
+    def system_prompt(
         record: SubagentRecord,
         workspace: Path,
         plan: _ChildToolPlan,
@@ -376,86 +270,4 @@ class ChildRunScope:
             f"{ROLE_POLICIES[spec.role].system_instructions}\n"
             "You are a temporary child agent. You cannot create or manage subagents or directly "
             f"ask the user. {collaboration}"
-        )
-
-    def create(
-        self,
-        record: SubagentRecord,
-        *,
-        workspace: Path,
-        parent_permission: PermissionMode,
-        aggregate_budget: AggregateBudget,
-        approval_router: ApprovalRouter,
-        collaboration: BoundSubagentCollaboration | None = None,
-    ) -> ChildRuntime:
-        spec = record.spec
-        plan = self._prepare_tools(record, workspace, parent_permission, collaboration)
-
-        child_session_id = record.child_session_id or uuid4().hex
-        child_record = replace(record, child_session_id=child_session_id)
-        session = SessionStore.create(self.state_root / "sessions", child_session_id)
-        child_run_id = uuid4().hex
-        resources = RunResources.create(
-            session=session,
-            run_id=child_run_id,
-            state_root=self.state_root,
-            artifact_store=ArtifactStore(session.session_dir),
-            trace_config=self.config.trace,
-            context_config=self.config.context,
-        )
-        event_bus = resources.event_bus
-        skill_runtime = self._register_skills(
-            plan,
-            event_bus,
-            session_id=child_session_id,
-            run_id=child_run_id,
-        )
-        scheduler = ChildToolScheduler(
-            plan.registry,
-            PolicyEngine(
-                plan.effective_permission,
-                sandbox_enabled=plan.effective_preset is not SandboxPreset.DANGER_FULL_ACCESS,
-                sandbox_available=plan.sandbox_available,
-                rule_store=CommandRuleStore(self.state_root, workspace),
-            ),
-        )
-        budgets = RunBudgets(
-            max_model_steps=self.config.subagents.max_model_steps,
-            max_tool_calls=self.config.subagents.max_tool_calls,
-            max_runtime_seconds=self.config.subagents.max_runtime_seconds,
-        )
-        control = AggregateRunControl(budgets, aggregate_budget)
-        system_prompt = self._system_prompt(record, workspace, plan, skill_runtime)
-        loop = ChildAgentLoop(
-            record=child_record,
-            approval_router=approval_router,
-            identity=RunIdentity(child_session_id, child_run_id),
-            model=ModelSession(
-                self.model_chain(spec.model),
-                system_prompt,
-                stream_idle_timeout_seconds=(self.config.budgets.model_stream_idle_timeout_seconds),
-            ),
-            tools=ToolRuntime(scheduler, control),
-            journal=RunJournal(event_bus),
-            context=ContextWindow(
-                token_estimator=resources.token_estimator,
-                artifact_store=resources.artifact_store,
-                preserve_recent_turns=self.config.context.preserve_recent_turns,
-                max_tool_result_chars=self.config.context.max_tool_result_chars,
-            ),
-            observers=RunObservers(sourced_context=skill_runtime.drain_context),
-            inbound_message_source=(collaboration if spec.peer_collaboration else None),
-        )
-        return ChildRuntime(
-            child_record,
-            control,
-            event_bus,
-            loop,
-            workspace,
-            build_child_prompt(child_record),
-            force_plan_on_permission_update=_force_plan_on_permission_update(
-                spec.kind,
-                plan.configured_preset,
-                sandbox_available=scheduler.policy.sandbox_available,
-            ),
         )

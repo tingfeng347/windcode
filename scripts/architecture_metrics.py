@@ -13,7 +13,7 @@ KEY_FUNCTIONS = frozenset(
     {
         "windcode.sdk:Windcode.start_run",
         "windcode.runtime.loop:AgentLoop.run",
-        "windcode.runtime.subagents.factory:ChildRunScope.create",
+        "windcode.runtime.run_builder:RunBuilder.prepare_child",
         "windcode.tui.app:WindcodeApp._command",
     }
 )

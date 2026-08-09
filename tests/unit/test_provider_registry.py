@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 import windcode.providers.registry as registry_module
+from windcode.application import ConfigurationApplication, ProviderApplication
 from windcode.config import AppConfig, ProviderConfig, ProviderProtocol
 from windcode.domain.models import ModelEvent, ModelRequest
 from windcode.providers import ProviderConfigurationError, TransportRegistry
@@ -22,6 +23,21 @@ class FakeTransport:
 
     async def aclose(self) -> None:
         self.closed = True
+
+
+class CountingTransport(FakeTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.close_count = 0
+
+    async def aclose(self) -> None:
+        self.close_count += 1
+        await super().aclose()
+
+
+class FailingCloseTransport(FakeTransport):
+    async def aclose(self) -> None:
+        raise RuntimeError("close failed")
 
 
 class FakeCredentialStore:
@@ -55,6 +71,12 @@ def config() -> AppConfig:
         },
         primary_provider="primary",
         fallback_chain=("backup",),
+    )
+
+
+def provider_application(config: AppConfig | None = None) -> ProviderApplication:
+    return ProviderApplication(
+        ConfigurationApplication(config or AppConfig()), FakeCredentialStore(None)
     )
 
 
@@ -161,13 +183,37 @@ def test_can_keep_disconnected_provider_metadata() -> None:
     assert registry.aliases == ()
 
 
-def test_empty_model_chain_uses_provider_configuration_error(tmp_path: Path) -> None:
-    from windcode.sdk import Windcode
-
-    client = Windcode.open(state_root=tmp_path / "state")
+def test_empty_model_chain_uses_provider_configuration_error() -> None:
+    application = provider_application()
 
     with pytest.raises(ProviderConfigurationError, match="no runnable model provider"):
-        client._model_chain(None)  # pyright: ignore[reportPrivateUsage]
+        application.resolve(None)
+
+
+def test_provider_application_registers_and_resolves_without_opening() -> None:
+    application = provider_application()
+    transport = FakeTransport()
+
+    application.register("custom", "model", transport, primary=True)
+
+    assert application.can_resolve()
+    assert application.resolve(None)[0].transport is transport
+    assert application.startup_error is None
+
+
+@pytest.mark.asyncio
+async def test_sdk_transport_registered_before_enter_remains_available(tmp_path: Path) -> None:
+    from windcode.sdk import Windcode
+
+    transport = FakeTransport()
+    client = Windcode.open(state_root=tmp_path / "state")
+    client.register_transport("custom", "model", transport, primary=True)
+
+    async with client:
+        assert client.can_resolve_model()
+        assert client.transport_registry.get("custom").transport is transport
+
+    assert transport.closed
 
 
 @pytest.mark.asyncio
@@ -205,3 +251,115 @@ async def test_reconfigure_rejects_unrunnable_primary_before_persisting(tmp_path
     assert not config_file.exists()
     assert client.config == AppConfig()
     assert client.transport_registry.aliases == ()
+
+
+@pytest.mark.asyncio
+async def test_provider_application_reconfigure_swaps_then_closes_previous(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    old_transport = CountingTransport()
+    new_transport = CountingTransport()
+
+    def create_new_transport(provider: ProviderConfig, api_key: str) -> CountingTransport:
+        del provider, api_key
+        return new_transport
+
+    application = provider_application()
+    application.register("old", "old-model", old_transport, primary=True)
+    candidate = AppConfig(
+        providers={
+            "new": ProviderConfig(
+                protocol=ProviderProtocol.OPENAI_RESPONSES,
+                model="new-model",
+                api_key_env="NEW_KEY",
+            )
+        },
+        primary_provider="new",
+    )
+    monkeypatch.setattr(registry_module, "create_transport", create_new_transport)
+    monkeypatch.setenv("NEW_KEY", "secret")
+
+    await application.reconfigure(candidate, config_file=tmp_path / "config.toml")
+
+    assert application.configuration.current == candidate
+    assert application.resolve(None)[0].transport is new_transport
+    assert old_transport.close_count == 1
+    assert new_transport.close_count == 0
+
+
+@pytest.mark.asyncio
+async def test_provider_application_closes_candidate_when_persistence_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    current_transport = CountingTransport()
+    candidate_transport = CountingTransport()
+
+    def create_candidate_transport(provider: ProviderConfig, api_key: str) -> CountingTransport:
+        del provider, api_key
+        return candidate_transport
+
+    def fail_save(path: Path, previous: AppConfig, updated: AppConfig) -> None:
+        del path, previous, updated
+        raise OSError("write failed")
+
+    application = provider_application()
+    application.register("current", "model", current_transport, primary=True)
+    candidate = AppConfig(
+        providers={
+            "candidate": ProviderConfig(
+                protocol=ProviderProtocol.OPENAI_RESPONSES,
+                model="candidate-model",
+                api_key_env="CANDIDATE_KEY",
+            )
+        },
+        primary_provider="candidate",
+    )
+    monkeypatch.setattr(registry_module, "create_transport", create_candidate_transport)
+    monkeypatch.setattr(
+        "windcode.application.configuration.save_model_config",
+        fail_save,
+    )
+    monkeypatch.setenv("CANDIDATE_KEY", "secret")
+
+    with pytest.raises(OSError, match="write failed"):
+        await application.reconfigure(candidate, config_file=tmp_path / "config.toml")
+
+    assert application.configuration.current == AppConfig()
+    assert application.resolve(None)[0].transport is current_transport
+    assert current_transport.close_count == 0
+    assert candidate_transport.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_application_publishes_candidate_before_previous_close_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    candidate_transport = CountingTransport()
+
+    def create_candidate_transport(provider: ProviderConfig, api_key: str) -> CountingTransport:
+        del provider, api_key
+        return candidate_transport
+
+    application = provider_application()
+    application.register("old", "model", FailingCloseTransport(), primary=True)
+    candidate = AppConfig(
+        providers={
+            "candidate": ProviderConfig(
+                protocol=ProviderProtocol.OPENAI_RESPONSES,
+                model="candidate-model",
+                api_key_env="CANDIDATE_KEY",
+            )
+        },
+        primary_provider="candidate",
+    )
+    monkeypatch.setattr(registry_module, "create_transport", create_candidate_transport)
+    monkeypatch.setenv("CANDIDATE_KEY", "secret")
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        await application.reconfigure(candidate, config_file=tmp_path / "config.toml")
+
+    assert application.configuration.current == candidate
+    assert application.resolve(None)[0].transport is candidate_transport

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from uuid import uuid4
 
@@ -9,10 +11,11 @@ from windcode.config import AppConfig
 from windcode.domain.events import RunRequest
 from windcode.domain.messages import Message, heal_dangling_tool_calls, message_from_dict
 from windcode.domain.tools import ToolContext
-from windcode.extensions import CapabilityKind, ExtensionSnapshot
+from windcode.extensions import CapabilityKind
 from windcode.extensions.runtime import RunExtensions
 from windcode.observability import DynamicRedactor
-from windcode.policy import PolicyRequest
+from windcode.policy import PolicyEngine, PolicyRequest
+from windcode.policy.rules import CommandRuleStore
 from windcode.providers import ModelTarget
 from windcode.runtime import (
     AgentLoop,
@@ -38,7 +41,24 @@ from windcode.runtime.prompts import build_system_prompt
 from windcode.runtime.resources import RunResources
 from windcode.runtime.run_handle import RunHandle
 from windcode.runtime.run_memory import RunMemory
-from windcode.runtime.subagents import ChildRunScope, SubagentCoordinator, VerificationRunner
+from windcode.runtime.subagents import (
+    ChildRunPreparer,
+    ChildRunProfile,
+    ChildRuntime,
+    SubagentCoordinator,
+    VerificationRunner,
+)
+from windcode.runtime.subagents.child_execution import (
+    AggregateRunControl,
+    ChildAgentLoop,
+    ChildToolScheduler,
+)
+from windcode.runtime.subagents.child_support import (
+    ChildRunSupport,
+    build_child_prompt,
+    force_plan_on_permission_update,
+)
+from windcode.sandbox import SandboxPreset
 from windcode.sessions import ArtifactStore, SessionStore, ancestor_chain
 from windcode.tools import ToolRegistry, add_subagent_tools
 from windcode.worktrees import WorktreeManager
@@ -188,9 +208,8 @@ class RunBuilder:
         access: ParentAccess,
         extensions: RunExtensions,
     ) -> SubagentCoordinator:
-        child_scope = self.child_scope(
+        prepare_child = self.bind_child(
             access.child_tools,
-            self.extensions.snapshot,
             default_model=request.model,
         )
         return SubagentCoordinator(
@@ -200,7 +219,7 @@ class RunBuilder:
             permission_mode=access.permission_mode,
             config=self.config.subagents,
             event_bus=resources.event_bus,
-            factory=child_scope,
+            prepare_child=prepare_child,
             worktrees=WorktreeManager(
                 worktrees_root=self.state_root / "worktrees",
                 fallback_worktrees_root=self.user_storage_root / "worktrees",
@@ -353,17 +372,106 @@ class RunBuilder:
             context_config=self.config.context,
         )
 
-    def child_scope(
+    def bind_child(
         self,
         parent_tools: ToolRegistry,
-        extension_snapshot: ExtensionSnapshot,
         *,
         default_model: str | None,
-    ) -> ChildRunScope:
-        return ChildRunScope(
+    ) -> ChildRunPreparer:
+        support = ChildRunSupport(
             config=self.config,
             state_root=self.state_root,
             parent_tools=parent_tools,
-            model_chain=lambda model: self.model_chain(model or default_model),
-            extension_snapshot=extension_snapshot,
+            extension_snapshot=self.extensions.snapshot,
+        )
+        return partial(self.prepare_child, support=support, default_model=default_model)
+
+    def prepare_child(
+        self,
+        profile: ChildRunProfile,
+        *,
+        support: ChildRunSupport,
+        default_model: str | None,
+    ) -> ChildRuntime:
+        record = profile.record
+        spec = record.spec
+        plan = support.prepare_tools(
+            record,
+            profile.workspace,
+            profile.parent_permission,
+            profile.collaboration,
+        )
+        child_session_id = record.child_session_id or uuid4().hex
+        child_record = replace(record, child_session_id=child_session_id)
+        session = SessionStore.create(self.state_root / "sessions", child_session_id)
+        child_run_id = uuid4().hex
+        resources = RunResources.create(
+            session=session,
+            run_id=child_run_id,
+            state_root=self.state_root,
+            artifact_store=ArtifactStore(session.session_dir),
+            trace_config=self.config.trace,
+            context_config=self.config.context,
+        )
+        skill_runtime = support.register_skills(
+            plan,
+            resources.event_bus,
+            session_id=child_session_id,
+            run_id=child_run_id,
+        )
+        scheduler = ChildToolScheduler(
+            plan.registry,
+            PolicyEngine(
+                plan.effective_permission,
+                sandbox_enabled=plan.effective_preset is not SandboxPreset.DANGER_FULL_ACCESS,
+                sandbox_available=plan.sandbox_available,
+                rule_store=CommandRuleStore(self.state_root, profile.workspace),
+            ),
+        )
+        control = AggregateRunControl(
+            RunBudgets(
+                max_model_steps=self.config.subagents.max_model_steps,
+                max_tool_calls=self.config.subagents.max_tool_calls,
+                max_runtime_seconds=self.config.subagents.max_runtime_seconds,
+            ),
+            profile.aggregate_budget,
+        )
+        system_prompt = support.system_prompt(
+            record,
+            profile.workspace,
+            plan,
+            skill_runtime,
+        )
+        loop = ChildAgentLoop(
+            record=child_record,
+            approval_router=profile.approval_router,
+            identity=RunIdentity(child_session_id, child_run_id),
+            model=ModelSession(
+                self.model_chain(spec.model or default_model),
+                system_prompt,
+                stream_idle_timeout_seconds=self.config.budgets.model_stream_idle_timeout_seconds,
+            ),
+            tools=ToolRuntime(scheduler, control),
+            journal=RunJournal(resources.event_bus),
+            context=ContextWindow(
+                token_estimator=resources.token_estimator,
+                artifact_store=resources.artifact_store,
+                preserve_recent_turns=self.config.context.preserve_recent_turns,
+                max_tool_result_chars=self.config.context.max_tool_result_chars,
+            ),
+            observers=RunObservers(sourced_context=skill_runtime.drain_context),
+            inbound_message_source=(profile.collaboration if spec.peer_collaboration else None),
+        )
+        return ChildRuntime(
+            child_record,
+            control,
+            resources.event_bus,
+            loop,
+            profile.workspace,
+            build_child_prompt(child_record),
+            force_plan_on_permission_update=force_plan_on_permission_update(
+                spec.kind,
+                plan.configured_preset,
+                sandbox_available=scheduler.policy.sandbox_available,
+            ),
         )

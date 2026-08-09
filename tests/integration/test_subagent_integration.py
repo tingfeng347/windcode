@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.run_builder_support import child_preparer
 from windcode.config import AppConfig, PermissionMode
 from windcode.domain.messages import Role, TextBlock
 from windcode.domain.models import (
@@ -31,7 +32,6 @@ from windcode.runtime.subagents.coordinator import (
     SubagentCoordinator,
     SubagentCoordinatorError,
 )
-from windcode.runtime.subagents.factory import ChildRunScope
 from windcode.runtime.subagents.verification import VerificationRunner
 from windcode.sessions import SessionStore
 from windcode.tools import create_builtin_registry
@@ -136,7 +136,7 @@ def coordinator(
     transport = CommittingTransport()
     target = ModelTarget("committing", "model", transport)
     app_config = AppConfig()
-    factory = ChildRunScope(
+    prepare_child = child_preparer(
         config=app_config,
         state_root=state,
         parent_tools=create_builtin_registry(),
@@ -149,7 +149,7 @@ def coordinator(
         permission_mode=PermissionMode.FULL_ACCESS,
         config=app_config.subagents,
         event_bus=parent_bus,
-        factory=factory,
+        prepare_child=prepare_child,
         worktrees=worktrees or WorktreeManager(worktrees_root=tmp_path / "worktrees"),
         verification=VerificationRunner(),
     )

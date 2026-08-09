@@ -19,7 +19,7 @@
   },
   "key_function_complexity": {
     "windcode.runtime.loop:AgentLoop.run": 39,
-    "windcode.runtime.subagents.factory:ChildRunScope.create": 3,
+    "windcode.runtime.run_builder:RunBuilder.prepare_child": 4,
     "windcode.sdk:Windcode.start_run": 3,
     "windcode.tui.app:WindcodeApp._command": 88
   }
