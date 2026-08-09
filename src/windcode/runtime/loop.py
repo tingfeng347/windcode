@@ -15,8 +15,6 @@ from windcode.domain.events import (
     RunFailed,
     RunResult,
     RunStarted,
-    ToolFinished,
-    ToolStarted,
     UserInputRequested,
     UserResponse,
 )
@@ -28,7 +26,6 @@ from windcode.domain.messages import (
     message_to_dict,
 )
 from windcode.domain.models import Usage
-from windcode.domain.tools import ToolContext, ToolEffect
 from windcode.policy import (
     ApprovalChoice,
     PolicyDecision,
@@ -45,6 +42,7 @@ from windcode.runtime.model_turn import (
 )
 from windcode.runtime.report import ToolExecutionRecord, build_run_result
 from windcode.runtime.scheduler import ScheduledCall, ToolScheduler
+from windcode.runtime.tool_turn import ToolTurnRunner
 from windcode.sessions import SessionStatus
 
 
@@ -125,8 +123,15 @@ class AgentLoop:
             context,
             observers,
         )
+        self._tool_turn = ToolTurnRunner(
+            self.scheduler,
+            self.control,
+            self.event_bus,
+            self._common,
+            self.run_id,
+            self._request_user,
+        )
         self.scheduler.approval_handler = self._approval_handler
-        self.scheduler.before_execute = self._before_tool_execute
 
     @property
     def system_prompt(self) -> str:
@@ -198,39 +203,6 @@ class AgentLoop:
         if not isinstance(response, UserResponse):
             raise ValueError("user question received an approval response")
         return response.answers
-
-    async def _before_tool_execute(
-        self,
-        call: ScheduledCall,
-        request: PolicyRequest,
-    ) -> None:
-        await self.event_bus.publish(
-            ToolStarted(
-                **self._common(),
-                call_id=call.call_id,
-                tool_name=call.tool_name,
-                arguments=dict(call.arguments),
-            ),
-            durable=True,
-        )
-        side_effect = bool(
-            request.effects
-            & {
-                ToolEffect.WORKSPACE_WRITE,
-                ToolEffect.PROCESS,
-                ToolEffect.NETWORK,
-                ToolEffect.OUTSIDE_WORKSPACE,
-            }
-        )
-        self.event_bus.session_store.append(
-            "tool_started",
-            {
-                "call_id": call.call_id,
-                "tool_name": call.tool_name,
-                "side_effect": side_effect,
-            },
-            durable=side_effect,
-        )
 
     def _settle_pending_tool_calls(self, pending: tuple[ScheduledCall, ...]) -> None:
         """Persist cancelled results for tool calls left unanswered on exit.
@@ -361,48 +333,9 @@ class AgentLoop:
                     self.event_bus.session_store.set_status(SessionStatus.COMPLETED)
                     return result
 
-                self.control.reserve_tool_calls(len(scheduled))
-                context = ToolContext(
-                    workspace=workspace,
-                    run_id=self.run_id,
-                    cancelled=lambda: self.control.cancelled,
-                    request_user=self._request_user,
-                )
-                results = await self.scheduler.execute(scheduled, context)
-                tool_blocks: list[ToolResultBlock] = []
-                for call, scheduled_result in zip(scheduled, results, strict=True):
-                    result = scheduled_result.result
-                    self.event_bus.session_store.append(
-                        "tool_finished",
-                        {
-                            "call_id": call.call_id,
-                            "is_error": result.is_error,
-                        },
-                        durable=True,
-                    )
-                    await self.event_bus.publish(
-                        ToolFinished(**self._common(), call_id=call.call_id, result=result),
-                        durable=True,
-                    )
-                    tool_blocks.append(
-                        ToolResultBlock(
-                            call.call_id,
-                            call.tool_name,
-                            result.output,
-                            is_error=result.is_error,
-                            artifact_ref=result.artifact_ref,
-                        )
-                    )
-                    records.append(
-                        ToolExecutionRecord(call.tool_name, raw_arguments[call.call_id], result)
-                    )
-                tool_message = Message(Role.TOOL, tuple(tool_blocks))
-                messages = (*messages, tool_message)
-                self.event_bus.session_store.append(
-                    "conversation_message",
-                    message_to_dict(tool_message),
-                    durable=True,
-                )
+                tool_turn = await self._tool_turn.execute(scheduled, workspace, raw_arguments)
+                records.extend(tool_turn.records)
+                messages = (*messages, tool_turn.message)
                 pending_calls = ()
         except asyncio.CancelledError:
             self._settle_pending_tool_calls(pending_calls)
