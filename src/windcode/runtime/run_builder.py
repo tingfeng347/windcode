@@ -1,56 +1,47 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+import asyncio
+from collections.abc import Callable
 from pathlib import Path
-from typing import cast
 from uuid import uuid4
 
-from windcode.config import AppConfig, PermissionMode
+from windcode.config import AppConfig
 from windcode.domain.events import RunRequest
 from windcode.domain.messages import Message, heal_dangling_tool_calls, message_from_dict
-from windcode.domain.tools import ToolEffect
-from windcode.extensions import ExtensionSnapshot
-from windcode.extensions.mcp.catalog import McpToolDefinition
-from windcode.extensions.mcp.tools import (
-    SearchMcpToolsTool,
-    register_mcp_management_tools,
-    register_mcp_status_tool,
-)
+from windcode.domain.tools import ToolContext
+from windcode.extensions import CapabilityKind, ExtensionSnapshot
 from windcode.extensions.runtime import RunExtensions
-from windcode.extensions.skills.tools import register_skill_tools
-from windcode.instructions import InstructionBlock, load_instructions
-from windcode.policy import CommandRule, PolicyEngine
-from windcode.policy.rules import CommandRuleStore
+from windcode.observability import DynamicRedactor
+from windcode.policy import PolicyRequest
 from windcode.providers import ModelTarget
+from windcode.runtime import (
+    AgentLoop,
+    ContextWindow,
+    ModelSession,
+    RunBudgets,
+    RunControl,
+    RunIdentity,
+    RunJournal,
+    RunObservers,
+    ScheduledCall,
+    ToolRuntime,
+    ToolScheduler,
+)
+from windcode.runtime.parent_access import ParentAccess, ParentAccessBuilder
+from windcode.runtime.parent_run import (
+    ParentRun,
+    ParentRunPreparation,
+    RunCompletion,
+    RunExtensionState,
+)
+from windcode.runtime.prompts import build_system_prompt
 from windcode.runtime.resources import RunResources
-from windcode.runtime.subagents.factory import ChildRunScope
-from windcode.sandbox import SandboxBackend, SandboxPolicy, SandboxPreset, create_sandbox_backend
+from windcode.runtime.run_handle import RunHandle
+from windcode.runtime.run_memory import RunMemory
+from windcode.runtime.subagents import ChildRunScope, SubagentCoordinator, VerificationRunner
 from windcode.sessions import ArtifactStore, SessionStore, ancestor_chain
-from windcode.tools import ToolRegistry
-from windcode.tools.shell import ShellTool
-
-
-@dataclass(frozen=True, slots=True)
-class ParentRunPreparation:
-    workspace: Path
-    existing_session: bool
-    session: SessionStore
-    initial_messages: tuple[Message, ...]
-    run_id: str
-    artifact_store: ArtifactStore
-
-
-@dataclass(frozen=True, slots=True)
-class ParentAccess:
-    permission_mode: PermissionMode
-    sandbox_preset: SandboxPreset
-    sandbox: SandboxBackend | None
-    sandbox_policy: SandboxPolicy
-    registry: ToolRegistry
-    policy: PolicyEngine
-    child_tools: ToolRegistry
-    instructions: tuple[InstructionBlock, ...]
+from windcode.tools import ToolRegistry, add_subagent_tools
+from windcode.worktrees import WorktreeManager
 
 
 class RunBuilder:
@@ -59,13 +50,256 @@ class RunBuilder:
         config: AppConfig,
         *,
         state_root: Path,
+        user_storage_root: Path,
         base_tools: ToolRegistry,
         model_chain: Callable[[str | None], tuple[ModelTarget, ...]],
+        extensions: RunExtensionState,
     ) -> None:
         self.config = config
         self.state_root = state_root
+        self.user_storage_root = user_storage_root
         self.base_tools = base_tools
         self.model_chain = model_chain
+        self.extensions = extensions
+        self.access_builder = ParentAccessBuilder(
+            config,
+            state_root=state_root,
+            base_tools=base_tools,
+        )
+
+    def start(self, request: RunRequest) -> RunHandle:
+        preparation = self.prepare_parent(request)
+        resources = self.resources(preparation)
+        redactor = DynamicRedactor()
+        extensions = self._run_extensions(preparation, resources, redactor)
+        access = self.access_builder.prepare(
+            preparation.workspace,
+            preparation.session,
+            request,
+            extensions,
+            self.extensions.snapshot,
+            self.extensions.tool_catalogs,
+            self.extensions.selected_tools,
+        )
+        identity = RunIdentity(preparation.session.metadata.session_id, preparation.run_id)
+        model_chain = self.model_chain(request.model)
+        memory = RunMemory(
+            self.config.memory,
+            state_root=self.state_root,
+            workspace=preparation.workspace,
+            request=request,
+            identity=identity,
+            registry=access.registry,
+            event_bus=resources.event_bus,
+            model=model_chain[0],
+        )
+        control = self._control(request)
+        coordinator = self._coordinator(preparation, request, resources, access, extensions)
+        add_subagent_tools(access.registry, coordinator)
+        system_prompt = self._system_prompt(preparation, access, extensions, memory)
+        scheduler = self._scheduler(preparation, access, extensions, control)
+        completion = RunCompletion(extensions, memory)
+        loop = AgentLoop(
+            identity=identity,
+            model=ModelSession(
+                model_chain,
+                system_prompt((), extensions.mcp.server_ids),
+                stream_idle_timeout_seconds=(self.config.budgets.model_stream_idle_timeout_seconds),
+            ),
+            tools=ToolRuntime(scheduler, control),
+            journal=RunJournal(resources.event_bus, close_on_exit=False),
+            context=ContextWindow(
+                token_estimator=resources.token_estimator,
+                artifact_store=resources.artifact_store,
+                preserve_recent_turns=self.config.context.preserve_recent_turns,
+                max_tool_result_chars=self.config.context.max_tool_result_chars,
+            ),
+            observers=RunObservers(
+                sourced_context=extensions.drain_context,
+                compact=extensions.compact_lifecycle,
+                completion=completion,
+            ),
+        )
+        parent = ParentRun(
+            request,
+            preparation,
+            self.extensions,
+            extensions,
+            redactor,
+            memory,
+            access,
+            resources,
+            coordinator,
+            loop,
+            completion,
+            system_prompt,
+        )
+        task = asyncio.create_task(parent.run())
+        return RunHandle(
+            task,
+            resources.event_bus,
+            control,
+            after_sequence=preparation.session.metadata.next_sequence - 1,
+            coordinator=coordinator,
+            policy=access.policy,
+            loop=loop,
+        )
+
+    def _run_extensions(
+        self,
+        preparation: ParentRunPreparation,
+        resources: RunResources,
+        redactor: DynamicRedactor,
+    ) -> RunExtensions:
+        extensions = RunExtensions.create(
+            self.extensions.snapshot,
+            session_id=preparation.session.metadata.session_id,
+            run_id=preparation.run_id,
+            credential_store=self.extensions.credential_store,
+            max_content_bytes=self.config.extensions.max_content_bytes,
+            connect_timeout=self.config.extensions.connect_timeout_seconds,
+            call_timeout=self.config.extensions.call_timeout_seconds,
+            observe_secret=redactor.register,
+            artifact_store=preparation.artifact_store,
+            network_enabled=self.config.sandbox.network_enabled,
+            mcp_runtime=self.extensions.mcp_runtime,
+            mcp_tool_catalogs=self.extensions.tool_catalogs,
+        )
+        extensions.event_observer = lambda event: resources.event_bus.publish(event, durable=True)
+        return extensions
+
+    def _control(self, request: RunRequest) -> RunControl:
+        control = RunControl(
+            RunBudgets(
+                max_model_steps=self.config.budgets.max_model_steps,
+                max_tool_calls=self.config.budgets.max_tool_calls,
+                max_runtime_seconds=self.config.budgets.max_runtime_seconds,
+            )
+        )
+        if request.compact_before_run:
+            control.request_compaction()
+        return control
+
+    def _coordinator(
+        self,
+        preparation: ParentRunPreparation,
+        request: RunRequest,
+        resources: RunResources,
+        access: ParentAccess,
+        extensions: RunExtensions,
+    ) -> SubagentCoordinator:
+        child_scope = self.child_scope(
+            access.child_tools,
+            self.extensions.snapshot,
+            default_model=request.model,
+        )
+        return SubagentCoordinator(
+            parent_session_id=preparation.session.metadata.session_id,
+            parent_run_id=preparation.run_id,
+            workspace=preparation.workspace,
+            permission_mode=access.permission_mode,
+            config=self.config.subagents,
+            event_bus=resources.event_bus,
+            factory=child_scope,
+            worktrees=WorktreeManager(
+                worktrees_root=self.state_root / "worktrees",
+                fallback_worktrees_root=self.user_storage_root / "worktrees",
+            ),
+            verification=VerificationRunner(
+                sandbox=access.sandbox,
+                sandbox_policy=access.sandbox_policy,
+                timeout_seconds=self.config.budgets.shell_timeout_seconds,
+            ),
+            network_enabled=self.config.sandbox.network_enabled,
+            event_observer=extensions.subagent_lifecycle,
+        )
+
+    def _system_prompt(
+        self,
+        preparation: ParentRunPreparation,
+        access: ParentAccess,
+        extensions: RunExtensions,
+        memory: RunMemory,
+    ) -> Callable[[tuple[str, ...], tuple[str, ...]], str]:
+        unavailable_servers = tuple(
+            (
+                record.public_name,
+                "未信任当前工作区, 需要执行 extensions trust 后 reload",
+            )
+            for record in self.extensions.snapshot.capabilities
+            if record.kind is CapabilityKind.MCP_SERVER and record.enabled and not record.trusted
+        )
+
+        def make_prompt(direct_servers: tuple[str, ...], search_servers: tuple[str, ...]) -> str:
+            startup_unavailable = tuple(
+                (server_id, "启动连接失败, 本轮已降级且不会阻断普通消息")
+                for server_id in extensions.mcp.failed_server_ids
+            )
+            prompt = build_system_prompt(
+                workspace=preparation.workspace,
+                permission_mode=access.policy.mode,
+                instructions=access.instructions,
+                tools=access.registry,
+                delegation_mode=self.config.subagents.mode,
+                skills=extensions.skills.search(),
+                mcp_direct_servers=direct_servers,
+                mcp_search_servers=search_servers,
+                mcp_unavailable_servers=(*unavailable_servers, *startup_unavailable),
+                memory_enabled=memory.enabled,
+            )
+            if memory.context:
+                prompt += f"\n\n{memory.context}"
+            return prompt
+
+        return make_prompt
+
+    def _scheduler(
+        self,
+        preparation: ParentRunPreparation,
+        access: ParentAccess,
+        extensions: RunExtensions,
+        control: RunControl,
+    ) -> ToolScheduler:
+        def record_session_approval(request: PolicyRequest) -> None:
+            payload: dict[str, object] = {
+                "workspace": str(preparation.workspace),
+                "tool_name": request.tool_name,
+            }
+            if request.proposed_rule is not None:
+                payload["rule"] = request.proposed_rule.model_copy(
+                    update={"source": "session"}
+                ).model_dump(mode="json")
+            else:
+                payload["effects"] = sorted(effect.value for effect in request.effects)
+            preparation.session.append("session_approval", payload, durable=True)
+
+        scheduler = ToolScheduler(
+            access.registry,
+            access.policy,
+            before_policy=extensions.before_policy,
+            permission_observer=extensions.permission_requested,
+            after_execute=extensions.after_execute,
+            session_approval_recorder=record_session_approval,
+        )
+
+        async def run_hook_command(command: str, origin: str, hook_context: object) -> str:
+            del hook_context
+            scheduled = ScheduledCall(uuid4().hex, "shell", {"command": command}, origin=origin)
+            results = await scheduler.execute(
+                (scheduled,),
+                ToolContext(
+                    preparation.workspace,
+                    preparation.run_id,
+                    lambda: control.cancelled,
+                ),
+            )
+            result = results[0].result
+            if result.is_error:
+                raise RuntimeError(result.output)
+            return result.output
+
+        extensions.hooks.executor.command_runner = run_hook_command
+        return scheduler
 
     @staticmethod
     def _summary(prompt: str, *, limit: int = 60) -> str:
@@ -118,126 +352,6 @@ class RunBuilder:
             trace_config=self.config.trace,
             context_config=self.config.context,
         )
-
-    def prepare_parent_access(
-        self,
-        preparation: ParentRunPreparation,
-        request: RunRequest,
-        run_extensions: RunExtensions,
-        extension_snapshot: ExtensionSnapshot,
-        mcp_tool_catalogs: dict[str, tuple[McpToolDefinition, ...]],
-        mcp_selected_tools: set[str],
-    ) -> ParentAccess:
-        workspace = preparation.workspace
-        mode = (
-            PermissionMode(request.permission_mode)
-            if request.permission_mode is not None
-            else self.config.permission.mode
-        )
-        preset = SandboxPreset(self.config.sandbox.preset)
-        writable_roots = tuple(
-            (workspace / value).resolve()
-            if not Path(value).is_absolute()
-            else Path(value).resolve()
-            for value in self.config.sandbox.writable_roots
-        )
-        sandbox, sandbox_policy = create_sandbox_backend(
-            workspace,
-            preset=preset,
-            writable_roots=writable_roots,
-            network_enabled=self.config.sandbox.network_enabled,
-        )
-        registry = self._parent_registry(
-            run_extensions,
-            extension_snapshot,
-            mcp_tool_catalogs,
-            mcp_selected_tools,
-            sandbox,
-            sandbox_policy,
-        )
-        policy = PolicyEngine(
-            mode,
-            sandbox_enabled=preset is not SandboxPreset.DANGER_FULL_ACCESS,
-            sandbox_available=sandbox is not None and sandbox.status.available,
-            rule_store=CommandRuleStore(self.state_root, workspace),
-        )
-        self._restore_session_approvals(preparation.session, workspace, policy)
-        child_tools = registry.clone()
-        if "search_mcp_tools" in registry.names():
-            search_mcp_tools = registry.get("search_mcp_tools")
-            if isinstance(search_mcp_tools, SearchMcpToolsTool):
-                search_mcp_tools.add_registry(child_tools)
-        return ParentAccess(
-            mode,
-            preset,
-            sandbox,
-            sandbox_policy,
-            registry,
-            policy,
-            child_tools,
-            load_instructions(workspace, workspace_root=workspace),
-        )
-
-    def _parent_registry(
-        self,
-        run_extensions: RunExtensions,
-        extension_snapshot: ExtensionSnapshot,
-        mcp_tool_catalogs: dict[str, tuple[McpToolDefinition, ...]],
-        mcp_selected_tools: set[str],
-        sandbox: SandboxBackend | None,
-        sandbox_policy: SandboxPolicy,
-    ) -> ToolRegistry:
-        registry = self.base_tools.clone()
-        register_skill_tools(registry, run_extensions.skills, run_extensions.activate_skill)
-        register_mcp_status_tool(
-            registry,
-            extension_snapshot.capabilities,
-            mcp_tool_catalogs,
-            mcp_selected_tools,
-        )
-        if run_extensions.mcp.server_ids:
-            register_mcp_management_tools(
-                registry, run_extensions.mcp_capabilities, mcp_selected_tools
-            )
-        registry.register(
-            ShellTool(
-                sandbox=sandbox,
-                sandbox_policy=sandbox_policy,
-                default_timeout=self.config.budgets.shell_timeout_seconds,
-            ),
-            replace=True,
-        )
-        return registry
-
-    def _restore_session_approvals(
-        self,
-        session: SessionStore,
-        workspace: Path,
-        policy: PolicyEngine,
-    ) -> None:
-        for record in session.load_records():
-            if record.record_type != "session_approval":
-                continue
-            if record.payload.get("workspace") != str(workspace):
-                continue
-            tool_name = record.payload.get("tool_name")
-            raw_rule = record.payload.get("rule")
-            if isinstance(raw_rule, Mapping):
-                try:
-                    policy.restore_session_rule(CommandRule.model_validate(raw_rule))
-                except ValueError:
-                    pass
-                continue
-            raw_effects = record.payload.get("effects")
-            if not isinstance(tool_name, str) or not isinstance(raw_effects, list):
-                continue
-            try:
-                effects = frozenset(
-                    ToolEffect(str(effect)) for effect in cast(list[object], raw_effects)
-                )
-            except ValueError:
-                continue
-            policy.restore_session_approval(tool_name, effects)
 
     def child_scope(
         self,

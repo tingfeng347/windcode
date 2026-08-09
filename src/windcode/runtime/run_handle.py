@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 
 from windcode.config import PermissionMode
 from windcode.domain.events import AgentEventType, ApprovalResponse, RunResponse, RunResult
@@ -89,6 +89,9 @@ class RunHandle:
     @property
     def done(self) -> bool:
         return self._task.done()
+
+    def add_done_callback(self, callback: Callable[[RunHandle], None]) -> None:
+        self._task.add_done_callback(lambda _task: callback(self))
 
     def subagents(self) -> tuple[SubagentRecord, ...]:
         return self._coordinator.list()

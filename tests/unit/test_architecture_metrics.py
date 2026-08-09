@@ -5,6 +5,7 @@ from typing import cast
 
 from scripts.architecture_metrics import check_against_baseline, collect
 from windcode.runtime.loop import AgentLoop
+from windcode.runtime.run_builder import RunBuilder
 
 BASELINE_PATH = Path("docs/refactor/architecture-baseline.json")
 
@@ -28,6 +29,11 @@ def test_runtime_boundaries_have_no_cycles_or_reverse_dependencies() -> None:
 
 def test_agent_loop_constructor_stays_narrow() -> None:
     assert len(signature(AgentLoop).parameters) <= 10
+
+
+def test_run_builder_interface_stays_narrow() -> None:
+    assert len(signature(RunBuilder).parameters) <= 7
+    assert len(signature(RunBuilder.start).parameters) == 2
 
 
 def test_architecture_check_rejects_missing_tracked_function() -> None:
