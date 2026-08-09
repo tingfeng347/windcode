@@ -52,6 +52,16 @@ Issues = "https://github.com/tingfeng347/windcode/issues"
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build]
+exclude = [
+    "/.codegraph",
+    "/.venv*",
+    "/.windcode",
+    "/build",
+    "/dist",
+    "/spec",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/windcode"]
 
