@@ -109,6 +109,7 @@ class ExtensionApplication:
         self.service: ExtensionService | None = None
         self._current: _ExtensionGeneration | None = None
         self._retirements: set[asyncio.Task[None]] = set()
+        self._lifecycle_lock = asyncio.Lock()
         self._opened = False
 
     def _require_service(self) -> ExtensionService:
@@ -122,18 +123,19 @@ class ExtensionApplication:
         return self._current
 
     async def open(self) -> None:
-        config = self.configuration.current
-        extension_root = self.state_root / "extensions"
-        self.service = ExtensionService(
-            config.extensions,
-            self.workspace,
-            ExtensionStateStore(extension_root / "state.json"),
-            extension_root / "plugins",
-            user_skill_root=self.user_skill_root,
-        )
-        await self.service.reload()
-        self._current = self._create_generation()
-        self._opened = True
+        async with self._lifecycle_lock:
+            config = self.configuration.current
+            extension_root = self.state_root / "extensions"
+            self.service = ExtensionService(
+                config.extensions,
+                self.workspace,
+                ExtensionStateStore(extension_root / "state.json"),
+                extension_root / "plugins",
+                user_skill_root=self.user_skill_root,
+            )
+            await self.service.reload()
+            self._current = self._create_generation()
+            self._opened = True
 
     def _create_generation(self) -> _ExtensionGeneration:
         service = self.service
@@ -239,14 +241,15 @@ class ExtensionApplication:
         return self._require_service().audit_records
 
     async def reload(self) -> ManagementResult:
-        result = await self._require_service().reload()
-        previous = self._current
-        self._current = self._create_generation()
-        if previous is not None:
-            retirement = asyncio.create_task(self._retire(previous))
-            self._retirements.add(retirement)
-            retirement.add_done_callback(self._retirement_done)
-        return result
+        async with self._lifecycle_lock:
+            result = await self._require_service().reload()
+            previous = self._current
+            self._current = self._create_generation()
+            if previous is not None:
+                retirement = asyncio.create_task(self._retire(previous))
+                self._retirements.add(retirement)
+                retirement.add_done_callback(self._retirement_done)
+            return result
 
     def _retirement_done(self, task: asyncio.Task[None]) -> None:
         self._retirements.discard(task)
@@ -277,17 +280,18 @@ class ExtensionApplication:
         await generation.extensions.aclose()
 
     async def aclose(self) -> None:
-        current = self._current
-        if current is None:
-            self._opened = False
-            return
-        await self._stop_startup(current)
-        await current.idle.wait()
-        if self._retirements:
-            await asyncio.gather(*tuple(self._retirements), return_exceptions=True)
-            self._retirements.clear()
-        try:
-            await self._close_generation(current)
-        finally:
-            self._current = None
-            self._opened = False
+        async with self._lifecycle_lock:
+            current = self._current
+            if current is None:
+                self._opened = False
+                return
+            await self._stop_startup(current)
+            await current.idle.wait()
+            if self._retirements:
+                await asyncio.gather(*tuple(self._retirements), return_exceptions=True)
+                self._retirements.clear()
+            try:
+                await self._close_generation(current)
+            finally:
+                self._current = None
+                self._opened = False

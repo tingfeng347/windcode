@@ -130,3 +130,45 @@ async def test_open_failure_does_not_publish_half_initialized_service(
         await application.list_capabilities()
 
     await application.aclose()
+
+
+@pytest.mark.asyncio
+async def test_close_waits_for_reload_and_closes_both_generations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    closed: list[int] = []
+    original_close = RunExtensions.aclose
+
+    async def record_close(extensions: RunExtensions) -> None:
+        closed.append(extensions.snapshot.generation)
+        await original_close(extensions)
+
+    monkeypatch.setattr(RunExtensions, "aclose", record_close)
+    application = extension_application(tmp_path)
+    await application.open()
+    previous_generation = application.snapshot.generation
+    service = application.service
+    assert service is not None
+    original_reload = service.reload
+    reload_entered = asyncio.Event()
+    finish_reload = asyncio.Event()
+
+    async def delayed_reload() -> object:
+        reload_entered.set()
+        await finish_reload.wait()
+        return await original_reload()
+
+    monkeypatch.setattr(service, "reload", delayed_reload)
+    reload_task = asyncio.create_task(application.reload())
+    await reload_entered.wait()
+    close_task = asyncio.create_task(application.aclose())
+    await asyncio.sleep(0)
+    assert not close_task.done()
+
+    finish_reload.set()
+    await asyncio.gather(reload_task, close_task)
+    current_generation = service.snapshot.generation
+
+    assert set(closed) == {previous_generation, current_generation}
+    with pytest.raises(RuntimeError, match="extension runtime is not initialized"):
+        application.acquire_run()
