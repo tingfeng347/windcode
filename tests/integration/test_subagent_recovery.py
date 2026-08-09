@@ -1,6 +1,7 @@
 from dataclasses import replace
 from pathlib import Path
 
+from tests.run_builder_support import child_preparer
 from windcode.config import AppConfig, PermissionMode
 from windcode.domain.subagents import (
     SubagentRecord,
@@ -14,7 +15,6 @@ from windcode.observability import TraceStore
 from windcode.providers import ModelTarget
 from windcode.runtime.event_bus import EventBus
 from windcode.runtime.subagents.coordinator import SubagentCoordinator
-from windcode.runtime.subagents.factory import ChildRunScope
 from windcode.runtime.subagents.verification import VerificationRunner
 from windcode.sessions import SessionStore
 from windcode.tools import create_builtin_registry
@@ -47,7 +47,7 @@ async def test_recovery_is_idempotent_and_never_starts_a_model(tmp_path: Path) -
         raise AssertionError("recovery must not resolve or call a model")
 
     config = AppConfig()
-    factory = ChildRunScope(
+    prepare_child = child_preparer(
         config=config,
         state_root=state,
         parent_tools=create_builtin_registry(),
@@ -60,7 +60,7 @@ async def test_recovery_is_idempotent_and_never_starts_a_model(tmp_path: Path) -
         permission_mode=PermissionMode.DEFAULT,
         config=config.subagents,
         event_bus=bus,
-        factory=factory,
+        prepare_child=prepare_child,
         worktrees=WorktreeManager(worktrees_root=tmp_path / "worktrees"),
         verification=VerificationRunner(),
     )

@@ -1,3 +1,4 @@
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -8,10 +9,15 @@ from windcode.domain.events import RunRequest
 from windcode.domain.messages import Message, Role, TextBlock, message_to_dict
 from windcode.extensions import ExtensionSnapshot
 from windcode.runtime.run_builder import RunBuilder, RunExtensionState
+from windcode.runtime.subagents.child_support import ChildRunSupport
 from windcode.tools import ToolRegistry
 
 
-def builder(state_root: Path) -> RunBuilder:
+def builder(
+    state_root: Path,
+    *,
+    snapshot: ExtensionSnapshot | None = None,
+) -> RunBuilder:
     return RunBuilder(
         AppConfig(),
         state_root=state_root,
@@ -19,7 +25,7 @@ def builder(state_root: Path) -> RunBuilder:
         base_tools=ToolRegistry(),
         model_chain=lambda _model: (),
         extensions=RunExtensionState(
-            ExtensionSnapshot(0, "test"),
+            snapshot or ExtensionSnapshot(0, "test"),
             FileCredentialStore(state_root / "auth.json"),
             None,
             None,
@@ -58,11 +64,15 @@ def test_prepare_parent_reopens_session_and_restores_history(tmp_path: Path) -> 
 
 
 def test_child_scope_pins_snapshot_and_parent_tool_view(tmp_path: Path) -> None:
-    run_builder = builder(tmp_path / "state")
     tools = ToolRegistry()
     snapshot = ExtensionSnapshot(7, "snapshot")
+    run_builder = builder(tmp_path / "state", snapshot=snapshot)
 
-    scope = run_builder.child_scope(tools, snapshot, default_model="parent-model")
+    prepare_child = run_builder.bind_child(tools, default_model="parent-model")
 
-    assert scope.parent_tools is tools
-    assert scope.extension_snapshot is snapshot
+    assert isinstance(prepare_child, partial)
+    support = prepare_child.keywords["support"]
+    assert isinstance(support, ChildRunSupport)
+    assert support.parent_tools is tools
+    assert support.extension_snapshot is snapshot
+    assert prepare_child.keywords["default_model"] == "parent-model"

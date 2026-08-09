@@ -31,6 +31,7 @@ from windcode.runtime.loop import AgentLoop
 from windcode.runtime.subagents.collaboration import BoundSubagentCollaboration
 from windcode.runtime.subagents.coordinator import (
     ChildRunPreparer,
+    ChildRunProfile,
     SubagentCoordinator,
     SubagentCoordinatorError,
 )
@@ -84,8 +85,9 @@ class FakeFactory:
         self.active = 0
         self.peak = 0
 
-    def create(self, record: SubagentRecord, **kwargs: object) -> ChildRuntime:
-        workspace = cast(Path, kwargs["workspace"])
+    def __call__(self, profile: ChildRunProfile) -> ChildRuntime:
+        record = profile.record
+        workspace = profile.workspace
         name = record.spec.task_name
         self.gates.setdefault(name, asyncio.Event())
         session_id = f"child-{name}"
@@ -158,9 +160,10 @@ class CoordinatingFactory(FakeFactory):
         super().__init__(tmp_path)
         self.fail_participant = fail_participant
 
-    def create(self, record: SubagentRecord, **kwargs: object) -> ChildRuntime:
-        runtime = super().create(record, **kwargs)
-        collaboration = cast(BoundSubagentCollaboration, kwargs["collaboration"])
+    def __call__(self, profile: ChildRunProfile) -> ChildRuntime:
+        runtime = super().__call__(profile)
+        record = profile.record
+        collaboration = cast(BoundSubagentCollaboration, profile.collaboration)
         runtime.loop = cast(
             AgentLoop,
             CoordinatingLoop(
@@ -194,7 +197,7 @@ def coordinator(
         permission_mode=PermissionMode.DEFAULT,
         config=config or SubagentConfig(max_tasks=8, max_concurrent=2),
         event_bus=bus,
-        factory=cast(ChildRunPreparer, child_factory),
+        prepare_child=cast(ChildRunPreparer, child_factory),
         worktrees=WorktreeManager(worktrees_root=tmp_path / "worktrees"),
         verification=VerificationRunner(),
     )
@@ -289,8 +292,8 @@ async def test_spawn_returns_only_after_scheduled_children_leave_queued_state(
 
 async def test_factory_failure_is_reported_instead_of_remaining_queued(tmp_path: Path) -> None:
     class FailingFactory(FakeFactory):
-        def create(self, *args: object, **kwargs: object) -> ChildRuntime:
-            del args, kwargs
+        def __call__(self, profile: ChildRunProfile) -> ChildRuntime:
+            del profile
             raise ValueError("selected MCP tool is unavailable to child")
 
     factory = FailingFactory(tmp_path)

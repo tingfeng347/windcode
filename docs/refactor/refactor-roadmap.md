@@ -33,18 +33,32 @@
 
 ## 阶段 2：运行装配
 
-状态：进行中。
+状态：已完成。
 
 - 引入唯一、profile-driven `RunBuilder`。
 - 父运行和子运行委托同一深模块，保留权限、预算、worktree 和生命周期差异。
 - `Windcode.start_run` 只校验请求、调用 builder 并返回 handle。
 - 收缩 `AgentLoop` 构造 interface，但不改变持久化和取消时序。
-- 已完成共享 `RunResources`、`AgentLoop` 七参数 Interface、`RunHandle` 下移、
-  `ChildRunScope` capability seam，以及父会话/访问装配迁移。
-- `Windcode.start_run` C901 已从 31 降至 10，`ChildRunScope.create` 从 24 降至 3；
-  parent lifecycle、Memory 与 MCP 启动 wrapper 尚待移入 builder，阶段未关闭。
-- 当前 Python 3.11/3.12 全量测试均为 601 passed/3 skipped；Ruff、strict Pyright、build
-  和架构门禁通过。
+- 完成共享 `RunResources`、`AgentLoop` 七参数 Interface、`RunHandle` 下移，以及父会话、
+  访问和子运行装配迁移。
+- `RunBuilder.start()` 装配父运行，绑定后的 `RunBuilder.prepare_child(ChildRunProfile)` 装配
+  子运行；Coordinator 只消费 profile callable。旧 `ChildRunScope` 与 factory 装配路径已删除。
+- `ChildRunSupport` 只封装角色工具、sandbox、Skill 与 Prompt 准入；`child_execution` 只封装
+  聚合预算、禁止直接提问和审批路由，不构造 session、resources 或 loop。
+- `RunMemory` 集中工具观察、召回和完成提取；`ParentAccessBuilder` 集中权限、sandbox、
+  根工具与会话审批；`ParentRun` 集中 MCP 启动屏障、Hook 顺序、终态和清理。
+- `RunExtensionState` 在启动时固定 snapshot、共享 MCP runtime、catalog 和 selected tools；
+  reload 后旧运行继续使用旧 generation，新运行使用新 generation。
+- `Windcode.start_run` 只保留上下文 guard、`RunBuilder.start()` 和 handle 跟踪，C901 从 31
+  降至 3；子运行装配从旧 `ChildRunScope.create` 的 24 降至
+  `RunBuilder.prepare_child` 的 4。
+- 顶层/模块 SCC、两类反向依赖和高 fan-out 模块数均未增加；全局构造参数门禁从 12
+  收紧到 11。
+- 新增解析 import 与赋值别名的 AST 边界测试，要求父/子 `RunResources` 与 loop 只能由
+  `RunBuilder` 装配，并禁止 `ChildRunScope` 回流。Standards 与兼容/spec 审查指出的双装配
+  及门禁绕过缺口已据此修复；未发现可证实的外部兼容回归。
+- Python 3.11/3.12 全量测试均为 604 passed/3 skipped；Ruff、strict Pyright、sdist/wheel
+  build 和架构门禁通过。构建验证同时修复 `.venv-*` 被错误打入 sdist 的缺陷。
 
 ## 阶段 3：扩展、Provider 与工具
 
