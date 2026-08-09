@@ -331,6 +331,37 @@ async def test_close_waits_for_open_to_finish(
 
 
 @pytest.mark.asyncio
+async def test_cancelled_extension_close_can_be_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    close_entered = asyncio.Event()
+    finish_close = asyncio.Event()
+    original_close = RunExtensions.aclose
+    close_count = 0
+
+    async def delayed_close(extensions: RunExtensions) -> None:
+        nonlocal close_count
+        close_count += 1
+        close_entered.set()
+        await finish_close.wait()
+        await original_close(extensions)
+
+    monkeypatch.setattr(RunExtensions, "aclose", delayed_close)
+    client = Windcode.open(state_root=tmp_path / "state")
+    await client.__aenter__()
+
+    close_task = asyncio.create_task(client.aclose())
+    await close_entered.wait()
+    close_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await close_task
+
+    finish_close.set()
+    await client.aclose()
+    assert close_count == 2
+
+
+@pytest.mark.asyncio
 async def test_required_mcp_failure_blocks_run_before_model_request(tmp_path: Path) -> None:
     transport = HistoryTransport("must not be used")
     config = {
