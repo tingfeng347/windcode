@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Mapping
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
 
 from windcode.application import (
+    ApplicationLifecycle,
     ConfigurationApplication,
     ExtensionApplication,
     McpStartupStatus,
@@ -91,10 +91,12 @@ class Windcode:
             workspace=self.workspace,
             state_root=self.state_root,
         )
-        self._lifecycle_lock = asyncio.Lock()
-        self._entered = False
-        self._closing = False
-        self.memory_service: MemoryService | None = None
+        self._lifecycle = ApplicationLifecycle(
+            self._configuration,
+            self._providers,
+            self._extension_application,
+            self._runs,
+        )
 
     @property
     def config(self) -> AppConfig:
@@ -123,6 +125,14 @@ class Windcode:
         self._state_root = value
         if hasattr(self, "_runs"):
             self._runs.state_root = value
+
+    @property
+    def memory_service(self) -> MemoryService | None:
+        return self._lifecycle.memory_service
+
+    @memory_service.setter
+    def memory_service(self, value: MemoryService | None) -> None:
+        self._lifecycle.memory_service = value
 
     @property
     def transport_registry(self) -> TransportRegistry:
@@ -200,19 +210,8 @@ class Windcode:
         )
 
     async def __aenter__(self) -> Self:
-        if self._closing:
-            raise RuntimeError("Windcode client is already open")
-        async with self._lifecycle_lock:
-            if self._entered or self._closing:
-                raise RuntimeError("Windcode client is already open")
-            self._entered = True
-            self.state_root.mkdir(parents=True, exist_ok=True)
-            if self.config.memory.enabled:
-                self.memory_service = MemoryService(self.state_root, self.workspace)
-            await self._providers.open()
-            self._runs.open()
-            await self._extension_application.open()
-            return self
+        await self._lifecycle.open(state_root=self.state_root, workspace=self.workspace)
+        return self
 
     async def wait_for_required_mcp(self) -> None:
         """Wait for the single client-level MCP startup task."""
@@ -474,26 +473,7 @@ class Windcode:
         )
 
     async def aclose(self) -> None:
-        async with self._lifecycle_lock:
-            if not self._entered:
-                return
-            self._closing = True
-            self._runs.begin_close()
-            try:
-                await self._runs.cancel_all()
-                await asyncio.gather(
-                    self._extension_application.aclose(),
-                    self._providers.aclose(),
-                    return_exceptions=True,
-                )
-            except BaseException:
-                self._runs.abort_close()
-                self._closing = False
-                raise
-            else:
-                self._runs.finish_close()
-                self._entered = False
-                self._closing = False
+        await self._lifecycle.close()
 
 
 __all__ = ["RunHandle", "Windcode"]

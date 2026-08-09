@@ -158,6 +158,13 @@ def test_sdk_delegates_parent_run_ownership_to_run_application() -> None:
     assert {"_run_builder", "_accepting_runs"}.isdisjoint(sdk_methods)
 
 
+def test_sdk_delegates_cross_module_lifecycle_to_application() -> None:
+    sdk_tree = ast.parse(Path("src/windcode/sdk.py").read_text(encoding="utf-8"))
+    sdk_attributes = {node.attr for node in ast.walk(sdk_tree) if isinstance(node, ast.Attribute)}
+
+    assert {"_lifecycle_lock", "_entered", "_closing"}.isdisjoint(sdk_attributes)
+
+
 def test_assembly_boundary_resolves_import_and_assignment_aliases() -> None:
     tree = ast.parse(
         """
