@@ -109,9 +109,10 @@ class ExtensionApplication:
         self.service: ExtensionService | None = None
         self._current: _ExtensionGeneration | None = None
         self._retirements: set[asyncio.Task[None]] = set()
+        self._opened = False
 
     def _require_service(self) -> ExtensionService:
-        if self.service is None:
+        if not self._opened or self.service is None:
             raise RuntimeError("manage extensions inside the Windcode async context")
         return self.service
 
@@ -121,6 +122,7 @@ class ExtensionApplication:
         return self._current
 
     async def open(self) -> None:
+        self._opened = True
         config = self.configuration.current
         extension_root = self.state_root / "extensions"
         self.service = ExtensionService(
@@ -241,8 +243,13 @@ class ExtensionApplication:
         if previous is not None:
             retirement = asyncio.create_task(self._retire(previous))
             self._retirements.add(retirement)
-            retirement.add_done_callback(self._retirements.discard)
+            retirement.add_done_callback(self._retirement_done)
         return result
+
+    def _retirement_done(self, task: asyncio.Task[None]) -> None:
+        self._retirements.discard(task)
+        if not task.cancelled():
+            task.exception()
 
     def acquire_run(self) -> ExtensionRunLease:
         return ExtensionRunLease(self._require_generation())
@@ -255,11 +262,15 @@ class ExtensionApplication:
         await self._close_generation(generation)
 
     @staticmethod
-    async def _close_generation(generation: _ExtensionGeneration) -> None:
+    async def _stop_startup(generation: _ExtensionGeneration) -> None:
         startup = generation.startup_task
         if not startup.done():
             startup.cancel()
         await asyncio.gather(startup, return_exceptions=True)
+
+    @classmethod
+    async def _close_generation(cls, generation: _ExtensionGeneration) -> None:
+        await cls._stop_startup(generation)
         generation.extensions.mcp.observer = None
         await generation.extensions.aclose()
 
@@ -267,6 +278,7 @@ class ExtensionApplication:
         current = self._current
         if current is None:
             return
+        await self._stop_startup(current)
         await current.idle.wait()
         if self._retirements:
             await asyncio.gather(*tuple(self._retirements), return_exceptions=True)
@@ -275,4 +287,4 @@ class ExtensionApplication:
             await self._close_generation(current)
         finally:
             self._current = None
-            self.service = None
+            self._opened = False

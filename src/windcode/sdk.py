@@ -119,6 +119,10 @@ class Windcode:
     def extension_service(self) -> ExtensionService | None:
         return self._extension_application.service
 
+    @extension_service.setter
+    def extension_service(self, value: ExtensionService | None) -> None:
+        self._extension_application.service = value
+
     def _resolve_state_root(self, explicit_root: Path | None) -> Path:
         if explicit_root is not None:
             return explicit_root.expanduser().resolve()
