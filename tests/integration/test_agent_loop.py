@@ -7,12 +7,21 @@ from pydantic import BaseModel, ConfigDict
 
 from windcode.config import PermissionMode
 from windcode.domain.errors import ErrorCategory, WindcodeError
-from windcode.domain.events import RunCompleted, RunFailed, ToolFinished
+from windcode.domain.events import (
+    ReasoningStatus,
+    RunCompleted,
+    RunFailed,
+    TextDeltaEvent,
+    ToolFinished,
+    UsageUpdated,
+)
 from windcode.domain.messages import Message, Role, TextBlock, ToolResultBlock
 from windcode.domain.models import (
     ModelCompleted,
     ModelEvent,
     ModelRequest,
+    ModelUsage,
+    ReasoningDelta,
     StopReason,
     TextDelta,
     ToolCallDelta,
@@ -33,6 +42,7 @@ from windcode.runtime import (
     ToolRuntime,
     ToolScheduler,
 )
+from windcode.runtime.model_turn import ModelTurnRunner
 from windcode.sessions import SessionStore
 from windcode.tools import ToolRegistry
 
@@ -87,6 +97,23 @@ class FailingTransport:
         pass
 
 
+class FragmentedTurnTransport:
+    name = "fragmented"
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        del request
+        yield TextDelta("done")
+        yield ReasoningDelta("checking")
+        yield ToolCallDelta("valid", "echo", '{"text":')
+        yield ToolCallDelta("", "", '"ok"}')
+        yield ToolCallDelta("broken", "echo", "[")
+        yield ModelUsage(Usage(3, 4))
+        yield ModelCompleted(StopReason.TOOL_USE, Usage(5, 6))
+
+    async def aclose(self) -> None:
+        pass
+
+
 def build_loop(
     tmp_path: Path,
     transport: CodingTransport | FailingTransport,
@@ -107,6 +134,50 @@ def build_loop(
         journal=RunJournal(bus),
     )
     return loop, bus, session
+
+
+@pytest.mark.asyncio
+async def test_model_turn_runner_assembles_streamed_response_through_its_interface(
+    tmp_path: Path,
+) -> None:
+    session = SessionStore.create(tmp_path / "sessions", "session")
+    bus = EventBus(session, TraceStore("run", root=tmp_path / "traces"))
+    model = ModelSession(
+        (ModelTarget("fragmented", "model", FragmentedTurnTransport()),),
+        "system",
+    )
+    runner = ModelTurnRunner(
+        model,
+        RunControl(),
+        bus,
+        lambda: {
+            "event_id": "event",
+            "session_id": "session",
+            "run_id": "run",
+            "turn": 1,
+        },
+    )
+
+    outcome = await runner.execute(
+        ModelRequest(model="model", messages=(), system_prompt="system"),
+        Usage(10, 20),
+    )
+    await bus.close()
+    events = [event async for event in bus.subscribe()]
+
+    assert outcome.text == "done"
+    assert outcome.total_usage == Usage(15, 26)
+    assert outcome.scheduled_calls[0].arguments == {"text": "ok"}
+    assert outcome.scheduled_calls[1].arguments == {
+        "_invalid_json": "[",
+        "_error": "Expecting value: line 1 column 2 (char 1)",
+    }
+    assert [type(event) for event in events] == [
+        TextDeltaEvent,
+        ReasoningStatus,
+        UsageUpdated,
+    ]
+    assert cast(UsageUpdated, events[-1]).usage == Usage(13, 24)
 
 
 @pytest.mark.asyncio
