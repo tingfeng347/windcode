@@ -28,8 +28,8 @@ from windcode.domain.events import (
     UserResponse,
 )
 from windcode.domain.messages import TextBlock, message_from_dict
-from windcode.memory import MemoryStatus
 from windcode.sdk import RunHandle, Windcode
+from windcode.tui.command_handlers import ExtensionCommandHandler, MemoryCommandHandler
 from windcode.tui.commands import (
     COMMANDS,
     CommandDefinition,
@@ -100,6 +100,8 @@ class WindcodeApp(App[None]):
             workspace=workspace,
         )
         self.client.model_startup_error = provider_startup_error
+        self.memory_commands = MemoryCommandHandler(self.client)
+        self.extension_commands = ExtensionCommandHandler(self.client, workspace)
         self.provider_service = ProviderService(
             config,
             self.client.credential_store,
@@ -118,7 +120,6 @@ class WindcodeApp(App[None]):
         self.provider_manager: ProviderManager | None = None
         self.subagent_group: SubagentGroup | None = None
         self.compact_next_run = False
-        self.pending_extension_mutation: tuple[str, str | None] | None = None
         self.prompt_queue: deque[str] = deque()
         self._escape_interrupt_deadline = 0.0
         self._unmounting = False
@@ -886,152 +887,26 @@ class WindcodeApp(App[None]):
         elif command.name == "memory":
             if active:
                 raise ValueError("任务运行期间不能管理长期记忆")
-            if not command.arguments:
+            outcome = self.memory_commands.execute(
+                command.arguments,
+                enabled=self.config.memory.enabled,
+            )
+            if outcome.open_panel == "memory":
                 await self._open_memory_manager()
                 return
-            action = command.arguments[0] if command.arguments else "status"
-            arguments = command.arguments[1:]
-            if not self.config.memory.enabled:
-                if action == "status":
-                    await self._show_system_message("长期记忆: 已禁用")
-                    return
-                raise ValueError("长期记忆已在配置中禁用")
-            if action == "status":
-                records = self.client.list_memories()
-                candidates = sum(item.status is MemoryStatus.CANDIDATE for item in records)
-                active_count = sum(item.status is MemoryStatus.ACTIVE for item in records)
-                await self._show_system_message(
-                    f"长期记忆: 已启用; 生效 {active_count}; 候选 {candidates}; 总计 {len(records)}"
-                )
-            elif action == "candidates":
-                records = self.client.list_memories(status=MemoryStatus.CANDIDATE)
-                text = "\n".join(f"{item.memory_id[:10]}  {item.title}" for item in records)
-                await self._show_system_message(text or "没有待确认的记忆候选")
-            elif action == "search":
-                if not arguments:
-                    raise ValueError("用法: /memory search 关键词")
-                records = self.client.search_memories(" ".join(arguments))
-                text = "\n".join(
-                    f"{item.memory_id[:10]}  [{item.status.value}] {item.title}" for item in records
-                )
-                await self._show_system_message(text or "没有匹配的记忆")
-            elif action == "show":
-                if len(arguments) != 1:
-                    raise ValueError("用法: /memory show ID")
-                matches = tuple(
-                    item
-                    for item in self.client.list_memories()
-                    if item.memory_id.startswith(arguments[0])
-                )
-                if len(matches) != 1:
-                    raise ValueError("记忆 ID 不存在或前缀不唯一")
-                item = matches[0]
-                await self._show_system_message(
-                    f"{item.title}\n类型: {item.kind.value}; 范围: {item.scope.value}; "
-                    f"状态: {item.status.value}; 激活: {item.activation.value}; "
-                    f"优先级: {item.priority}\n摘要: {item.summary}\n\n{item.body}"
-                )
-            elif action == "activation":
-                if len(arguments) != 2:
-                    raise ValueError("用法: /memory activation ID <always|search|manual>")
-                matches = tuple(
-                    item
-                    for item in self.client.list_memories()
-                    if item.memory_id.startswith(arguments[0])
-                )
-                if len(matches) != 1:
-                    raise ValueError("记忆 ID 不存在或前缀不唯一")
-                if matches[0].status is not MemoryStatus.ACTIVE:
-                    raise ValueError("候选或非生效记忆必须先确认, 才能设置自动激活策略")
-                updated = self.client.set_memory_activation(matches[0].memory_id, arguments[1])
-                await self._show_system_message(
-                    f"记忆激活策略已更新: {updated.title} -> {updated.activation.value}"
-                )
-            elif action in {"confirm", "reject", "forget"}:
-                if len(arguments) != 1:
-                    raise ValueError(f"用法: /memory {action} ID")
-                matches = tuple(
-                    item
-                    for item in self.client.list_memories()
-                    if item.memory_id.startswith(arguments[0])
-                )
-                if len(matches) != 1:
-                    raise ValueError("记忆 ID 不存在或前缀不唯一")
-                item = matches[0]
-                if action == "confirm":
-                    updated = self.client.confirm_memory(item.memory_id)
-                    await self._show_system_message(f"记忆已确认: {updated.title}")
-                elif action == "reject":
-                    updated = self.client.reject_memory(item.memory_id)
-                    await self._show_system_message(f"记忆已拒绝: {updated.title}")
-                else:
-                    self.client.delete_memory(item.memory_id)
-                    await self._show_system_message(f"记忆已删除: {item.title}")
-            elif action == "rebuild":
-                count = self.client.rebuild_memory_index()
-                await self._show_system_message(f"记忆索引已重建: {count} 条")
-            else:
-                raise ValueError(
-                    "用法: /memory [status|candidates|search|show|activation|confirm|reject|"
-                    "forget|rebuild]"
-                )
+            if outcome.message is not None:
+                await self._show_system_message(outcome.message)
         elif command.name == "extensions":
-            action = command.arguments[0] if command.arguments else "list"
-            target = command.arguments[1] if len(command.arguments) > 1 else None
-            if len(command.arguments) > 2:
-                raise ValueError("用法: /extensions [操作] [目标]")
-            mutations = {"install", "enable", "disable", "reload", "trust"}
-            if active and action in mutations:
-                raise ValueError("任务运行期间不能修改扩展状态")
-            mutation = (action, target)
-            if action == "list":
-                if active:
-                    raise ValueError("任务运行期间不能管理扩展")
+            outcome = await self.extension_commands.execute(command.arguments, active=active)
+            if outcome.open_panel == "extensions":
                 await self._open_extension_manager()
                 return
-            if action in mutations and self.pending_extension_mutation != mutation:
-                self.pending_extension_mutation = mutation
-                target_label = "" if target is None else f" {target}"
+            if outcome.message is not None:
+                await self._show_system_message(outcome.message)
+            if outcome.extension_records is not None:
                 await self._show_system_message(
-                    f"确认扩展操作: {action}{target_label}; 再次输入相同命令执行"
+                    ExtensionList.render_text(outcome.extension_records)
                 )
-                return
-            if action in mutations:
-                self.pending_extension_mutation = None
-            if action == "inspect":
-                if target is None:
-                    raise ValueError("用法: /extensions inspect 目标")
-                records = await self.client.inspect_extension(target)
-            elif action == "install":
-                if target is None:
-                    raise ValueError("用法: /extensions install 路径")
-                result = await self.client.install_extension(
-                    Path(target).expanduser()  # noqa: ASYNC240 - local command parsing
-                )
-                await self._show_system_message(
-                    f"已安装 {result.manifest.plugin_id}, 默认禁用; "
-                    "运行 /extensions reload 后刷新目录"
-                )
-                records = await self.client.list_extensions()
-            elif action in {"enable", "disable"}:
-                if target is None:
-                    raise ValueError(f"用法: /extensions {action} 目标")
-                await self.client.set_extension_enabled(target, action == "enable")
-                await self._show_system_message("扩展状态已更新; 显式 reload 后影响新运行")
-                records = await self.client.list_extensions()
-            elif action == "reload":
-                await self.client.reload_extensions()
-                records = await self.client.list_extensions()
-            elif action == "trust":
-                trust_path = (
-                    self.workspace if target is None else Path(target).expanduser()  # noqa: ASYNC240 - local command parsing
-                )
-                await self.client.trust_extension_workspace(trust_path)
-                await self._show_system_message("工作区信任已记录; 显式 reload 后生效")
-                records = await self.client.list_extensions()
-            else:
-                raise ValueError(f"未知扩展操作: {action}")
-            await self._show_system_message(ExtensionList.render_text(records))
         self._update_status("running" if self.handle and not self.handle.done else "idle")
 
     async def action_cancel_or_quit(self) -> None:
