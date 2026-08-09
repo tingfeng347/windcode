@@ -29,6 +29,7 @@ from windcode.extensions.hooks import HookEvent
 from windcode.extensions.mcp import McpRuntime
 from windcode.extensions.mcp.tools import McpCapabilityService
 from windcode.extensions.runtime import RunExtensions
+from windcode.providers import ProviderConfigurationError
 from windcode.sdk import RunHandle
 from windcode.sessions import SessionStatus, SessionStore
 from windcode.types import (
@@ -161,18 +162,31 @@ async def test_custom_tool_and_transport_use_public_runtime_path(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_run_waits_for_required_mcp_before_model_request(tmp_path: Path) -> None:
+async def test_synchronous_run_assembly_failure_releases_extension_generation(
+    tmp_path: Path,
+) -> None:
+    async with Windcode.open(state_root=tmp_path / "state") as client:
+        with pytest.raises(ProviderConfigurationError, match="no runnable model provider"):
+            client.start_run(RunRequest("cannot start", tmp_path))
+
+        await client.reload_extensions()
+
+
+@pytest.mark.asyncio
+async def test_run_waits_for_required_mcp_before_model_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     transport = HistoryTransport("immediate")
     startup_gate = asyncio.Event()
 
-    async def delayed_startup() -> None:
+    async def delayed_startup(runtime: McpRuntime, *, concurrency: int = 4) -> tuple[str, ...]:
+        del concurrency
         await startup_gate.wait()
+        return runtime.required_server_ids
+
+    monkeypatch.setattr(McpRuntime, "activate_required", delayed_startup)
 
     async with Windcode.open(state_root=tmp_path / "state") as client:
-        await client.wait_for_required_mcp()
-        client._mcp_start_task = asyncio.create_task(  # pyright: ignore[reportPrivateUsage]
-            delayed_startup()
-        )
         client.register_transport("history", "model", transport, primary=True)
 
         handle = client.start_run(RunRequest("reply after startup", tmp_path))
@@ -188,17 +202,20 @@ async def test_run_waits_for_required_mcp_before_model_request(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_cancelling_run_does_not_cancel_shared_required_mcp_startup(tmp_path: Path) -> None:
+async def test_cancelling_run_does_not_cancel_shared_required_mcp_startup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     transport = HistoryTransport("immediate", "subsequent")
     startup_gate = asyncio.Event()
 
-    async def delayed_startup() -> None:
+    async def delayed_startup(runtime: McpRuntime, *, concurrency: int = 4) -> tuple[str, ...]:
+        del concurrency
         await startup_gate.wait()
+        return runtime.required_server_ids
+
+    monkeypatch.setattr(McpRuntime, "activate_required", delayed_startup)
 
     async with Windcode.open(state_root=tmp_path / "state") as client:
-        await client.wait_for_required_mcp()
-        startup_task = asyncio.create_task(delayed_startup())
-        client._mcp_start_task = startup_task  # pyright: ignore[reportPrivateUsage]
         client.register_transport("history", "model", transport, primary=True)
 
         cancelled = client.start_run(RunRequest("cancel while starting", tmp_path))
@@ -207,7 +224,7 @@ async def test_cancelling_run_does_not_cancel_shared_required_mcp_startup(tmp_pa
 
         with pytest.raises(asyncio.CancelledError):
             await cancelled.cancel()
-        assert not startup_task.cancelled()
+        assert client.required_mcp_loading
 
         startup_gate.set()
         assert (await asyncio.wait_for(surviving.result(), timeout=1)).status == "completed"
