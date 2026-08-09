@@ -88,6 +88,7 @@ class Windcode:
         )
         self.tool_registry: ToolRegistry | None = None
         self._handles: set[RunHandle] = set()
+        self._lifecycle_lock = asyncio.Lock()
         self._entered = False
         self._closing = False
         self.memory_service: MemoryService | None = None
@@ -169,18 +170,21 @@ class Windcode:
         )
 
     async def __aenter__(self) -> Self:
-        if self._entered or self._closing:
+        if self._closing:
             raise RuntimeError("Windcode client is already open")
-        self._entered = True
-        self.state_root.mkdir(parents=True, exist_ok=True)
-        if self.config.memory.enabled:
-            self.memory_service = MemoryService(self.state_root, self.workspace)
-        await self._providers.open()
-        self.tool_registry = create_builtin_registry(
-            shell_timeout=self.config.budgets.shell_timeout_seconds,
-        )
-        await self._extension_application.open()
-        return self
+        async with self._lifecycle_lock:
+            if self._entered or self._closing:
+                raise RuntimeError("Windcode client is already open")
+            self._entered = True
+            self.state_root.mkdir(parents=True, exist_ok=True)
+            if self.config.memory.enabled:
+                self.memory_service = MemoryService(self.state_root, self.workspace)
+            await self._providers.open()
+            self.tool_registry = create_builtin_registry(
+                shell_timeout=self.config.budgets.shell_timeout_seconds,
+            )
+            await self._extension_application.open()
+            return self
 
     async def wait_for_required_mcp(self) -> None:
         """Wait for the single client-level MCP startup task."""
@@ -466,23 +470,24 @@ class Windcode:
         )
 
     async def aclose(self) -> None:
-        if not self._entered or self._closing:
-            return
-        self._closing = True
-        try:
-            handles = tuple(self._handles)
-            await asyncio.gather(*(handle.cancel() for handle in handles))
-            await asyncio.gather(
-                self._extension_application.aclose(),
-                self._providers.aclose(),
-                return_exceptions=True,
-            )
-        except BaseException:
-            self._closing = False
-            raise
-        else:
-            self._entered = False
-            self._closing = False
+        async with self._lifecycle_lock:
+            if not self._entered:
+                return
+            self._closing = True
+            try:
+                handles = tuple(self._handles)
+                await asyncio.gather(*(handle.cancel() for handle in handles))
+                await asyncio.gather(
+                    self._extension_application.aclose(),
+                    self._providers.aclose(),
+                    return_exceptions=True,
+                )
+            except BaseException:
+                self._closing = False
+                raise
+            else:
+                self._entered = False
+                self._closing = False
 
 
 __all__ = ["RunHandle", "Windcode"]
