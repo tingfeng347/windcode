@@ -124,7 +124,7 @@ class ExtensionApplication:
 
     async def open(self) -> None:
         async with self._lifecycle_lock:
-            if self._opened:
+            if self._current is not None:
                 raise RuntimeError("extension runtime is already initialized")
             config = self.configuration.current
             extension_root = self.state_root / "extensions"
