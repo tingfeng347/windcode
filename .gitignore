@@ -8,7 +8,7 @@ wheels/
 .ruff_cache/
 .pytest_cache/
 # Virtual environments
-.venv
+.venv*/
 
 .windcode/config.toml
 .windcode/state/
