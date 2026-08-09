@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 from uuid import uuid4
@@ -73,6 +74,47 @@ class InboundMessageSource(Protocol):
     async def drain_or_close_inbound(self) -> tuple[Message, ...]: ...
 
 
+@dataclass(frozen=True, slots=True)
+class RunIdentity:
+    session_id: str
+    run_id: str
+
+
+@dataclass(slots=True)
+class ModelSession:
+    model_chain: tuple[ModelTarget, ...]
+    system_prompt: str
+    max_output_tokens: int | None = None
+    stream_idle_timeout_seconds: float = 60.0
+
+
+@dataclass(frozen=True, slots=True)
+class ToolRuntime:
+    scheduler: ToolScheduler
+    control: RunControl
+
+
+@dataclass(frozen=True, slots=True)
+class RunJournal:
+    event_bus: EventBus
+    close_on_exit: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class ContextWindow:
+    token_estimator: TokenEstimator | None = None
+    artifact_store: ArtifactStore | None = None
+    preserve_recent_turns: int = 8
+    max_tool_result_chars: int = 20_000
+
+
+@dataclass(frozen=True, slots=True)
+class RunObservers:
+    sourced_context: Callable[[], tuple[SourcedContextMessage, ...]] | None = None
+    compact: Callable[[str], Awaitable[None]] | None = None
+    completion: Callable[[RunResult], Awaitable[None]] | None = None
+
+
 def _add_usage(left: Usage, right: Usage) -> Usage:
     return Usage(
         input_tokens=left.input_tokens + right.input_tokens,
@@ -86,48 +128,52 @@ class AgentLoop:
     def __init__(
         self,
         *,
-        session_id: str,
-        run_id: str,
-        model_chain: tuple[ModelTarget, ...],
-        scheduler: ToolScheduler,
-        control: RunControl,
-        event_bus: EventBus,
-        system_prompt: str,
-        max_output_tokens: int | None = None,
-        model_stream_idle_timeout_seconds: float = 60.0,
-        token_estimator: TokenEstimator | None = None,
-        artifact_store: ArtifactStore | None = None,
-        preserve_recent_turns: int = 8,
-        max_tool_result_chars: int = 20_000,
-        close_event_bus: bool = True,
-        sourced_context_provider: Callable[[], tuple[SourcedContextMessage, ...]] | None = None,
-        compact_observer: Callable[[str], Awaitable[None]] | None = None,
-        completion_observer: Callable[[RunResult], Awaitable[None]] | None = None,
+        identity: RunIdentity,
+        model: ModelSession,
+        tools: ToolRuntime,
+        journal: RunJournal,
+        context: ContextWindow | None = None,
+        observers: RunObservers | None = None,
         inbound_message_source: InboundMessageSource | None = None,
     ) -> None:
-        if not model_chain:
+        if not model.model_chain:
             raise ValueError("model_chain cannot be empty")
-        self.session_id = session_id
-        self.run_id = run_id
-        self.model_chain = model_chain
-        self.scheduler = scheduler
-        self.control = control
-        self.event_bus = event_bus
-        self.system_prompt = system_prompt
-        self.max_output_tokens = max_output_tokens
-        self.model_stream_idle_timeout_seconds = model_stream_idle_timeout_seconds
-        self.token_estimator = token_estimator
-        self.artifact_store = artifact_store
-        self.preserve_recent_turns = preserve_recent_turns
-        self.max_tool_result_chars = max_tool_result_chars
-        self.close_event_bus = close_event_bus
-        self.sourced_context_provider = sourced_context_provider
-        self.compact_observer = compact_observer
-        self.completion_observer = completion_observer
+        self.identity = identity
+        self.model = model
+        self.tools = tools
+        self.journal = journal
+        context = context or ContextWindow()
+        observers = observers or RunObservers()
+        self.context = context
+        self.observers = observers
+        self.session_id = identity.session_id
+        self.run_id = identity.run_id
+        self.model_chain = model.model_chain
+        self.scheduler = tools.scheduler
+        self.control = tools.control
+        self.event_bus = journal.event_bus
+        self.max_output_tokens = model.max_output_tokens
+        self.model_stream_idle_timeout_seconds = model.stream_idle_timeout_seconds
+        self.token_estimator = context.token_estimator
+        self.artifact_store = context.artifact_store
+        self.preserve_recent_turns = context.preserve_recent_turns
+        self.max_tool_result_chars = context.max_tool_result_chars
+        self.close_event_bus = journal.close_on_exit
+        self.sourced_context_provider = observers.sourced_context
+        self.compact_observer = observers.compact
+        self.completion_observer = observers.completion
         self.inbound_message_source = inbound_message_source
         self._turn = 0
         self.scheduler.approval_handler = self._approval_handler
         self.scheduler.before_execute = self._before_tool_execute
+
+    @property
+    def system_prompt(self) -> str:
+        return self.model.system_prompt
+
+    @system_prompt.setter
+    def system_prompt(self, value: str) -> None:
+        self.model.system_prompt = value
 
     def _common(self, turn: int | None = None) -> dict[str, Any]:
         return {

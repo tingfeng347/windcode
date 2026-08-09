@@ -22,7 +22,16 @@ from windcode.domain.models import (
 from windcode.observability import TraceStore
 from windcode.policy import PolicyEngine
 from windcode.providers import ModelTarget
-from windcode.runtime import AgentLoop, EventBus, RunControl, ToolScheduler
+from windcode.runtime import (
+    AgentLoop,
+    EventBus,
+    ModelSession,
+    RunControl,
+    RunIdentity,
+    RunJournal,
+    ToolRuntime,
+    ToolScheduler,
+)
 from windcode.sessions import SessionStore
 from windcode.tools import ToolRegistry
 from windcode.tools.write_file import WriteFileTool
@@ -56,13 +65,10 @@ def build_loop(tmp_path: Path) -> tuple[AgentLoop, EventBus, RunControl]:
     control = RunControl()
     scheduler = ToolScheduler(registry, PolicyEngine(PermissionMode.DEFAULT))
     loop = AgentLoop(
-        session_id="session",
-        run_id="run",
-        model_chain=(ModelTarget("scripted", "model", WriteTransport()),),
-        scheduler=scheduler,
-        control=control,
-        event_bus=bus,
-        system_prompt="system",
+        identity=RunIdentity("session", "run"),
+        model=ModelSession((ModelTarget("scripted", "model", WriteTransport()),), "system"),
+        tools=ToolRuntime(scheduler, control),
+        journal=RunJournal(bus),
     )
     return loop, bus, control
 
