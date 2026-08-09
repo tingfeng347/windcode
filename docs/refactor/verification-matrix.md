@@ -4,7 +4,7 @@
 
 | 组 | 自动化证据 | 当前基线 | 完成条件 |
 | --- | --- | --- | --- |
-| 版本/入口 | wheel 内容、import/export、入口 smoke | 版本四源一致；本地 build 通过 | Python 3.11/3.12 均通过 |
+| 版本/入口 | wheel 内容、import/export、入口 smoke | 版本四源一致；本地 sdist/wheel build 通过 | Python 3.12 通过 |
 | CLI | argparse、help、退出码 golden | 部分覆盖 | 主命令和 extensions 全矩阵通过 |
 | TUI | command/binding 快照、Textual pilot | 部分覆盖 | 交互、队列、确认、取消通过 |
 | SDK | `inspect.signature`、stable exports、行为契约 | 部分覆盖 | 公开 interface 无意外变化 |
@@ -12,16 +12,14 @@
 | 持久化 | 旧版 fixture 读取/追加/重开 | Session/Auth/Memory/Extension golden 通过 | 所有格式兼容且不触碰真实状态 |
 | 扩展协议 | Plugin/Skill/Hook/MCP valid/invalid fixture | 项目 MCP 信任、required 启动阻断、reload generation 隔离定向测试通过 | fake stdio/HTTP MCP 全通过 |
 | 错误/事件 | 分类真值表、全字段 round trip | 30 类类型往返及 Approval 全字段通过 | 为其他非默认字段补齐逐类往返 |
-| 质量 | Ruff、Pyright、pytest、build | Python 3.11/3.12: 604 passed/3 skipped；sdist/wheel 内容检查通过；其余门禁通过 | 全绿且测试纳入 Git/CI |
-| 架构 | AST 依赖、参数、复杂度脚本 | 顶层/模块 SCC 与两类反向依赖均为 0；构造参数最大 11；`AgentLoop` 7；`start_run` C901 3；`prepare_child` C901 4 | 达到硬阈值 |
+| 质量 | Ruff、Pyright、pytest、build | Python 3.12: 632 passed/3 skipped；sdist/wheel、Ruff、strict Pyright 通过 | 全绿且测试纳入 Git/CI |
+| 架构 | AST 依赖、参数、复杂度脚本 | 顶层/模块 SCC 与两类反向依赖均为 0；构造参数最大 11；`AgentLoop` 7；`start_run` C901 1；`prepare_child` C901 4 | 达到硬阈值 |
 
 ## 当前增量门禁
 
 - 顶层和模块依赖强连通分量均为 0。
-- 不新增扇出大于 20 的模块；当前基线固定为 `sdk` 与 `RunBuilder` 两个 composition
-  root。
-- Phase 2 的 `start_run` 运行装配只依赖 `RunBuilder`/`RunExtensionState`/`RunHandle`
-  Interface。
+- 只保留一个扇出大于 20 的 composition root。
+- `start_run` 通过 `RunApplication` 使用唯一的 `RunBuilder` 装配点。
 - `AgentLoop` 构造参数不超过 10；其他构造函数不超过 12。
 - 编排函数 `C901 <= 15`；公开 facade 方法 `<= 10`。
 - parent/child 的 `RunResources` 与 loop 只能由 `RunBuilder` 装配；边界测试禁止旧
@@ -31,9 +29,9 @@
 ## 重构完成硬阈值
 
 - 只允许一个显式 composition root 扇出大于 20。
-- `sdk.py` 扇出不超过 8 个模块、4 个顶层区域。
-- Phase 3 完成 application lifecycle 拆分后，将上述两项写入自动化 ceiling；在此之前
-  不把当前两个 root 的增量基线误写为最终目标。
+- `sdk.py` 当前扇出为 5 个模块、4 个顶层区域；模块导入由 AST 门禁保护，职责区域由
+  facade 结构审查保护。
+- SDK 禁止直接导入 provider、extension 或 runtime 具体实现，运行和生命周期所有权不得回流。
 
 ## 验收标准映射
 
