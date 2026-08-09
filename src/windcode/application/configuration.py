@@ -11,6 +11,12 @@ class ConfigurationApplication:
     def __init__(self, config: AppConfig) -> None:
         self.current = config
 
+    def user_storage_root(self, workspace: Path) -> Path:
+        root = Path(self.current.storage.user_storage_root).expanduser()
+        if not root.is_absolute():
+            root = workspace / root
+        return root.resolve()
+
     def replace_models(self, config: AppConfig, *, config_file: Path) -> None:
         save_model_config(config_file, self.current, config)
         self.current = config
