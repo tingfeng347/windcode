@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
@@ -62,17 +62,18 @@ from windcode.runtime.subagents.verification import VerificationRunner
 from windcode.worktrees import GitBaseline, WorktreeError, WorktreeLease, WorktreeManager
 
 
+@dataclass(frozen=True, slots=True)
+class ChildRunProfile:
+    record: SubagentRecord
+    workspace: Path
+    parent_permission: PermissionMode
+    aggregate_budget: AggregateBudget
+    approval_router: ApprovalRouter
+    collaboration: BoundSubagentCollaboration | None = None
+
+
 class ChildRunPreparer(Protocol):
-    def create(
-        self,
-        record: SubagentRecord,
-        *,
-        workspace: Path,
-        parent_permission: PermissionMode,
-        aggregate_budget: AggregateBudget,
-        approval_router: ApprovalRouter,
-        collaboration: BoundSubagentCollaboration | None = None,
-    ) -> ChildRuntime: ...
+    def __call__(self, profile: ChildRunProfile) -> ChildRuntime: ...
 
 
 class SubagentCoordinator:
@@ -85,7 +86,7 @@ class SubagentCoordinator:
         permission_mode: PermissionMode,
         config: SubagentConfig,
         event_bus: EventBus,
-        factory: ChildRunPreparer,
+        prepare_child: ChildRunPreparer,
         worktrees: WorktreeManager,
         verification: VerificationRunner,
         network_enabled: bool = False,
@@ -97,7 +98,7 @@ class SubagentCoordinator:
         self.permission_mode = permission_mode
         self.config = config
         self.event_bus = event_bus
-        self.factory = factory
+        self.prepare_child = prepare_child
         self.worktrees = worktrees
         self.verification = verification
         self.network_enabled = network_enabled
@@ -674,13 +675,15 @@ class SubagentCoordinator:
                 record = replace(record, branch=lease.branch, worktree_path=lease.path)
                 await self._replace_record(record)
 
-            runtime = self.factory.create(
-                record,
-                workspace=workspace,
-                parent_permission=self.permission_mode,
-                aggregate_budget=self.aggregate_budget,
-                approval_router=self.approvals,
-                collaboration=self.collaboration(subagent_id),
+            runtime = self.prepare_child(
+                ChildRunProfile(
+                    record,
+                    workspace,
+                    self.permission_mode,
+                    self.aggregate_budget,
+                    self.approvals,
+                    self.collaboration(subagent_id),
+                )
             )
             self._runtimes[subagent_id] = runtime
             record = await self._transition(runtime.record, SubagentStatus.RUNNING)

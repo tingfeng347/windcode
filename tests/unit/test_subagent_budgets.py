@@ -4,7 +4,7 @@ import pytest
 
 from windcode.runtime.control import BudgetExceeded, RunBudgets
 from windcode.runtime.subagents.budgets import AggregateBudget, AggregateBudgetExceeded
-from windcode.runtime.subagents.factory import AggregateRunControl
+from windcode.runtime.subagents.child_execution import AggregateRunControl
 
 
 async def test_concurrent_consumption_stops_exactly_at_limit() -> None:

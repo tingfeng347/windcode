@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.run_builder_support import child_preparer
 from windcode.config import AppConfig, PermissionMode, SandboxConfig
 from windcode.domain.events import ApprovalRequested, RunStarted
 from windcode.domain.messages import TextBlock
@@ -19,10 +20,10 @@ from windcode.domain.tools import ToolContext
 from windcode.providers import ModelTarget
 from windcode.runtime.loop import AgentBlocked
 from windcode.runtime.scheduler import ScheduledCall
+from windcode.runtime.subagents import ChildRunProfile
 from windcode.runtime.subagents.approvals import ApprovalRouter
 from windcode.runtime.subagents.budgets import AggregateBudget
 from windcode.runtime.subagents.collaboration import BoundSubagentCollaboration
-from windcode.runtime.subagents.factory import ChildRunScope
 from windcode.sessions import SessionStatus, SessionStore
 from windcode.tools import create_builtin_registry
 
@@ -113,7 +114,7 @@ async def test_child_factory_creates_fresh_isolated_runtime(tmp_path: Path) -> N
     target = ModelTarget("recording", "model", transport)
     state = tmp_path / "state"
     registry = create_builtin_registry()
-    factory = ChildRunScope(
+    prepare_child = child_preparer(
         config=AppConfig(),
         state_root=state,
         parent_tools=registry,
@@ -132,21 +133,25 @@ async def test_child_factory_creates_fresh_isolated_runtime(tmp_path: Path) -> N
     first_record = record(1)
     second_record = record(2)
     backend = EmptyCollaborationBackend((first_record, second_record))
-    first = factory.create(
-        first_record,
-        workspace=workspace,
-        parent_permission=PermissionMode.DEFAULT,
-        aggregate_budget=aggregate,
-        approval_router=approvals,
-        collaboration=BoundSubagentCollaboration(backend, first_record.subagent_id),
+    first = prepare_child(
+        ChildRunProfile(
+            first_record,
+            workspace,
+            PermissionMode.DEFAULT,
+            aggregate,
+            approvals,
+            BoundSubagentCollaboration(backend, first_record.subagent_id),
+        )
     )
-    second = factory.create(
-        second_record,
-        workspace=workspace,
-        parent_permission=PermissionMode.DEFAULT,
-        aggregate_budget=aggregate,
-        approval_router=approvals,
-        collaboration=BoundSubagentCollaboration(backend, second_record.subagent_id),
+    second = prepare_child(
+        ChildRunProfile(
+            second_record,
+            workspace,
+            PermissionMode.DEFAULT,
+            aggregate,
+            approvals,
+            BoundSubagentCollaboration(backend, second_record.subagent_id),
+        )
     )
 
     assert first.control is not second.control
@@ -193,7 +198,7 @@ async def test_worker_read_runtime_does_not_register_write_tools(tmp_path: Path)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     transport = RecordingTransport()
-    factory = ChildRunScope(
+    prepare_child = child_preparer(
         config=AppConfig(),
         state_root=tmp_path / "state",
         parent_tools=create_builtin_registry(),
@@ -203,20 +208,22 @@ async def test_worker_read_runtime_does_not_register_write_tools(tmp_path: Path)
     async def publish(_event: ApprovalRequested) -> None:
         pass
 
-    runtime = factory.create(
-        worker_read_record(1),
-        workspace=workspace,
-        parent_permission=PermissionMode.FULL_ACCESS,
-        aggregate_budget=AggregateBudget(
-            max_model_steps=10,
-            max_tool_calls=10,
-            max_runtime_seconds=60,
-        ),
-        approval_router=ApprovalRouter(
-            parent_session_id="parent",
-            parent_run_id="run",
-            publish=publish,
-        ),
+    runtime = prepare_child(
+        ChildRunProfile(
+            worker_read_record(1),
+            workspace,
+            PermissionMode.FULL_ACCESS,
+            AggregateBudget(
+                max_model_steps=10,
+                max_tool_calls=10,
+                max_runtime_seconds=60,
+            ),
+            ApprovalRouter(
+                parent_session_id="parent",
+                parent_run_id="run",
+                publish=publish,
+            ),
+        )
     )
 
     names = set(runtime.loop.scheduler.registry.names())
@@ -231,7 +238,7 @@ async def test_read_child_rejects_shell_write_and_preserves_workspace(tmp_path: 
     original = workspace / "original.txt"
     original.write_text("unchanged\n", encoding="utf-8")
     transport = RecordingTransport()
-    factory = ChildRunScope(
+    prepare_child = child_preparer(
         config=AppConfig(sandbox=SandboxConfig(enabled=False)),
         state_root=tmp_path / "state",
         parent_tools=create_builtin_registry(),
@@ -241,18 +248,18 @@ async def test_read_child_rejects_shell_write_and_preserves_workspace(tmp_path: 
     async def publish(_event: ApprovalRequested) -> None:
         pass
 
-    runtime = factory.create(
-        record(1),
-        workspace=workspace,
-        parent_permission=PermissionMode.FULL_ACCESS,
-        aggregate_budget=AggregateBudget(
-            max_model_steps=10,
-            max_tool_calls=10,
-            max_runtime_seconds=60,
-        ),
-        approval_router=ApprovalRouter(
-            parent_session_id="parent", parent_run_id="run", publish=publish
-        ),
+    runtime = prepare_child(
+        ChildRunProfile(
+            record(1),
+            workspace,
+            PermissionMode.FULL_ACCESS,
+            AggregateBudget(
+                max_model_steps=10,
+                max_tool_calls=10,
+                max_runtime_seconds=60,
+            ),
+            ApprovalRouter(parent_session_id="parent", parent_run_id="run", publish=publish),
+        )
     )
     context = ToolContext(workspace, "child-run", lambda: False)
     (result,) = await runtime.loop.scheduler.execute(
@@ -276,7 +283,7 @@ async def test_child_user_question_call_becomes_blocked(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     transport = RecordingTransport()
-    factory = ChildRunScope(
+    prepare_child = child_preparer(
         config=AppConfig(),
         state_root=tmp_path / "state",
         parent_tools=create_builtin_registry(),
@@ -286,18 +293,18 @@ async def test_child_user_question_call_becomes_blocked(tmp_path: Path) -> None:
     async def publish(_event: ApprovalRequested) -> None:
         pass
 
-    runtime = factory.create(
-        record(1),
-        workspace=workspace,
-        parent_permission=PermissionMode.DEFAULT,
-        aggregate_budget=AggregateBudget(
-            max_model_steps=10,
-            max_tool_calls=10,
-            max_runtime_seconds=60,
-        ),
-        approval_router=ApprovalRouter(
-            parent_session_id="parent", parent_run_id="run", publish=publish
-        ),
+    runtime = prepare_child(
+        ChildRunProfile(
+            record(1),
+            workspace,
+            PermissionMode.DEFAULT,
+            AggregateBudget(
+                max_model_steps=10,
+                max_tool_calls=10,
+                max_runtime_seconds=60,
+            ),
+            ApprovalRouter(parent_session_id="parent", parent_run_id="run", publish=publish),
+        )
     )
     assert "ask_user" not in runtime.loop.scheduler.registry.names()
     with pytest.raises(AgentBlocked, match="clarification is required"):

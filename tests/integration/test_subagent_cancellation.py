@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+from tests.run_builder_support import child_preparer
 from windcode.config import AppConfig, PermissionMode, SubagentConfig
 from windcode.domain.errors import ErrorCategory, WindcodeError
 from windcode.domain.messages import TextBlock
@@ -18,7 +19,6 @@ from windcode.observability import TraceStore
 from windcode.providers import ModelTarget
 from windcode.runtime.event_bus import EventBus
 from windcode.runtime.subagents.coordinator import SubagentCoordinator
-from windcode.runtime.subagents.factory import ChildRunScope
 from windcode.runtime.subagents.verification import VerificationRunner
 from windcode.sessions import SessionStore
 from windcode.tools import create_builtin_registry
@@ -74,7 +74,7 @@ def coordinator(tmp_path: Path, transport: ControlledTransport) -> SubagentCoord
     bus = EventBus(session, TraceStore("run", root=state / "traces"))
     target = ModelTarget("controlled", "model", transport)
     config = AppConfig(subagents=SubagentConfig(max_tasks=4, max_concurrent=2))
-    factory = ChildRunScope(
+    prepare_child = child_preparer(
         config=config,
         state_root=state,
         parent_tools=create_builtin_registry(),
@@ -87,7 +87,7 @@ def coordinator(tmp_path: Path, transport: ControlledTransport) -> SubagentCoord
         permission_mode=PermissionMode.DEFAULT,
         config=config.subagents,
         event_bus=bus,
-        factory=factory,
+        prepare_child=prepare_child,
         worktrees=WorktreeManager(worktrees_root=tmp_path / "worktrees"),
         verification=VerificationRunner(),
     )
