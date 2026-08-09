@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -14,19 +13,14 @@ from windcode.domain.events import (
     ApprovalRequested,
     ApprovalResponse,
     ContextCompacted,
-    ModelFallback,
-    ModelRetrying,
     ModelStarted,
-    ReasoningStatus,
     RunCancelled,
     RunCompleted,
     RunFailed,
     RunResult,
     RunStarted,
-    TextDeltaEvent,
     ToolFinished,
     ToolStarted,
-    UsageUpdated,
     UserInputRequested,
     UserResponse,
 )
@@ -35,19 +29,11 @@ from windcode.domain.messages import (
     Role,
     SourcedContextMessage,
     TextBlock,
-    ToolCallBlock,
     ToolResultBlock,
     heal_dangling_tool_calls,
     message_to_dict,
 )
-from windcode.domain.models import (
-    ModelRequest,
-    ModelUsage,
-    ReasoningDelta,
-    TextDelta,
-    ToolCallDelta,
-    Usage,
-)
+from windcode.domain.models import ModelRequest, Usage
 from windcode.domain.tools import ToolContext, ToolEffect
 from windcode.policy import (
     ApprovalChoice,
@@ -55,11 +41,10 @@ from windcode.policy import (
     PolicyRequest,
     summarize_policy_arguments,
 )
-from windcode.providers import ModelTarget
 from windcode.runtime.control import BudgetExceeded, RunControl
 from windcode.runtime.event_bus import EventBus
+from windcode.runtime.model_turn import ModelSession, ModelTurnRunner
 from windcode.runtime.report import ToolExecutionRecord, build_run_result
-from windcode.runtime.retry import stream_with_retry
 from windcode.runtime.scheduler import ScheduledCall, ToolScheduler
 from windcode.sessions import ArtifactStore, SessionStatus
 
@@ -78,14 +63,6 @@ class InboundMessageSource(Protocol):
 class RunIdentity:
     session_id: str
     run_id: str
-
-
-@dataclass(slots=True)
-class ModelSession:
-    model_chain: tuple[ModelTarget, ...]
-    system_prompt: str
-    max_output_tokens: int | None = None
-    stream_idle_timeout_seconds: float = 60.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,15 +90,6 @@ class RunObservers:
     sourced_context: Callable[[], tuple[SourcedContextMessage, ...]] | None = None
     compact: Callable[[str], Awaitable[None]] | None = None
     completion: Callable[[RunResult], Awaitable[None]] | None = None
-
-
-def _add_usage(left: Usage, right: Usage) -> Usage:
-    return Usage(
-        input_tokens=left.input_tokens + right.input_tokens,
-        output_tokens=left.output_tokens + right.output_tokens,
-        cache_read_tokens=left.cache_read_tokens + right.cache_read_tokens,
-        cache_write_tokens=left.cache_write_tokens + right.cache_write_tokens,
-    )
 
 
 class AgentLoop:
@@ -164,6 +132,7 @@ class AgentLoop:
         self.completion_observer = observers.completion
         self.inbound_message_source = inbound_message_source
         self._turn = 0
+        self._model_turn = ModelTurnRunner(model, self.control, self.event_bus, self._common)
         self.scheduler.approval_handler = self._approval_handler
         self.scheduler.before_execute = self._before_tool_execute
 
@@ -299,33 +268,6 @@ class AgentLoop:
             durable=True,
         )
 
-    async def _on_retry(self, target: ModelTarget, attempt: int, error: WindcodeError) -> None:
-        await self.event_bus.publish(
-            ModelRetrying(
-                **self._common(),
-                model=target.model,
-                attempt=attempt,
-                reason=str(error),
-            )
-        )
-
-    async def _on_fallback(
-        self,
-        source: ModelTarget,
-        target: ModelTarget,
-        error: WindcodeError,
-    ) -> None:
-        await self.event_bus.publish(
-            ModelFallback(
-                **self._common(),
-                from_model=source.model,
-                to_model=target.model,
-                reason=str(error),
-            ),
-            durable=True,
-        )
-        await self.event_bus.publish(ModelStarted(**self._common(), model=target.model))
-
     async def _terminal_failure(
         self,
         message: str,
@@ -455,71 +397,13 @@ class AgentLoop:
                                 await self.compact_observer("after")
                         elif self.compact_observer is not None:
                             await self.compact_observer("error")
-                text_parts: list[str] = []
-                call_order: list[str] = []
-                calls: dict[str, dict[str, str]] = {}
-                last_call_id = ""
-                step_usage = Usage()
-                async for _target, event in stream_with_retry(
-                    self.model_chain,
-                    request,
-                    on_retry=self._on_retry,
-                    on_fallback=self._on_fallback,
-                    idle_timeout_seconds=self.model_stream_idle_timeout_seconds,
-                ):
-                    self.control.check()
-                    if isinstance(event, TextDelta):
-                        text_parts.append(event.text)
-                        await self.event_bus.publish(
-                            TextDeltaEvent(**self._common(), text=event.text)
-                        )
-                    elif isinstance(event, ReasoningDelta):
-                        await self.event_bus.publish(
-                            ReasoningStatus(**self._common(), status=event.summary)
-                        )
-                    elif isinstance(event, ToolCallDelta):
-                        call_id = event.call_id or last_call_id
-                        if not call_id:
-                            call_id = uuid4().hex
-                        if call_id not in calls:
-                            calls[call_id] = {"name": event.name, "arguments": ""}
-                            call_order.append(call_id)
-                        calls[call_id]["name"] = event.name or calls[call_id]["name"]
-                        calls[call_id]["arguments"] += event.arguments_delta
-                        last_call_id = call_id
-                    elif isinstance(event, ModelUsage):
-                        step_usage = event.usage
-                        await self.event_bus.publish(
-                            UsageUpdated(
-                                **self._common(), usage=_add_usage(total_usage, step_usage)
-                            )
-                        )
-                    else:
-                        step_usage = event.usage
-
-                total_usage = _add_usage(total_usage, step_usage)
-                text = "".join(text_parts)
-                assistant_content: list[TextBlock | ToolCallBlock] = []
-                if text:
-                    assistant_content.append(TextBlock(text))
-                    final_text = text
-
-                scheduled: list[ScheduledCall] = []
-                raw_arguments: dict[str, dict[str, Any]] = {}
-                for call_id in call_order:
-                    state = calls[call_id]
-                    try:
-                        decoded = json.loads(state["arguments"] or "{}")
-                        if not isinstance(decoded, Mapping):
-                            raise ValueError("tool arguments must be an object")
-                        mapping = cast(Mapping[object, object], decoded)
-                        arguments = {str(key): value for key, value in mapping.items()}
-                    except (json.JSONDecodeError, ValueError) as exc:
-                        arguments = {"_invalid_json": state["arguments"], "_error": str(exc)}
-                    raw_arguments[call_id] = arguments
-                    assistant_content.append(ToolCallBlock(call_id, state["name"], arguments))
-                    scheduled.append(ScheduledCall(call_id, state["name"], arguments))
-                assistant_message = Message(Role.ASSISTANT, tuple(assistant_content))
+                turn = await self._model_turn.execute(request, total_usage)
+                total_usage = turn.total_usage
+                if turn.text:
+                    final_text = turn.text
+                scheduled = turn.scheduled_calls
+                raw_arguments = turn.raw_arguments
+                assistant_message = turn.assistant_message
                 messages = (*messages, assistant_message)
                 self.event_bus.session_store.append(
                     "conversation_message",
@@ -527,7 +411,7 @@ class AgentLoop:
                     durable=True,
                 )
 
-                pending_calls = tuple(scheduled)
+                pending_calls = scheduled
 
                 if not scheduled:
                     if self.inbound_message_source is not None:
@@ -556,7 +440,7 @@ class AgentLoop:
                     cancelled=lambda: self.control.cancelled,
                     request_user=self._request_user,
                 )
-                results = await self.scheduler.execute(tuple(scheduled), context)
+                results = await self.scheduler.execute(scheduled, context)
                 tool_blocks: list[ToolResultBlock] = []
                 for call, scheduled_result in zip(scheduled, results, strict=True):
                     result = scheduled_result.result
