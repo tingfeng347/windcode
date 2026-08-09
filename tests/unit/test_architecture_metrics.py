@@ -72,6 +72,29 @@ def _assembly_calls(tree: ast.Module) -> set[str]:
     return calls
 
 
+def _run_builder_calls(tree: ast.Module) -> set[str]:
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for item in node.names:
+                local = item.asname or item.name.split(".", 1)[0]
+                aliases[local] = item.name if item.asname else local
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            for item in node.names:
+                aliases[item.asname or item.name] = f"{node.module}.{item.name}"
+
+    calls: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        qualified = _qualified_name(node.func, aliases)
+        if qualified == "RunBuilder" or (
+            qualified is not None and qualified.endswith(".RunBuilder")
+        ):
+            calls.add("RunBuilder")
+    return calls
+
+
 def test_current_architecture_matches_baseline() -> None:
     assert check_against_baseline(collect(), _baseline()) == []
 
@@ -112,6 +135,27 @@ def test_parent_and_child_share_run_builder_assembly_boundary() -> None:
         path.read_text(encoding="utf-8") for path in runtime_root.rglob("*.py")
     )
     assert "ChildRunScope" not in runtime_source
+
+
+def test_sdk_delegates_parent_run_ownership_to_run_application() -> None:
+    constructor_sites: set[str] = set()
+    for path in Path("src/windcode").rglob("*.py"):
+        module = ".".join(path.with_suffix("").parts[1:])
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        if _run_builder_calls(tree):
+            constructor_sites.add(module)
+
+    sdk_tree = ast.parse(Path("src/windcode/sdk.py").read_text(encoding="utf-8"))
+    sdk_attributes = {node.attr for node in ast.walk(sdk_tree) if isinstance(node, ast.Attribute)}
+    sdk_methods = {
+        node.name
+        for node in ast.walk(sdk_tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert constructor_sites == {"windcode.application.runs"}
+    assert "_handles" not in sdk_attributes
+    assert {"_run_builder", "_accepting_runs"}.isdisjoint(sdk_methods)
 
 
 def test_assembly_boundary_resolves_import_and_assignment_aliases() -> None:

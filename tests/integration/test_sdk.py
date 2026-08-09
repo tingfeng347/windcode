@@ -572,6 +572,75 @@ def test_start_run_requires_async_context(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_tool_registry_survives_close_but_reopen_rebuilds_it(tmp_path: Path) -> None:
+    client = Windcode.open(state_root=tmp_path / "state")
+    with pytest.raises(RuntimeError, match="async context"):
+        client.register_tool(CustomTool())
+
+    async with client:
+        first_registry = client.tool_registry
+        assert first_registry is not None
+
+    client.register_tool(CustomTool())
+    assert client.tool_registry is first_registry
+    assert "custom" in first_registry.names()
+    with pytest.raises(RuntimeError, match="async context"):
+        client.start_run(RunRequest("after close", tmp_path))
+
+    async with client:
+        assert client.tool_registry is not first_registry
+        assert client.tool_registry is not None
+        assert "custom" not in client.tool_registry.names()
+
+
+@pytest.mark.asyncio
+async def test_reassigned_paths_are_used_by_new_runs(tmp_path: Path) -> None:
+    original_root = tmp_path / "original-state"
+    reassigned_root = tmp_path / "reassigned-state"
+    reassigned_workspace = tmp_path / "reassigned-workspace"
+    reassigned_workspace.mkdir()
+    client = Windcode.open(state_root=original_root)
+
+    async with client:
+        client.state_root = reassigned_root
+        client.workspace = reassigned_workspace
+        client.register_transport("history", "model", HistoryTransport("complete"), primary=True)
+        session_id = "reassigned-session"
+        handle = client.start_run(
+            RunRequest("use reassigned paths", reassigned_workspace, session_id=session_id)
+        )
+        result = await handle.result()
+
+    assert result.status == "completed"
+    assert (reassigned_root / "sessions" / session_id / "meta.json").is_file()
+    assert not (original_root / "sessions" / session_id).exists()
+
+
+@pytest.mark.asyncio
+async def test_active_run_blocks_model_reconfiguration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    startup_gate = asyncio.Event()
+
+    async def delayed_startup(runtime: McpRuntime, *, concurrency: int = 4) -> tuple[str, ...]:
+        del concurrency
+        await startup_gate.wait()
+        return runtime.required_server_ids
+
+    monkeypatch.setattr(McpRuntime, "activate_required", delayed_startup)
+    async with Windcode.open(state_root=tmp_path / "state") as client:
+        client.register_transport("history", "model", HistoryTransport("complete"), primary=True)
+        handle = client.start_run(RunRequest("active", tmp_path))
+        await asyncio.sleep(0)
+
+        with pytest.raises(RuntimeError, match="while a run is active"):
+            await client.reconfigure_models(client.config, config_file=tmp_path / "config.toml")
+
+        startup_gate.set()
+        assert (await handle.result()).status == "completed"
+
+
+@pytest.mark.asyncio
 async def test_session_shell_approval_is_restored_on_next_run(tmp_path: Path) -> None:
     config = {"sandbox": {"enabled": False}}
     async with Windcode.open(config, state_root=tmp_path / "state") as client:
