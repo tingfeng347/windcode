@@ -59,7 +59,9 @@ def resolve_config(options: CLIOptions, *, tolerate_provider_errors: bool = Fals
     if options.permission_mode is not None:
         overrides["permission"] = {"mode": options.permission_mode.value}
     if options.sandbox_enabled is not None:
-        overrides["sandbox"] = {"enabled": options.sandbox_enabled}
+        overrides["sandbox"] = {
+            "preset": "workspace_write" if options.sandbox_enabled else "danger_full_access"
+        }
     return load_config(
         options.workspace,
         explicit_file=options.config_file,

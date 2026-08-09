@@ -214,7 +214,7 @@ def event_semantics(event: AgentEventType) -> tuple[object, ...]:
 @pytest.mark.asyncio
 async def test_successful_coding_task_has_real_change_and_verification(tmp_path: Path) -> None:
     make_project(tmp_path)
-    config = AppConfig(sandbox=SandboxConfig(enabled=False))
+    config = AppConfig(sandbox=SandboxConfig(preset="danger_full_access"))
     events: list[AgentEventType] = []
     async with Windcode.open(config, state_root=tmp_path / ".state") as client:
         client.register_transport("scripted", "model", CodingTaskTransport(), primary=True)
@@ -241,7 +241,7 @@ async def test_sdk_and_tui_success_paths_emit_same_event_semantics(
     tui_workspace = tmp_path / "tui"
     make_project(sdk_workspace)
     make_project(tui_workspace)
-    config = AppConfig(sandbox=SandboxConfig(enabled=False))
+    config = AppConfig(sandbox=SandboxConfig(preset="danger_full_access"))
 
     sdk_events: list[AgentEventType] = []
     async with Windcode.open(config, state_root=tmp_path / "sdk-state") as client:
@@ -295,7 +295,7 @@ async def test_sdk_and_tui_success_paths_emit_same_event_semantics(
 @pytest.mark.asyncio
 async def test_denied_write_keeps_file_unchanged_and_run_continues(tmp_path: Path) -> None:
     make_project(tmp_path)
-    config = AppConfig(sandbox=SandboxConfig(enabled=False))
+    config = AppConfig(sandbox=SandboxConfig(preset="danger_full_access"))
     transport = CodingTaskTransport()
     async with Windcode.open(config, state_root=tmp_path / ".state") as client:
         client.register_transport("scripted", "model", transport, primary=True)
@@ -354,7 +354,7 @@ async def test_fallback_retries_primary_then_completes_with_backup(
 @pytest.mark.asyncio
 async def test_compact_context_then_completes_followup_edit(tmp_path: Path) -> None:
     config = AppConfig(
-        sandbox=SandboxConfig(enabled=False),
+        sandbox=SandboxConfig(preset="danger_full_access"),
         context=ContextConfig(
             window_tokens=5_000,
             compaction_threshold=0.01,
@@ -383,7 +383,7 @@ async def test_cancel_running_shell_records_cancelled_without_replay(tmp_path: P
     state = tmp_path / ".state"
     transport = SlowShellTransport()
     events: list[AgentEventType] = []
-    config = AppConfig(sandbox=SandboxConfig(enabled=False))
+    config = AppConfig(sandbox=SandboxConfig(preset="danger_full_access"))
     async with Windcode.open(config, state_root=state) as client:
         client.register_transport("slow-shell", "model", transport, primary=True)
         handle = client.start_run(

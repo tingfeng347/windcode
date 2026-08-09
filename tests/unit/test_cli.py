@@ -4,7 +4,7 @@ import pytest
 
 from windcode import sandbox as sandbox_module
 from windcode.cli import parse_options, resolve_config, run
-from windcode.config import PermissionMode
+from windcode.config import PermissionMode, SandboxPreset
 
 
 def test_parses_explicit_security_and_session_options(tmp_path: Path) -> None:
@@ -30,11 +30,14 @@ def test_parses_explicit_security_and_session_options(tmp_path: Path) -> None:
 def test_cli_overrides_project_configuration(tmp_path: Path) -> None:
     project = tmp_path / ".windcode"
     project.mkdir()
-    (project / "config.toml").write_text('[permission]\nmode = "plan"\n[sandbox]\nenabled = true\n')
+    (project / "config.toml").write_text(
+        '[permission]\nmode = "plan"\n[sandbox]\npreset = "workspace_write"\n'
+    )
     options = parse_options([str(tmp_path), "--permission-mode", "accept_edits", "--no-sandbox"])
     config = resolve_config(options)
     assert config.permission.mode is PermissionMode.ACCEPT_EDITS
     assert not config.sandbox.enabled
+    assert config.sandbox.preset == SandboxPreset.DANGER_FULL_ACCESS
 
 
 def test_missing_workspace_returns_diagnostic(

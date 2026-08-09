@@ -642,7 +642,7 @@ async def test_active_run_blocks_model_reconfiguration(
 
 @pytest.mark.asyncio
 async def test_session_shell_approval_is_restored_on_next_run(tmp_path: Path) -> None:
-    config = {"sandbox": {"enabled": False}}
+    config = {"sandbox": {"preset": "danger_full_access"}}
     async with Windcode.open(config, state_root=tmp_path / "state") as client:
         client.register_transport("shell", "model", RepeatedShellTransport(), primary=True)
 

@@ -293,7 +293,7 @@ async def test_routine_verification_without_changes_creates_no_experience(tmp_pa
     workspace.mkdir()
     (workspace / "clean.py").write_text("VALUE = 1\n", encoding="utf-8")
     transport = ExperienceTransport(change_file=False)
-    config = AppConfig(sandbox=SandboxConfig(enabled=False))
+    config = AppConfig(sandbox=SandboxConfig(preset="danger_full_access"))
     async with Windcode.open(config, state_root=tmp_path / "state", workspace=workspace) as client:
         client.register_transport("experience", "model", transport, primary=True)
         handle = client.start_run(RunRequest("检查代码规范", workspace))
@@ -311,7 +311,7 @@ async def test_reusable_verified_change_creates_active_experience(tmp_path: Path
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     transport = ExperienceTransport(change_file=True)
-    config = AppConfig(sandbox=SandboxConfig(enabled=False))
+    config = AppConfig(sandbox=SandboxConfig(preset="danger_full_access"))
     async with Windcode.open(config, state_root=tmp_path / "state", workspace=workspace) as client:
         client.register_transport("experience", "model", transport, primary=True)
         handle = client.start_run(RunRequest("新增模块并检查规范", workspace))
@@ -333,7 +333,7 @@ async def test_successful_external_action_without_verified_change_creates_no_exp
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     transport = ExternalActionExperienceTransport()
-    config = AppConfig(sandbox=SandboxConfig(enabled=False))
+    config = AppConfig(sandbox=SandboxConfig(preset="danger_full_access"))
     async with Windcode.open(config, state_root=tmp_path / "state", workspace=workspace) as client:
         client.register_transport("experience", "model", transport, primary=True)
         handle = client.start_run(RunRequest("安装 create-ppt 插件", workspace))
