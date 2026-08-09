@@ -35,6 +35,9 @@ from windcode.domain.models import Usage
 from windcode.domain.subagents import (
     CollaborationContribution,
     CollaborationMode,
+    CollaborationRequest,
+    CollaborationResult,
+    SubagentCoordinatorError,
     SubagentMessage,
     SubagentRecord,
     SubagentResult,
@@ -53,16 +56,10 @@ from windcode.runtime.subagents.budgets import AggregateBudget
 from windcode.runtime.subagents.collaboration import (
     BoundSubagentCollaboration,
     CoordinationSession,
-    SubagentCollaborationError,
 )
 from windcode.runtime.subagents.factory import ChildRuntime, ChildRuntimeFactory
 from windcode.runtime.subagents.verification import VerificationRunner
 from windcode.worktrees import GitBaseline, WorktreeError, WorktreeLease, WorktreeManager
-
-
-class SubagentCoordinatorError(SubagentCollaborationError):
-    def __init__(self, category: str, message: str) -> None:
-        super().__init__(category, message)
 
 
 class SubagentCoordinator:
@@ -146,6 +143,14 @@ class SubagentCoordinator:
 
     def collaboration(self, subagent_id: str) -> BoundSubagentCollaboration:
         return BoundSubagentCollaboration(self, subagent_id)
+
+    async def collaborate(self, request: CollaborationRequest) -> CollaborationResult:
+        from windcode.runtime.subagents.teamwork import run_collaboration
+
+        return await run_collaboration(self, request)
+
+    def available_task_capacity(self) -> int:
+        return max(0, self.config.max_tasks - len(self._records))
 
     def available_concurrency(self) -> int:
         return max(0, self.config.max_concurrent - self._active)

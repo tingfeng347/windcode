@@ -11,7 +11,17 @@ from windcode.domain.models import ModelCompleted, ModelEvent, ModelRequest, Sto
 from windcode.observability import TraceStore
 from windcode.policy import PolicyEngine
 from windcode.providers import ModelTarget
-from windcode.runtime import AgentLoop, EventBus, RunControl, ToolScheduler
+from windcode.runtime import (
+    AgentLoop,
+    ContextWindow,
+    EventBus,
+    ModelSession,
+    RunControl,
+    RunIdentity,
+    RunJournal,
+    ToolRuntime,
+    ToolScheduler,
+)
 from windcode.sessions import ArtifactStore, SessionStore
 from windcode.tools import ToolRegistry
 
@@ -49,17 +59,16 @@ def build_loop(tmp_path: Path, transport: CompactionTransport) -> tuple[AgentLoo
     )
     return (
         AgentLoop(
-            session_id="session",
-            run_id="run",
-            model_chain=(ModelTarget("scripted", "model", transport),),
-            scheduler=scheduler,
-            control=RunControl(),
-            event_bus=bus,
-            system_prompt="system",
-            token_estimator=TokenEstimator(
-                1_024, compaction_threshold=0.2, reserved_output_tokens=100
+            identity=RunIdentity("session", "run"),
+            model=ModelSession((ModelTarget("scripted", "model", transport),), "system"),
+            tools=ToolRuntime(scheduler, RunControl()),
+            journal=RunJournal(bus),
+            context=ContextWindow(
+                token_estimator=TokenEstimator(
+                    1_024, compaction_threshold=0.2, reserved_output_tokens=100
+                ),
+                artifact_store=ArtifactStore(session.session_dir),
             ),
-            artifact_store=ArtifactStore(session.session_dir),
         ),
         bus,
     )

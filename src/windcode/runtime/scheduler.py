@@ -2,11 +2,18 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
-from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
+from windcode.domain.tools import (
+    PolicyConstraints,
+    ScheduledCall,
+    ScheduledResult,
+    ToolContext,
+    ToolEffect,
+    ToolResult,
+)
 from windcode.policy import (
     ApprovalChoice,
     CommandAnalysis,
@@ -18,27 +25,6 @@ from windcode.policy import (
 )
 from windcode.tools.filesystem import resolve_path
 from windcode.tools.registry import ToolRegistry
-
-
-@dataclass(frozen=True, slots=True)
-class ScheduledCall:
-    call_id: str
-    tool_name: str
-    arguments: Mapping[str, Any]
-    origin: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class ScheduledResult:
-    call_id: str
-    result: ToolResult
-
-
-@dataclass(frozen=True, slots=True)
-class PolicyConstraints:
-    additional_effects: frozenset[ToolEffect] = frozenset()
-    reject_reason: str | None = None
-
 
 ApprovalHandler = Callable[[PolicyRequest, PolicyDecision], Awaitable[ApprovalChoice]]
 BeforeExecute = Callable[[ScheduledCall, PolicyRequest], Awaitable[None]]

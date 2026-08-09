@@ -3,11 +3,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
 from uuid import uuid4
 
 from windcode.config import AppConfig, PermissionMode
-from windcode.context import TokenEstimator
 from windcode.domain.subagents import SubagentRecord, SubagentTaskKind
 from windcode.domain.tools import ToolContext
 from windcode.extensions import ExtensionSnapshot
@@ -21,14 +19,24 @@ from windcode.extensions.skills.tools import (
     register_skill_tools,
 )
 from windcode.instructions import load_instructions
-from windcode.observability import TraceStore
 from windcode.policy import ApprovalChoice, PolicyDecision, PolicyEngine, PolicyRequest
 from windcode.policy.rules import CommandRuleStore
 from windcode.providers import ModelTarget
 from windcode.runtime.control import BudgetExceeded, RunBudgets, RunControl
 from windcode.runtime.event_bus import EventBus
-from windcode.runtime.loop import AgentBlocked, AgentLoop
+from windcode.runtime.loop import (
+    AgentBlocked,
+    AgentLoop,
+    ContextWindow,
+    InboundMessageSource,
+    ModelSession,
+    RunIdentity,
+    RunJournal,
+    RunObservers,
+    ToolRuntime,
+)
 from windcode.runtime.prompts import build_system_prompt
+from windcode.runtime.resources import RunResources
 from windcode.runtime.scheduler import ScheduledCall, ScheduledResult, ToolScheduler
 from windcode.runtime.subagents.approvals import ApprovalRouter
 from windcode.runtime.subagents.budgets import AggregateBudget, AggregateBudgetExceeded
@@ -118,11 +126,25 @@ class ChildAgentLoop(AgentLoop):
         *,
         record: SubagentRecord,
         approval_router: ApprovalRouter,
-        **kwargs: Any,
+        identity: RunIdentity,
+        model: ModelSession,
+        tools: ToolRuntime,
+        journal: RunJournal,
+        context: ContextWindow | None = None,
+        observers: RunObservers | None = None,
+        inbound_message_source: InboundMessageSource | None = None,
     ) -> None:
         self.subagent_record = record
         self.approval_router = approval_router
-        super().__init__(**kwargs)
+        super().__init__(
+            identity=identity,
+            model=model,
+            tools=tools,
+            journal=journal,
+            context=context,
+            observers=observers,
+            inbound_message_source=inbound_message_source,
+        )
 
     async def _approval_handler(
         self,
@@ -270,18 +292,15 @@ class ChildRuntimeFactory:
         child_record = replace(record, child_session_id=child_session_id)
         session = SessionStore.create(self.state_root / "sessions", child_session_id)
         child_run_id = uuid4().hex
-        event_bus = EventBus(
-            session,
-            TraceStore(
-                child_run_id,
-                root=self.state_root / "traces",
-                enabled=self.config.trace.enabled,
-                include_tool_arguments=self.config.trace.include_tool_arguments,
-                include_transient_events=self.config.trace.include_transient_events,
-                retention_days=self.config.trace.retention_days,
-                max_total_mb=self.config.trace.max_total_mb,
-            ),
+        resources = RunResources.create(
+            session=session,
+            run_id=child_run_id,
+            state_root=self.state_root,
+            artifact_store=ArtifactStore(session.session_dir),
+            trace_config=self.config.trace,
+            context_config=self.config.context,
         )
+        event_bus = resources.event_bus
         skill_runtime = SkillRuntime(
             SkillCatalog(
                 self.extension_snapshot,
@@ -354,24 +373,21 @@ class ChildRuntimeFactory:
         loop = ChildAgentLoop(
             record=child_record,
             approval_router=approval_router,
-            session_id=child_session_id,
-            run_id=child_run_id,
-            model_chain=self.model_chain(spec.model),
-            scheduler=scheduler,
-            control=control,
-            event_bus=event_bus,
-            system_prompt=system_prompt,
-            model_stream_idle_timeout_seconds=(
-                self.config.budgets.model_stream_idle_timeout_seconds
+            identity=RunIdentity(child_session_id, child_run_id),
+            model=ModelSession(
+                self.model_chain(spec.model),
+                system_prompt,
+                stream_idle_timeout_seconds=(self.config.budgets.model_stream_idle_timeout_seconds),
             ),
-            token_estimator=TokenEstimator(
-                self.config.context.window_tokens,
-                compaction_threshold=self.config.context.compaction_threshold,
+            tools=ToolRuntime(scheduler, control),
+            journal=RunJournal(event_bus),
+            context=ContextWindow(
+                token_estimator=resources.token_estimator,
+                artifact_store=resources.artifact_store,
+                preserve_recent_turns=self.config.context.preserve_recent_turns,
+                max_tool_result_chars=self.config.context.max_tool_result_chars,
             ),
-            artifact_store=ArtifactStore(session.session_dir),
-            preserve_recent_turns=self.config.context.preserve_recent_turns,
-            max_tool_result_chars=self.config.context.max_tool_result_chars,
-            sourced_context_provider=skill_runtime.drain_context,
+            observers=RunObservers(sourced_context=skill_runtime.drain_context),
             inbound_message_source=(collaboration if spec.peer_collaboration else None),
         )
         return ChildRuntime(

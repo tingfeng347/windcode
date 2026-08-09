@@ -14,10 +14,10 @@ from windcode.tools.shell import ShellTool
 from windcode.tools.write_file import WriteFileTool
 
 if TYPE_CHECKING:
-    from windcode.runtime.subagents.coordinator import SubagentCoordinator
+    from windcode.tools.subagents.operations import SubagentOperations
 
 
-def add_subagent_tools(registry: ToolRegistry, coordinator: SubagentCoordinator) -> ToolRegistry:
+def add_subagent_tools(registry: ToolRegistry, coordinator: SubagentOperations) -> ToolRegistry:
     from windcode.tools.subagents import register_subagent_tools
 
     register_subagent_tools(registry, coordinator)

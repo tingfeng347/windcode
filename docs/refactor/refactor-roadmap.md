@@ -17,10 +17,19 @@
 
 ## 阶段 1：依赖方向
 
+状态：已完成，等待阶段提交。
+
 - 在使用者一侧定义窄协议；production 与 test adapter 共享真实 seam。
 - 子代理工具不再依赖具体 `SubagentCoordinator`。
 - extensions 不再依赖具体 scheduler。
 - 消除 `extensions <-> runtime <-> tools` 顶层环和 13 模块环。
+- 调度调用/结果/约束和子代理分类错误下沉为 domain contract；旧 runtime import
+  保持同一类型对象。
+- shell 进程执行器归入工具实现，删除放错层的 `runtime.process`，不保留双实现或转发壳。
+- 架构门禁收紧为 0 个顶层/模块 SCC、0 条 `tools -> runtime` 和
+  `extensions -> runtime` 反向依赖。
+- Python 3.11/3.12 全量测试均为 596 passed/3 skipped；Ruff、strict Pyright、build 和
+  公共沙箱契约通过。
 
 ## 阶段 2：运行装配
 

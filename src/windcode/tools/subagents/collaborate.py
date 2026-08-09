@@ -10,12 +10,12 @@ from windcode.domain.subagents import (
     CollaborationParticipant,
     CollaborationRequest,
     CollaborationResult,
+    SubagentOperationError,
     SubagentRole,
     SubagentTaskKind,
 )
 from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
-from windcode.runtime.subagents.coordinator import SubagentCoordinator, SubagentCoordinatorError
-from windcode.runtime.subagents.teamwork import run_collaboration
+from windcode.tools.subagents.operations import SubagentOperations
 
 
 class CollaborationParticipantInput(BaseModel):
@@ -129,15 +129,15 @@ class CollaborateSubagentsTool:
     input_model = CollaborateSubagentsInput
     effects = frozenset({ToolEffect.PROCESS, ToolEffect.WORKSPACE_WRITE})
 
-    def __init__(self, coordinator: SubagentCoordinator) -> None:
+    def __init__(self, coordinator: SubagentOperations) -> None:
         self.coordinator = coordinator
 
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
         del context
         parsed = cast(CollaborateSubagentsInput, arguments)
         try:
-            result = await run_collaboration(self.coordinator, parsed.to_domain())
-        except (SubagentCoordinatorError, ValueError) as exc:
+            result = await self.coordinator.collaborate(parsed.to_domain())
+        except (SubagentOperationError, ValueError) as exc:
             category = getattr(exc, "category", "invalid_collaboration")
             return ToolResult(str(exc), is_error=True, data={"error": str(category)})
         data = _result_data(result)

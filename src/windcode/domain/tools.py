@@ -38,6 +38,26 @@ class ToolResult:
     data: dict[str, Any] = field(default_factory=dict[str, Any])
 
 
+@dataclass(frozen=True, slots=True)
+class ScheduledCall:
+    call_id: str
+    tool_name: str
+    arguments: Mapping[str, Any]
+    origin: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduledResult:
+    call_id: str
+    result: ToolResult
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyConstraints:
+    additional_effects: frozenset[ToolEffect] = frozenset()
+    reject_reason: str | None = None
+
+
 class Tool(Protocol):
     @property
     def name(self) -> str: ...

@@ -6,9 +6,9 @@ from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from windcode.domain.subagents import SubagentResult
+from windcode.domain.subagents import SubagentOperationError, SubagentResult
 from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
-from windcode.runtime.subagents.coordinator import SubagentCoordinator, SubagentCoordinatorError
+from windcode.tools.subagents.operations import SubagentOperations
 
 
 class WaitSubagentsInput(BaseModel):
@@ -46,7 +46,7 @@ class WaitSubagentsTool:
     input_model = WaitSubagentsInput
     effects = frozenset({ToolEffect.READ})
 
-    def __init__(self, coordinator: SubagentCoordinator) -> None:
+    def __init__(self, coordinator: SubagentOperations) -> None:
         self.coordinator = coordinator
 
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
@@ -68,7 +68,7 @@ class WaitSubagentsTool:
                 },
             }
             return ToolResult(json.dumps(data, ensure_ascii=True), is_error=True, data=data)
-        except SubagentCoordinatorError as exc:
+        except SubagentOperationError as exc:
             return ToolResult(output=str(exc), is_error=True, data={"error": exc.category})
         data = [_result_data(result) for result in results]
         return ToolResult(json.dumps(data, ensure_ascii=True), data={"subagents": data})

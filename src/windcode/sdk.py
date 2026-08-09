@@ -15,7 +15,6 @@ from windcode.config import (
     save_memory_config,
     save_model_config,
 )
-from windcode.context import TokenEstimator
 from windcode.domain.errors import RequiredExtensionError, RequiredExtensionStartupError
 from windcode.domain.events import (
     AgentEventType,
@@ -77,7 +76,7 @@ from windcode.memory import (
     refine_memory,
     should_assess_experience,
 )
-from windcode.observability import DynamicRedactor, TraceStore
+from windcode.observability import DynamicRedactor
 from windcode.policy import CommandRule, PolicyEngine, PolicyRequest
 from windcode.policy.rules import CommandRuleStore
 from windcode.providers import (
@@ -88,8 +87,17 @@ from windcode.providers import (
 )
 from windcode.runtime.control import RunBudgets, RunControl
 from windcode.runtime.event_bus import EventBus
-from windcode.runtime.loop import AgentLoop
+from windcode.runtime.loop import (
+    AgentLoop,
+    ContextWindow,
+    ModelSession,
+    RunIdentity,
+    RunJournal,
+    RunObservers,
+    ToolRuntime,
+)
 from windcode.runtime.prompts import build_system_prompt
+from windcode.runtime.resources import RunResources
 from windcode.runtime.scheduler import ScheduledCall, ToolScheduler
 from windcode.runtime.subagents import (
     ChildRuntimeFactory,
@@ -730,16 +738,15 @@ class Windcode:
             mcp_runtime=(None if client_extensions is None else client_extensions.mcp),
             mcp_tool_catalogs=mcp_tool_catalogs,
         )
-        trace = TraceStore(
-            run_id,
-            root=self.state_root / "traces",
-            enabled=self.config.trace.enabled,
-            include_tool_arguments=self.config.trace.include_tool_arguments,
-            include_transient_events=self.config.trace.include_transient_events,
-            retention_days=self.config.trace.retention_days,
-            max_total_mb=self.config.trace.max_total_mb,
+        resources = RunResources.create(
+            session=session,
+            run_id=run_id,
+            state_root=self.state_root,
+            artifact_store=artifact_store,
+            trace_config=self.config.trace,
+            context_config=self.config.context,
         )
-        bus = EventBus(session, trace)
+        bus = resources.event_bus
         run_extensions.event_observer = lambda event: bus.publish(event, durable=True)
         mode = (
             PermissionMode(request.permission_mode)
@@ -1195,27 +1202,25 @@ class Windcode:
             await extract_memories(result)
 
         loop = AgentLoop(
-            session_id=session.metadata.session_id,
-            run_id=run_id,
-            model_chain=model_chain,
-            scheduler=scheduler,
-            control=control,
-            event_bus=bus,
-            system_prompt=system_prompt,
-            model_stream_idle_timeout_seconds=(
-                self.config.budgets.model_stream_idle_timeout_seconds
+            identity=RunIdentity(session.metadata.session_id, run_id),
+            model=ModelSession(
+                model_chain,
+                system_prompt,
+                stream_idle_timeout_seconds=(self.config.budgets.model_stream_idle_timeout_seconds),
             ),
-            token_estimator=TokenEstimator(
-                self.config.context.window_tokens,
-                compaction_threshold=self.config.context.compaction_threshold,
+            tools=ToolRuntime(scheduler, control),
+            journal=RunJournal(bus, close_on_exit=False),
+            context=ContextWindow(
+                token_estimator=resources.token_estimator,
+                artifact_store=resources.artifact_store,
+                preserve_recent_turns=self.config.context.preserve_recent_turns,
+                max_tool_result_chars=self.config.context.max_tool_result_chars,
             ),
-            artifact_store=artifact_store,
-            preserve_recent_turns=self.config.context.preserve_recent_turns,
-            max_tool_result_chars=self.config.context.max_tool_result_chars,
-            close_event_bus=False,
-            sourced_context_provider=run_extensions.drain_context,
-            compact_observer=run_extensions.compact_lifecycle,
-            completion_observer=complete_run,
+            observers=RunObservers(
+                sourced_context=run_extensions.drain_context,
+                compact=run_extensions.compact_lifecycle,
+                completion=complete_run,
+            ),
         )
         after_sequence = session.metadata.next_sequence - 1
 
