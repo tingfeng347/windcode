@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from windcode.config import AppConfig, PermissionMode, SandboxConfig
-from windcode.domain.events import ApprovalRequested
+from windcode.domain.events import ApprovalRequested, RunStarted
 from windcode.domain.messages import TextBlock
 from windcode.domain.models import ModelCompleted, ModelEvent, ModelRequest, StopReason, TextDelta
 from windcode.domain.subagents import (
@@ -23,6 +23,7 @@ from windcode.runtime.subagents.approvals import ApprovalRouter
 from windcode.runtime.subagents.budgets import AggregateBudget
 from windcode.runtime.subagents.collaboration import BoundSubagentCollaboration
 from windcode.runtime.subagents.factory import ChildRuntimeFactory
+from windcode.sessions import SessionStatus, SessionStore
 from windcode.tools import create_builtin_registry
 
 
@@ -169,6 +170,23 @@ async def test_child_factory_creates_fresh_isolated_runtime(tmp_path: Path) -> N
     assert "private child context 2" not in first_prompt.text
     assert "PARENT-HISTORY-MARKER" not in transport.requests[0].system_prompt
     assert "PROJECT-INSTRUCTION" in transport.requests[0].system_prompt
+    assert first.event_bus.trace_store.path != second.event_bus.trace_store.path
+    child_session_id = first.record.child_session_id
+    assert child_session_id is not None
+    assert (
+        SessionStore.open(state / "sessions", child_session_id).metadata.status
+        is SessionStatus.COMPLETED
+    )
+    with pytest.raises(RuntimeError, match="event bus is closed"):
+        await first.event_bus.publish(
+            RunStarted(
+                event_id="late",
+                session_id=child_session_id,
+                run_id="late",
+                turn=0,
+                prompt="late",
+            )
+        )
 
 
 async def test_worker_read_runtime_does_not_register_write_tools(tmp_path: Path) -> None:
