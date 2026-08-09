@@ -7,12 +7,9 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
 
-from windcode.application import ProviderApplication
+from windcode.application import ConfigurationApplication, ProviderApplication
 from windcode.auth import CredentialStore, FileCredentialStore
-from windcode.config import (
-    AppConfig,
-    save_memory_config,
-)
+from windcode.config import AppConfig
 from windcode.domain.errors import RequiredExtensionError, RequiredExtensionStartupError
 from windcode.domain.events import RunRequest
 from windcode.domain.messages import (
@@ -89,7 +86,8 @@ class Windcode:
         workspace: Path | None = None,
     ) -> None:
         self.credential_store = credential_store or FileCredentialStore()
-        self._providers = ProviderApplication(config, self.credential_store)
+        self._configuration = ConfigurationApplication(config)
+        self._providers = ProviderApplication(self._configuration, self.credential_store)
         self.workspace = (workspace or Path.cwd()).expanduser().resolve()
         self.state_root = self._resolve_state_root(state_root)
         self.tool_registry: ToolRegistry | None = None
@@ -105,11 +103,11 @@ class Windcode:
 
     @property
     def config(self) -> AppConfig:
-        return self._providers.config
+        return self._configuration.current
 
     @config.setter
     def config(self, value: AppConfig) -> None:
-        self._providers.config = value
+        self._configuration.current = value
 
     @property
     def transport_registry(self) -> TransportRegistry:
@@ -450,10 +448,7 @@ class Windcode:
         return self._memory().draft_skill(memory_id)
 
     def set_memory_enabled(self, enabled: bool, *, config_file: Path) -> None:
-        updated_memory = self.config.memory.model_copy(update={"enabled": enabled})
-        updated = self.config.model_copy(update={"memory": updated_memory})
-        save_memory_config(config_file, updated)
-        self.config = updated
+        self._configuration.set_memory_enabled(enabled, config_file=config_file)
         self.memory_service = MemoryService(self.state_root, self.workspace) if enabled else None
 
     @staticmethod

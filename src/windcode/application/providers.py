@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
+from windcode.application.configuration import ConfigurationApplication
 from windcode.auth import CredentialStore, CredentialStoreError
-from windcode.config import AppConfig, save_model_config
+from windcode.config import AppConfig
 from windcode.providers import (
     ModelTarget,
     ModelTransport,
@@ -16,19 +17,22 @@ from windcode.providers import (
 class ProviderApplication:
     """Own model transport state and its configuration transaction."""
 
-    def __init__(self, config: AppConfig, credential_store: CredentialStore) -> None:
-        self.config = config
+    def __init__(
+        self, configuration: ConfigurationApplication, credential_store: CredentialStore
+    ) -> None:
+        self.configuration = configuration
         self.credential_store = credential_store
         self.registry = TransportRegistry()
         self.startup_error: str | None = None
         self._default_chain: list[str] = []
 
     async def open(self) -> None:
-        if not self.config.providers:
+        config = self.configuration.current
+        if not config.providers:
             return
         try:
             registry = TransportRegistry.from_config(
-                self.config,
+                config,
                 credential_store=self.credential_store,
                 allow_missing=True,
             )
@@ -37,10 +41,10 @@ class ProviderApplication:
             self.startup_error = str(exc)
             return
         self.registry = registry
-        if self.config.primary_provider is not None:
+        if config.primary_provider is not None:
             self._default_chain = [
                 alias
-                for alias in (self.config.primary_provider, *self.config.fallback_chain)
+                for alias in (config.primary_provider, *config.fallback_chain)
                 if alias in registry.aliases
             ]
 
@@ -75,7 +79,7 @@ class ProviderApplication:
                 "configure its credential or choose a connected provider"
             )
         try:
-            save_model_config(config_file, self.config, config)
+            self.configuration.replace_models(config, config_file=config_file)
         except Exception:
             await registry.aclose()
             raise
@@ -83,7 +87,6 @@ class ProviderApplication:
         previous_registry = self.registry
         self.registry = registry
         self.startup_error = None
-        self.config = config
         configured_chain = (
             (config.primary_provider, *config.fallback_chain)
             if config.primary_provider is not None
