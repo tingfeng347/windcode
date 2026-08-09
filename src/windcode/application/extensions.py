@@ -118,7 +118,7 @@ class ExtensionApplication:
         return self.service
 
     def _require_generation(self) -> _ExtensionGeneration:
-        if self._current is None:
+        if not self._opened or self._current is None:
             raise RuntimeError("extension runtime is not initialized")
         return self._current
 
@@ -285,6 +285,7 @@ class ExtensionApplication:
             if current is None:
                 self._opened = False
                 return
+            self._opened = False
             await self._stop_startup(current)
             await current.idle.wait()
             if self._retirements:
@@ -294,4 +295,3 @@ class ExtensionApplication:
                 await self._close_generation(current)
             finally:
                 self._current = None
-                self._opened = False

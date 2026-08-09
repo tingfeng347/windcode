@@ -89,6 +89,7 @@ class Windcode:
         self.tool_registry: ToolRegistry | None = None
         self._handles: set[RunHandle] = set()
         self._entered = False
+        self._closing = False
         self.memory_service: MemoryService | None = None
 
     @property
@@ -168,7 +169,7 @@ class Windcode:
         )
 
     async def __aenter__(self) -> Self:
-        if self._entered:
+        if self._entered or self._closing:
             raise RuntimeError("Windcode client is already open")
         self._entered = True
         self.state_root.mkdir(parents=True, exist_ok=True)
@@ -399,7 +400,7 @@ class Windcode:
         return store.metadata
 
     def start_run(self, request: RunRequest) -> RunHandle:
-        if not self._entered or self.tool_registry is None:
+        if not self._accepting_runs():
             raise RuntimeError("start runs inside the Windcode async context")
         handle = self._extension_application.bind_run(
             lambda extensions: self._run_builder(extensions).start(request)
@@ -407,6 +408,9 @@ class Windcode:
         self._handles.add(handle)
         handle.add_done_callback(self._handles.discard)
         return handle
+
+    def _accepting_runs(self) -> bool:
+        return self._entered and not self._closing and self.tool_registry is not None
 
     def _run_builder(self, extensions: RunExtensionState) -> RunBuilder:
         if self.tool_registry is None:
@@ -462,18 +466,23 @@ class Windcode:
         )
 
     async def aclose(self) -> None:
-        if not self._entered:
+        if not self._entered or self._closing:
             return
-        handles = tuple(self._handles)
-        await asyncio.gather(*(handle.cancel() for handle in handles))
+        self._closing = True
         try:
+            handles = tuple(self._handles)
+            await asyncio.gather(*(handle.cancel() for handle in handles))
             await asyncio.gather(
                 self._extension_application.aclose(),
                 self._providers.aclose(),
                 return_exceptions=True,
             )
-        finally:
+        except BaseException:
+            self._closing = False
+            raise
+        else:
             self._entered = False
+            self._closing = False
 
 
 __all__ = ["RunHandle", "Windcode"]

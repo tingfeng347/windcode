@@ -172,3 +172,30 @@ async def test_close_waits_for_reload_and_closes_both_generations(
     assert set(closed) == {previous_generation, current_generation}
     with pytest.raises(RuntimeError, match="extension runtime is not initialized"):
         application.acquire_run()
+
+
+@pytest.mark.asyncio
+async def test_close_rejects_new_leases_before_closing_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    close_entered = asyncio.Event()
+    finish_close = asyncio.Event()
+    original_close = RunExtensions.aclose
+
+    async def delayed_close(extensions: RunExtensions) -> None:
+        close_entered.set()
+        await finish_close.wait()
+        await original_close(extensions)
+
+    monkeypatch.setattr(RunExtensions, "aclose", delayed_close)
+    application = extension_application(tmp_path)
+    await application.open()
+
+    close_task = asyncio.create_task(application.aclose())
+    await close_entered.wait()
+
+    with pytest.raises(RuntimeError, match="extension runtime is not initialized"):
+        application.acquire_run()
+
+    finish_close.set()
+    await close_task
