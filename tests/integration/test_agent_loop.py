@@ -14,6 +14,7 @@ from windcode.domain.events import (
     RunFailed,
     TextDeltaEvent,
     ToolFinished,
+    ToolStarted,
     UsageUpdated,
 )
 from windcode.domain.messages import Message, Role, TextBlock, ToolResultBlock
@@ -42,10 +43,12 @@ from windcode.runtime import (
     RunIdentity,
     RunJournal,
     RunObservers,
+    ScheduledCall,
     ToolRuntime,
     ToolScheduler,
 )
 from windcode.runtime.model_turn import ModelTurnRunner
+from windcode.runtime.tool_turn import ToolTurnRunner
 from windcode.sessions import SessionStore
 from windcode.tools import ToolRegistry
 
@@ -185,6 +188,51 @@ async def test_model_turn_runner_assembles_streamed_response_through_its_interfa
         UsageUpdated,
     ]
     assert cast(UsageUpdated, events[-1]).usage == Usage(13, 24)
+
+
+@pytest.mark.asyncio
+async def test_tool_turn_runner_journals_execution_through_its_interface(
+    tmp_path: Path,
+) -> None:
+    session = SessionStore.create(tmp_path / "sessions", "session")
+    bus = EventBus(session, TraceStore("run", root=tmp_path / "traces"))
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+    scheduler = ToolScheduler(
+        registry,
+        PolicyEngine(PermissionMode.FULL_ACCESS, sandbox_enabled=False),
+    )
+
+    async def unexpected_request(payload: object) -> object:
+        raise AssertionError(f"unexpected user request: {payload!r}")
+
+    runner = ToolTurnRunner(
+        scheduler,
+        RunControl(),
+        bus,
+        lambda: {
+            "event_id": "event",
+            "session_id": "session",
+            "run_id": "run",
+            "turn": 1,
+        },
+        "run",
+        unexpected_request,
+    )
+
+    outcome = await runner.execute(
+        (ScheduledCall("call", "echo", {"text": "contents"}),),
+        tmp_path,
+        {"call": {"text": "contents"}},
+    )
+    await bus.close()
+    events = [event async for event in bus.subscribe()]
+
+    block = outcome.message.content[0]
+    assert isinstance(block, ToolResultBlock)
+    assert block.content == "contents"
+    assert outcome.records[0].arguments == {"text": "contents"}
+    assert [type(event) for event in events] == [ToolStarted, ToolFinished]
 
 
 @pytest.mark.asyncio
