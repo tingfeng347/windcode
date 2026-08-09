@@ -5,13 +5,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Self, cast
+from typing import Any, Self
 from uuid import uuid4
 
 from windcode.auth import CredentialStore, CredentialStoreError, FileCredentialStore
 from windcode.config import (
     AppConfig,
-    PermissionMode,
     save_memory_config,
     save_model_config,
 )
@@ -28,16 +27,11 @@ from windcode.domain.messages import (
     heal_dangling_tool_calls,
     message_from_dict,
 )
-from windcode.domain.tools import Tool, ToolContext, ToolEffect
+from windcode.domain.tools import Tool, ToolContext
 from windcode.extensions.commands import CommandRoute
 from windcode.extensions.hooks.models import HookContext, HookEvent
 from windcode.extensions.mcp import McpServerState
 from windcode.extensions.mcp.catalog import McpToolDefinition
-from windcode.extensions.mcp.tools import (
-    SearchMcpToolsTool,
-    register_mcp_management_tools,
-    register_mcp_status_tool,
-)
 from windcode.extensions.models import (
     CapabilityKind,
     CapabilityRecord,
@@ -51,10 +45,8 @@ from windcode.extensions.skills.loader import SkillLoader
 from windcode.extensions.skills.tools import (
     SkillCatalog,
     SkillSearchResult,
-    register_skill_tools,
 )
 from windcode.extensions.state import ExtensionStateStore, ManagementAuditRecord
-from windcode.instructions import load_instructions
 from windcode.memory import (
     MemoryActivation,
     MemoryKind,
@@ -73,8 +65,7 @@ from windcode.memory import (
     should_assess_experience,
 )
 from windcode.observability import DynamicRedactor
-from windcode.policy import CommandRule, PolicyEngine, PolicyRequest
-from windcode.policy.rules import CommandRuleStore
+from windcode.policy import PolicyRequest
 from windcode.providers import (
     ModelTarget,
     ModelTransport,
@@ -92,17 +83,15 @@ from windcode.runtime.loop import (
     ToolRuntime,
 )
 from windcode.runtime.prompts import build_system_prompt
-from windcode.runtime.resources import RunResources
+from windcode.runtime.run_builder import RunBuilder
 from windcode.runtime.run_handle import RunHandle
 from windcode.runtime.scheduler import ScheduledCall, ToolScheduler
 from windcode.runtime.subagents import (
-    ChildRunScope,
     SubagentCoordinator,
     VerificationRunner,
 )
 from windcode.sandbox import SandboxPreset, create_sandbox_backend
 from windcode.sessions import (
-    ArtifactStore,
     EventRecord,
     SessionMetadata,
     SessionStore,
@@ -115,7 +104,6 @@ from windcode.tools import (
     create_builtin_registry,
     register_memory_tools,
 )
-from windcode.tools.shell import ShellTool
 from windcode.worktrees import WorktreeManager
 
 
@@ -588,36 +576,19 @@ class Windcode:
     def start_run(self, request: RunRequest) -> RunHandle:
         if not self._entered or self.tool_registry is None:
             raise RuntimeError("start runs inside the Windcode async context")
-        workspace = request.workspace.expanduser().resolve()
-        if not workspace.is_dir():
-            raise ValueError(f"workspace is not a directory: {workspace}")
-        sessions_root = self.state_root / "sessions"
-        existing_session = (
-            request.session_id is not None
-            and (sessions_root / request.session_id / "meta.json").exists()
+        builder = RunBuilder(
+            self.config,
+            state_root=self.state_root,
+            base_tools=self.tool_registry,
+            model_chain=self._model_chain,
         )
-        if existing_session:
-            assert request.session_id is not None
-            session = SessionStore.open(sessions_root, request.session_id)
-        else:
-            session = SessionStore.create(sessions_root, request.session_id)
-        if not session.metadata.summary:
-            session.set_summary(self._session_summary(request.prompt))
-        initial_messages: tuple[Message, ...] = ()
-        if existing_session and session.metadata.head_record_id is not None:
-            records = ancestor_chain(
-                session.load_records(),
-                session.metadata.head_record_id,
-            )
-            initial_messages = heal_dangling_tool_calls(
-                tuple(
-                    message_from_dict(record.payload)
-                    for record in records
-                    if record.record_type == "conversation_message"
-                )
-            )
-        run_id = uuid4().hex
-        artifact_store = ArtifactStore(session.session_dir)
+        preparation = builder.prepare_parent(request)
+        workspace = preparation.workspace
+        existing_session = preparation.existing_session
+        session = preparation.session
+        initial_messages = preparation.initial_messages
+        run_id = preparation.run_id
+        artifact_store = preparation.artifact_store
         extension_snapshot = self._extensions().snapshot
         client_extensions = self._client_extensions
         startup_task = self._mcp_start_task
@@ -638,89 +609,24 @@ class Windcode:
             mcp_runtime=(None if client_extensions is None else client_extensions.mcp),
             mcp_tool_catalogs=mcp_tool_catalogs,
         )
-        resources = RunResources.create(
-            session=session,
-            run_id=run_id,
-            state_root=self.state_root,
-            artifact_store=artifact_store,
-            trace_config=self.config.trace,
-            context_config=self.config.context,
-        )
+        resources = builder.resources(preparation)
         bus = resources.event_bus
         run_extensions.event_observer = lambda event: bus.publish(event, durable=True)
-        mode = (
-            PermissionMode(request.permission_mode)
-            if request.permission_mode is not None
-            else self.config.permission.mode
-        )
-        preset = SandboxPreset(self.config.sandbox.preset)
-        writable_roots = tuple(
-            (workspace / value).resolve()
-            if not Path(value).is_absolute()
-            else Path(value).resolve()
-            for value in self.config.sandbox.writable_roots
-        )
-        sandbox, sandbox_policy = create_sandbox_backend(
-            workspace,
-            preset=preset,
-            writable_roots=writable_roots,
-            network_enabled=self.config.sandbox.network_enabled,
-        )
-        run_registry = self.tool_registry.clone()
-        register_skill_tools(run_registry, run_extensions.skills, run_extensions.activate_skill)
-        register_mcp_status_tool(
-            run_registry,
-            extension_snapshot.capabilities,
+        access = builder.prepare_parent_access(
+            preparation,
+            request,
+            run_extensions,
+            extension_snapshot,
             mcp_tool_catalogs,
             mcp_selected_tools,
         )
-        if run_extensions.mcp.server_ids:
-            register_mcp_management_tools(
-                run_registry, run_extensions.mcp_capabilities, mcp_selected_tools
-            )
-        run_registry.register(
-            ShellTool(
-                sandbox=sandbox,
-                sandbox_policy=sandbox_policy,
-                default_timeout=self.config.budgets.shell_timeout_seconds,
-            ),
-            replace=True,
-        )
-        policy = PolicyEngine(
-            mode,
-            sandbox_enabled=preset is not SandboxPreset.DANGER_FULL_ACCESS,
-            sandbox_available=sandbox is not None and sandbox.status.available,
-            rule_store=CommandRuleStore(self.state_root, workspace),
-        )
-        for record in session.load_records():
-            if record.record_type != "session_approval":
-                continue
-            if record.payload.get("workspace") != str(workspace):
-                continue
-            tool_name = record.payload.get("tool_name")
-            raw_rule = record.payload.get("rule")
-            if isinstance(raw_rule, Mapping):
-                try:
-                    policy.restore_session_rule(CommandRule.model_validate(raw_rule))
-                except ValueError:
-                    pass
-                continue
-            raw_effects = record.payload.get("effects")
-            if not isinstance(tool_name, str) or not isinstance(raw_effects, list):
-                continue
-            try:
-                effects = frozenset(
-                    ToolEffect(str(effect)) for effect in cast(list[object], raw_effects)
-                )
-            except ValueError:
-                continue
-            policy.restore_session_approval(tool_name, effects)
-        child_tools = run_registry.clone()
-        if "search_mcp_tools" in run_registry.names():
-            search_mcp_tools = run_registry.get("search_mcp_tools")
-            if isinstance(search_mcp_tools, SearchMcpToolsTool):
-                search_mcp_tools.add_registry(child_tools)
-        instructions = load_instructions(workspace, workspace_root=workspace)
+        mode = access.permission_mode
+        sandbox = access.sandbox
+        sandbox_policy = access.sandbox_policy
+        run_registry = access.registry
+        policy = access.policy
+        child_tools = access.child_tools
+        instructions = access.instructions
         run_memory = (
             MemoryService(self.state_root, workspace) if self.config.memory.enabled else None
         )
@@ -786,12 +692,10 @@ class Windcode:
         control = RunControl(budgets)
         if request.compact_before_run:
             control.request_compaction()
-        child_scope = ChildRunScope(
-            config=self.config,
-            state_root=self.state_root,
-            parent_tools=child_tools,
-            model_chain=lambda model: self._model_chain(model or request.model),
-            extension_snapshot=extension_snapshot,
+        child_scope = builder.child_scope(
+            child_tools,
+            extension_snapshot,
+            default_model=request.model,
         )
         coordinator = SubagentCoordinator(
             parent_session_id=session.metadata.session_id,

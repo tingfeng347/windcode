@@ -17,7 +17,7 @@
 
 ## 阶段 1：依赖方向
 
-状态：已完成，等待阶段提交。
+状态：已完成。
 
 - 在使用者一侧定义窄协议；production 与 test adapter 共享真实 seam。
 - 子代理工具不再依赖具体 `SubagentCoordinator`。
@@ -33,10 +33,18 @@
 
 ## 阶段 2：运行装配
 
+状态：进行中。
+
 - 引入唯一、profile-driven `RunBuilder`。
 - 父运行和子运行委托同一深模块，保留权限、预算、worktree 和生命周期差异。
 - `Windcode.start_run` 只校验请求、调用 builder 并返回 handle。
 - 收缩 `AgentLoop` 构造 interface，但不改变持久化和取消时序。
+- 已完成共享 `RunResources`、`AgentLoop` 七参数 Interface、`RunHandle` 下移、
+  `ChildRunScope` capability seam，以及父会话/访问装配迁移。
+- `Windcode.start_run` C901 已从 31 降至 10，`ChildRunScope.create` 从 24 降至 3；
+  parent lifecycle、Memory 与 MCP 启动 wrapper 尚待移入 builder，阶段未关闭。
+- 当前 Python 3.11/3.12 全量测试均为 601 passed/3 skipped；Ruff、strict Pyright、build
+  和架构门禁通过。
 
 ## 阶段 3：扩展、Provider 与工具
 
