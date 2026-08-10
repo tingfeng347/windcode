@@ -71,6 +71,104 @@ async def test_reload_discovers_project_only_after_explicit_enable(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_capability_trust_overrides_workspace_default_per_item(tmp_path: Path) -> None:
+    for name in ("review", "test"):
+        skill = tmp_path / ".windcode" / "skills" / name
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {name}\n---\nbody",
+            encoding="utf-8",
+        )
+    service = ExtensionService(
+        ExtensionConfig(enabled=True),
+        tmp_path,
+        ExtensionStateStore(tmp_path / "state.json"),
+        tmp_path / "plugins",
+    )
+    await service.reload()
+
+    await service.trust_capability("skill:review", True)
+    await service.reload()
+
+    records = {
+        record.capability_id: record
+        for record in service.snapshot.capabilities
+        if record.kind is CapabilityKind.SKILL
+    }
+    assert records["skill:review"].trusted
+    assert not records["skill:test"].trusted
+
+    await service.trust_workspace(tmp_path, True)
+    await service.reload()
+    assert all(
+        record.trusted
+        for record in service.snapshot.capabilities
+        if record.kind is CapabilityKind.SKILL
+    )
+
+    await service.trust_capability("skill:review", False)
+    await service.reload()
+    await service.trust_workspace(tmp_path, True)
+    await service.reload()
+    assert all(
+        record.trusted
+        for record in service.snapshot.capabilities
+        if record.kind is CapabilityKind.SKILL
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_capability_trust_is_global_and_per_item(tmp_path: Path) -> None:
+    user_root = tmp_path / "user-skills"
+    for name in ("global-review", "global-test"):
+        skill = user_root / name
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {name}\n---\nbody",
+            encoding="utf-8",
+        )
+    state_path = tmp_path / "state.json"
+    first_workspace = tmp_path / "first"
+    second_workspace = tmp_path / "second"
+    first_workspace.mkdir()
+    second_workspace.mkdir()
+    first = ExtensionService(
+        ExtensionConfig(enabled=True),
+        first_workspace,
+        ExtensionStateStore(state_path),
+        tmp_path / "plugins",
+        user_skill_root=user_root,
+    )
+    await first.reload()
+
+    await first.trust_capability("skill:global-review", False, scope=ExtensionScope.USER)
+    await first.reload()
+    first_records = {
+        record.capability_id: record
+        for record in first.snapshot.capabilities
+        if record.kind is CapabilityKind.SKILL
+    }
+    assert not first_records["skill:global-review"].trusted
+    assert first_records["skill:global-test"].trusted
+
+    second = ExtensionService(
+        ExtensionConfig(enabled=True),
+        second_workspace,
+        ExtensionStateStore(state_path),
+        tmp_path / "plugins",
+        user_skill_root=user_root,
+    )
+    await second.reload()
+    second_records = {
+        record.capability_id: record
+        for record in second.snapshot.capabilities
+        if record.kind is CapabilityKind.SKILL
+    }
+    assert not second_records["skill:global-review"].trusted
+    assert second_records["skill:global-test"].trusted
+
+
+@pytest.mark.asyncio
 async def test_state_skill_roots_are_combined_and_project_overrides_user(tmp_path: Path) -> None:
     user_root = tmp_path / "user" / "skills"
     project_root = tmp_path / "workspace" / ".windcode" / "skills"

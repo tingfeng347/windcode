@@ -209,13 +209,56 @@ class ExtensionService:
     async def trust_workspace(self, workspace: Path, trusted: bool) -> ManagementResult:
         if self._state is None:
             return ManagementResult(False, False, self._state_diagnostics)
-        before = self.state_store.is_workspace_trusted(self._state, workspace)
-        if before is trusted:
+        updated = self.state_store.set_workspace_trust(self._state, workspace, trusted)
+        if updated == self._state:
             return ManagementResult(False, False)
         self._state = self._audited(
-            self.state_store.set_workspace_trust(self._state, workspace, trusted),
+            updated,
             "workspace_trust_changed",
             "workspace",
+            "trusted" if trusted else "untrusted",
+        )
+        self.state_store.save(self._state)
+        return ManagementResult(True, True)
+
+    async def trust_capability(
+        self,
+        extension_id: str,
+        trusted: bool,
+        *,
+        scope: ExtensionScope | None = None,
+    ) -> ManagementResult:
+        if self._state is None:
+            return ManagementResult(False, False, self._state_diagnostics)
+        supported_scopes = (ExtensionScope.PROJECT, ExtensionScope.USER)
+        matches: list[CapabilityRecord] = []
+        for item in self.snapshot.capabilities:
+            if (
+                item.capability_id == extension_id
+                and item.source.scope in supported_scopes
+                and (scope is None or item.source.scope is scope)
+            ):
+                matches.append(item)
+        if not matches:
+            if any(item.capability_id == extension_id for item in self.snapshot.capabilities):
+                raise ValueError("capability trust only applies to project or user extensions")
+            raise KeyError(f"unknown extension or capability: {extension_id}")
+        if len(matches) > 1:
+            raise ValueError(f"ambiguous extension capability: {extension_id}")
+        record = matches[0]
+        if record.trusted is trusted:
+            return ManagementResult(False, False)
+        trust_id = self._trust_id(record)
+        if record.source.scope is ExtensionScope.PROJECT:
+            updated = self.state_store.set_capability_trust(
+                self._state, self.workspace, trust_id, trusted
+            )
+        else:
+            updated = self.state_store.set_global_capability_trust(self._state, trust_id, trusted)
+        self._state = self._audited(
+            updated,
+            "capability_trust_changed",
+            trust_id,
             "trusted" if trusted else "untrusted",
         )
         self.state_store.save(self._state)
@@ -240,6 +283,7 @@ class ExtensionService:
                 )
                 result = self._with_configured_mcp(result, workspace_trusted=trusted)
                 result = self._with_installed_plugins(result)
+                result = self._with_capability_trust(result)
             candidate = build_candidate(
                 result,
                 generation=self.snapshot.generation + 1,
@@ -259,6 +303,44 @@ class ExtensionService:
                 self.state_store.save(self._state)
             published = self._snapshots.publish(candidate)
             return ManagementResult(published, False, candidate.snapshot.diagnostics)
+
+    def _with_capability_trust(self, result: DiscoveryResult) -> DiscoveryResult:
+        if self._state is None:
+            return result
+        records: list[CapabilityRecord] = []
+        for record in result.records:
+            if record.source.scope not in (ExtensionScope.PROJECT, ExtensionScope.USER):
+                records.append(record)
+                continue
+            trust_id = self._trust_id(record)
+            if record.source.scope is ExtensionScope.PROJECT:
+                trusted = self.state_store.is_capability_trusted(
+                    self._state,
+                    self.workspace,
+                    trust_id,
+                    default=record.trusted,
+                )
+            else:
+                trusted = self.state_store.is_global_capability_trusted(
+                    self._state,
+                    trust_id,
+                    default=record.trusted,
+                )
+            activation = record.activation
+            if record.enabled and activation is not ActivationState.FAILED:
+                activation = ActivationState.AVAILABLE if trusted else ActivationState.UNTRUSTED
+            records.append(replace(record, trusted=trusted, activation=activation))
+        return DiscoveryResult(tuple(records), result.definitions, result.diagnostics)
+
+    @staticmethod
+    def _trust_id(record: CapabilityRecord) -> str:
+        if record.source.plugin_id is None:
+            return record.capability_id
+        return capability_id(
+            CapabilityKind.PLUGIN,
+            record.source.plugin_id,
+            plugin_id=record.source.plugin_id,
+        )
 
     def _with_configured_mcp(
         self,

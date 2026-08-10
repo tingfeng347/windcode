@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -47,6 +47,8 @@ class ExtensionState:
     plugins: dict[str, InstalledPlugin] = field(default_factory=dict[str, InstalledPlugin])
     workspaces: dict[str, WorkspaceTrust] = field(default_factory=dict[str, WorkspaceTrust])
     enabled: dict[str, bool] = field(default_factory=dict[str, bool])
+    global_capability_trust: dict[str, bool] = field(default_factory=dict[str, bool])
+    capability_trust: dict[str, dict[str, bool]] = field(default_factory=dict[str, dict[str, bool]])
     config: dict[str, dict[str, str | int | float | bool]] = field(
         default_factory=dict[str, dict[str, str | int | float | bool]]
     )
@@ -91,6 +93,21 @@ class ExtensionStateStore:
                 enabled={
                     str(key): bool(value)
                     for key, value in cast(dict[str, object], raw.get("enabled", {})).items()
+                },
+                global_capability_trust={
+                    str(capability_id): bool(trusted)
+                    for capability_id, trusted in cast(
+                        dict[str, object], raw.get("global_capability_trust", {})
+                    ).items()
+                },
+                capability_trust={
+                    str(workspace_key): {
+                        str(capability_id): bool(trusted)
+                        for capability_id, trusted in cast(dict[str, object], values).items()
+                    }
+                    for workspace_key, values in cast(
+                        dict[str, object], raw.get("capability_trust", {})
+                    ).items()
                 },
                 config=cast(dict[str, dict[str, str | int | float | bool]], raw.get("config", {})),
                 audit=tuple(
@@ -140,16 +157,57 @@ class ExtensionStateStore:
         )
         workspaces = dict(state.workspaces)
         workspaces[record.key] = record
-        return ExtensionState(
-            state.version,
-            dict(state.plugins),
-            workspaces,
-            dict(state.enabled),
-            dict(state.config),
-            state.audit,
+        capability_trust = dict(state.capability_trust)
+        capability_trust.pop(record.key, None)
+        return replace(
+            state,
+            workspaces=workspaces,
+            capability_trust=capability_trust,
         )
 
     def is_workspace_trusted(self, state: ExtensionState, workspace: Path) -> bool:
         identity = workspace_identity(workspace)
         record = state.workspaces.get(identity.key)
         return record is not None and record.trusted
+
+    def set_capability_trust(
+        self,
+        state: ExtensionState,
+        workspace: Path,
+        capability_id: str,
+        trusted: bool,
+    ) -> ExtensionState:
+        workspace_key = workspace_identity(workspace).key
+        capability_trust = {key: dict(values) for key, values in state.capability_trust.items()}
+        capability_trust.setdefault(workspace_key, {})[capability_id] = trusted
+        return replace(state, capability_trust=capability_trust)
+
+    def is_capability_trusted(
+        self,
+        state: ExtensionState,
+        workspace: Path,
+        capability_id: str,
+        *,
+        default: bool,
+    ) -> bool:
+        workspace_key = workspace_identity(workspace).key
+        return state.capability_trust.get(workspace_key, {}).get(capability_id, default)
+
+    def set_global_capability_trust(
+        self,
+        state: ExtensionState,
+        capability_id: str,
+        trusted: bool,
+    ) -> ExtensionState:
+        values = dict(state.global_capability_trust)
+        values[capability_id] = trusted
+        return replace(state, global_capability_trust=values)
+
+    @staticmethod
+    def is_global_capability_trusted(
+        state: ExtensionState,
+        capability_id: str,
+        *,
+        default: bool,
+    ) -> bool:
+        return state.global_capability_trust.get(capability_id, default)

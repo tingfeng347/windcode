@@ -43,6 +43,7 @@ from windcode.application.contracts import (
 )
 from windcode.auth import CredentialStore, FileCredentialStore
 from windcode.config import AppConfig
+from windcode.extensions.models import ExtensionScope
 from windcode.sandbox import SandboxPreset, create_sandbox_backend
 
 
@@ -235,6 +236,15 @@ class Windcode:
         self, workspace: Path, trusted: bool = True
     ) -> ManagementResult:
         return await self._extension_application.trust_workspace(workspace, trusted)
+
+    async def trust_extension_capability(
+        self,
+        identifier: str,
+        trusted: bool = True,
+        *,
+        scope: ExtensionScope | None = None,
+    ) -> ManagementResult:
+        return await self._extension_application.trust_capability(identifier, trusted, scope=scope)
 
     async def reload_extensions(self) -> ManagementResult:
         return await self._extension_application.reload()

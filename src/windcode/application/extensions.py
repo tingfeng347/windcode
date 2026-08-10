@@ -13,6 +13,7 @@ from windcode.extensions.mcp import McpServerState
 from windcode.extensions.mcp.catalog import McpToolDefinition
 from windcode.extensions.models import (
     CapabilityRecord,
+    ExtensionScope,
     ExtensionSnapshot,
     ManagementResult,
 )
@@ -226,6 +227,15 @@ class ExtensionApplication:
 
     async def trust_workspace(self, workspace: Path, trusted: bool) -> ManagementResult:
         return await self._require_service().trust_workspace(workspace, trusted)
+
+    async def trust_capability(
+        self,
+        identifier: str,
+        trusted: bool,
+        *,
+        scope: ExtensionScope | None = None,
+    ) -> ManagementResult:
+        return await self._require_service().trust_capability(identifier, trusted, scope=scope)
 
     def command_routes(self, *, reserved: frozenset[str]) -> tuple[CommandRoute, ...]:
         return self._require_service().command_routes(reserved=reserved)
