@@ -12,7 +12,7 @@ from textual.screen import ModalScreen
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
-from windcode.extensions.models import CapabilityKind, CapabilityRecord
+from windcode.extensions.models import CapabilityKind, CapabilityRecord, ExtensionScope
 
 
 class ExtensionManager(ModalScreen[None]):
@@ -21,6 +21,7 @@ class ExtensionManager(ModalScreen[None]):
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape", "close", "关闭"),
         Binding("space", "toggle_extension", "启用/禁用", show=True),
+        Binding("t", "toggle_trust", "信任/取消信任", show=True),
         Binding("enter", "inspect", "查看状态", show=True),
     ]
 
@@ -33,6 +34,13 @@ class ExtensionManager(ModalScreen[None]):
     class Closed(Message):
         pass
 
+    class Trust(Message):
+        def __init__(self, identifier: str, trusted: bool, scope: ExtensionScope) -> None:
+            super().__init__()
+            self.identifier = identifier
+            self.trusted = trusted
+            self.scope = scope
+
     def __init__(self, records: tuple[CapabilityRecord, ...]) -> None:
         super().__init__()
         self.records = records
@@ -42,12 +50,19 @@ class ExtensionManager(ModalScreen[None]):
             with Horizontal(id="extension-manager-header"):
                 yield Static("扩展", id="extension-manager-title")
                 yield Static("Esc 关闭", id="extension-manager-close")
-            yield Static("方向键选择 ·查看状态 · Space 启用或禁用", id="extension-help")
+            yield Static(
+                "Enter 查看 · Space 启用/禁用 · T 信任/取消信任所选",
+                id="extension-help",
+            )
             yield OptionList(*self._options(), id="extension-list")
             yield Static("选择扩展查看状态", id="extension-details")
 
     def on_mount(self) -> None:
         self.query_one("#extension-list", OptionList).focus()
+
+    @staticmethod
+    def option_id(record: CapabilityRecord) -> str:
+        return f"capability:{record.source.scope.value}:{record.capability_id}"
 
     def _options(self) -> tuple[Option, ...]:
         options: list[Option] = []
@@ -75,18 +90,27 @@ class ExtensionManager(ModalScreen[None]):
                 text = Text("  ")
                 text.append(prefix + record.public_name, style="bold" if record.enabled else "dim")
                 text.append("  ")
+                if record.source.scope in (ExtensionScope.PROJECT, ExtensionScope.USER):
+                    text.append(
+                        "✓ 已信任" if record.trusted else "! 未信任",
+                        style="#70b892" if record.trusted else "#d9a557",
+                    )
+                    text.append("  ")
                 text.append(
                     "✓ 已启用" if record.enabled else "○ 已禁用",
                     style=("#70b892" if record.enabled else "#88939b"),
                 )
-                options.append(Option(text, id=record.capability_id))
+                options.append(Option(text, id=self.option_id(record)))
         return tuple(options)
 
     def _selected_record(self) -> CapabilityRecord | None:
         option = self.query_one("#extension-list", OptionList).highlighted_option
         if option is None or option.id is None:
             return None
-        return next((record for record in self.records if record.capability_id == option.id), None)
+        return next(
+            (record for record in self.records if self.option_id(record) == option.id),
+            None,
+        )
 
     def action_close(self) -> None:
         self.post_message(self.Closed())
@@ -96,6 +120,17 @@ class ExtensionManager(ModalScreen[None]):
         if record is not None:
             self.post_message(self.Toggle(record.capability_id, not record.enabled))
 
+    def action_toggle_trust(self) -> None:
+        record = self._selected_record()
+        if record is None:
+            return
+        if record.source.scope not in (ExtensionScope.PROJECT, ExtensionScope.USER):
+            self.query_one("#extension-details", Static).update(
+                "该内置或运行时扩展不支持持久化信任设置。"
+            )
+            return
+        self.post_message(self.Trust(record.capability_id, not record.trusted, record.source.scope))
+
     def action_inspect(self) -> None:
         record = self._selected_record()
         if record is not None:
@@ -104,7 +139,7 @@ class ExtensionManager(ModalScreen[None]):
     @on(OptionList.OptionHighlighted, "#extension-list")
     def option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         record = next(
-            (item for item in self.records if item.capability_id == event.option.id), None
+            (item for item in self.records if self.option_id(item) == event.option.id), None
         )
         if record is not None:
             self._show_details(record)
@@ -112,7 +147,7 @@ class ExtensionManager(ModalScreen[None]):
     @on(OptionList.OptionSelected, "#extension-list")
     def option_selected(self, event: OptionList.OptionSelected) -> None:
         record = next(
-            (item for item in self.records if item.capability_id == event.option.id), None
+            (item for item in self.records if self.option_id(item) == event.option.id), None
         )
         if record is not None:
             self._show_details(record)
@@ -128,10 +163,19 @@ class ExtensionManager(ModalScreen[None]):
             )
             if required
         ]
+        trust_scope = {
+            ExtensionScope.PROJECT: "项目",
+            ExtensionScope.USER: "全局",
+        }.get(record.source.scope)
+        trust = (
+            f" · {trust_scope}{'已信任' if record.trusted else '未信任'}"
+            if trust_scope is not None
+            else ""
+        )
         lines = [
             f"名称: {record.public_name}",
             f"类型: {record.kind.value} · 范围: {record.source.scope.value}",
-            f"状态: {record.activation.value} · {'已启用' if record.enabled else '已禁用'}",
+            f"状态: {record.activation.value}{trust} · {'已启用' if record.enabled else '已禁用'}",
             f"权限: {'、'.join(permissions) or '无'}",
             f"标识: {record.capability_id}",
         ]
@@ -164,7 +208,7 @@ class ExtensionManager(ModalScreen[None]):
         listing.add_options(self._options())
         if selected is not None:
             for index, option in enumerate(listing.options):
-                if option.id == selected.capability_id:
+                if option.id == self.option_id(selected):
                     listing.highlighted = index
                     break
         details = self._selected_record()

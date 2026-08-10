@@ -28,6 +28,7 @@ from windcode.domain.events import (
     UserResponse,
 )
 from windcode.domain.messages import TextBlock, message_from_dict
+from windcode.extensions.models import CapabilityKind, ExtensionScope
 from windcode.sdk import RunHandle, Windcode
 from windcode.tui.command_handlers import ExtensionCommandHandler, MemoryCommandHandler
 from windcode.tui.commands import (
@@ -196,11 +197,16 @@ class WindcodeApp(App[None]):
         self.set_class(self.size.width < 60, "narrow")
         self.query_one("#chat-input", ChatInput).focus()
         self._update_status("loading MCP" if self.client.required_mcp_loading else "idle")
-        if setup_message := self._model_setup_message():
-            self.query_one("#welcome-view", WelcomeView).show_notice(setup_message)
+        welcome = self.query_one("#welcome-view", WelcomeView)
+        setup_message = self._model_setup_message()
+        mcp_message = self._mcp_status_message()
+        if self.client.required_mcp_loading:
+            welcome.start_mcp_loading()
+        elif mcp_message:
+            welcome.show_notice(self._combine_startup_messages(setup_message, mcp_message))
+        elif setup_message:
+            welcome.show_notice(setup_message)
         if self.client.mcp_startup_status.total:
-            if self.client.required_mcp_loading:
-                self.query_one("#welcome-view", WelcomeView).start_mcp_loading()
             self.run_worker(self._load_required_mcp(), group="mcp-startup", exclusive=True)
         if self.session_id is not None and self.client.session_exists(self.session_id):
             await self._restore_session(self.session_id, announce=False)
@@ -215,18 +221,36 @@ class WindcodeApp(App[None]):
             return
         self.query_one("#welcome-view", WelcomeView).stop_mcp_loading()
         self._update_status("idle")
+        message = self._mcp_status_message()
+        if message:
+            await self._show_system_message(
+                self._combine_startup_messages(self._model_setup_message(), message)
+            )
+
+    def _mcp_status_message(self) -> str | None:
         status = self.client.mcp_startup_status
-        parts = [f"MCP 服务已加载 {status.loaded} 个"]
+        untrusted = sum(
+            record.kind is CapabilityKind.MCP_SERVER and record.enabled and not record.trusted
+            for record in self.client.extension_snapshot.capabilities
+        )
+        if not status.total and not untrusted:
+            return None
+        parts: list[str] = []
+        if status.loaded:
+            parts.append(f"已加载 {status.loaded} 个")
+        if status.lazy:
+            parts.append(f"{status.lazy} 个按需加载")
         if status.failed_servers:
             parts.append(
                 f"{len(status.failed_servers)} 个加载失败 ({', '.join(status.failed_servers)})"
             )
-        if status.lazy:
-            parts.append(f"{status.lazy} 个按需加载")
-        message = ", ".join(parts)
-        if setup_message := self._model_setup_message():
-            message = f"{setup_message}\n{message}"
-        await self._show_system_message(message)
+        if untrusted:
+            parts.append(f"{untrusted} 个未信任; 在 /extensions 中选择项目扩展并按 T 信任")
+        return f"MCP · {', '.join(parts)}"
+
+    @staticmethod
+    def _combine_startup_messages(*messages: str | None) -> str:
+        return "\n".join(message for message in messages if message)
 
     def on_resize(self, event: events.Resize) -> None:
         self.set_class(event.size.width < 60, "narrow")
@@ -438,11 +462,27 @@ class WindcodeApp(App[None]):
     @on(ChatInput.SkillMenuUpdate)
     def update_skill_menu(self, event: ChatInput.SkillMenuUpdate) -> None:
         menu = self.query_one("#command-menu", CommandMenu)
+        if event.prefix is None:
+            menu.hide()
+            return
         skills = tuple(
             SkillDefinition(item.name, item.description) for item in self.client.search_skills()
         )
-        matches = complete_skills(event.prefix, skills) if event.prefix is not None else ()
-        menu.show_commands(matches) if matches else menu.hide()
+        matches = complete_skills(event.prefix, skills)
+        if matches:
+            menu.show_commands(matches)
+            return
+        if event.prefix != "$":
+            menu.show_empty("没有匹配的 Skill")
+            return
+        has_untrusted_project_skill = any(
+            record.kind is CapabilityKind.SKILL and record.enabled and not record.trusted
+            for record in self.client.extension_snapshot.capabilities
+        )
+        if has_untrusted_project_skill:
+            menu.show_empty("项目 Skill 尚未信任 · 在 /extensions 中选择后按 T 信任")
+        else:
+            menu.show_empty("未发现可用 Skill · 用户 Skill 目录: ~/.windcode/skills")
 
     def _extension_command_definitions(self) -> tuple[CommandDefinition, ...]:
         return tuple(
@@ -764,6 +804,42 @@ class WindcodeApp(App[None]):
             return
         if self.extension_manager is not None:
             self.extension_manager.refresh_records(self.client.extension_snapshot.capabilities)
+
+    @on(ExtensionManager.Trust)
+    async def extension_manager_trust(self, event: ExtensionManager.Trust) -> None:
+        try:
+            await self.client.trust_extension_capability(
+                event.identifier, event.trusted, scope=event.scope
+            )
+            await self.client.reload_extensions()
+        except Exception as exc:
+            if self.extension_manager is not None:
+                self.extension_manager.query_one("#extension-details", Static).update(
+                    f"信任状态更新失败: {exc}"
+                )
+            return
+
+        if self.extension_manager is not None:
+            self.extension_manager.refresh_records(self.client.extension_snapshot.capabilities)
+        self._update_status("loading MCP" if self.client.required_mcp_loading else "idle")
+        welcome = self.query_one("#welcome-view", WelcomeView)
+        mcp_message = self._mcp_status_message()
+        if self.client.required_mcp_loading:
+            welcome.start_mcp_loading()
+        else:
+            scope_label = "项目扩展" if event.scope is ExtensionScope.PROJECT else "全局扩展"
+            trust_message = (
+                f"已信任{scope_label} {event.identifier}"
+                if event.trusted
+                else f"已取消{scope_label} {event.identifier} 的信任"
+            )
+            welcome.show_notice(
+                self._combine_startup_messages(
+                    self._model_setup_message(), trust_message, mcp_message
+                )
+            )
+        if self.client.mcp_startup_status.total:
+            self.run_worker(self._load_required_mcp(), group="mcp-startup", exclusive=True)
 
     async def _command(self, command: SlashCommand) -> None:
         messages = self.query_one("#chat-area", MessageStream)

@@ -16,6 +16,7 @@ from windcode.config import (
     ProviderProtocol,
     SandboxConfig,
 )
+from windcode.config.models import ExtensionConfig, McpStdioConfig
 from windcode.domain.events import RunRequest
 from windcode.domain.messages import TextBlock
 from windcode.domain.models import (
@@ -253,6 +254,26 @@ async def test_required_mcp_startup_failure_blocks_first_reply(tmp_path: Path) -
         assert app.client.mcp_startup_status.failed_servers == ("blocked",)
         assert app.is_running
         assert app.handle is not None and app.handle.done
+
+
+@pytest.mark.asyncio
+async def test_startup_explains_untrusted_project_mcp(tmp_path: Path) -> None:
+    config = AppConfig(
+        extensions=ExtensionConfig(
+            enabled=True,
+            mcp_servers={"project": McpStdioConfig(command="never-started")},
+            project_mcp_servers=frozenset({"project"}),
+        )
+    )
+    app = WindcodeApp(config, workspace=tmp_path, state_root=tmp_path / "state")
+
+    async with app.run_test(size=(100, 32)):
+        notice = app.query_one("#welcome-notice", Static)
+        content = str(notice.content)
+        assert "MCP" in content
+        assert "1 个未信任" in content
+        assert "/extensions" in content
+        assert "按 T" in content
 
 
 @pytest.mark.asyncio

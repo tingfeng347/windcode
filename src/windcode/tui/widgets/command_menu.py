@@ -26,7 +26,7 @@ class CommandMenu(Static):
 
     @property
     def is_open(self) -> bool:
-        return bool(self.display and self._items)
+        return bool(self.display)
 
     @property
     def items(self) -> tuple[CompletionDefinition, ...]:
@@ -44,6 +44,12 @@ class CommandMenu(Static):
         self._cursor = 0
         self.display = True
         self._render_items()
+
+    def show_empty(self, message: str) -> None:
+        self._items = ()
+        self._cursor = 0
+        self.display = True
+        self.update(f"  [dim]{escape(message)}[/]")
 
     def hide(self) -> None:
         self.display = False

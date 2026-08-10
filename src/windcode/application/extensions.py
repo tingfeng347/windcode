@@ -194,7 +194,11 @@ class ExtensionApplication:
     @property
     def required_loading(self) -> bool:
         current = self._current
-        return current is not None and not current.startup_task.done()
+        return (
+            current is not None
+            and bool(current.extensions.mcp.required_server_ids)
+            and not current.startup_task.done()
+        )
 
     @property
     def startup_status(self) -> McpStartupStatus:

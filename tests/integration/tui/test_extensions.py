@@ -9,8 +9,19 @@ from windcode.config import AppConfig
 from windcode.config.models import ExtensionConfig, McpStdioConfig
 from windcode.domain.messages import TextBlock
 from windcode.domain.models import ModelCompleted, ModelEvent, ModelRequest, StopReason, TextDelta
+from windcode.extensions.models import (
+    CapabilityKind,
+    CapabilityRecord,
+    ExtensionScope,
+    ExtensionSource,
+)
 from windcode.tui import WindcodeApp
-from windcode.tui.widgets import ChatInput, CommandMenu, ExtensionManager, WelcomeView
+from windcode.tui.widgets import (
+    ChatInput,
+    CommandMenu,
+    ExtensionManager,
+    WelcomeView,
+)
 
 
 class CapturingTransport:
@@ -26,6 +37,23 @@ class CapturingTransport:
 
     async def aclose(self) -> None:
         pass
+
+
+def test_extension_manager_distinguishes_same_capability_across_scopes() -> None:
+    records = tuple(
+        CapabilityRecord(
+            capability_id="skill:review",
+            public_name="review",
+            kind=CapabilityKind.SKILL,
+            source=ExtensionSource(scope),
+        )
+        for scope in (ExtensionScope.USER, ExtensionScope.PROJECT)
+    )
+
+    option_ids = {ExtensionManager.option_id(record) for record in records}
+
+    assert "capability:user:skill:review" in option_ids
+    assert "capability:project:skill:review" in option_ids
 
 
 @pytest.mark.asyncio
@@ -117,6 +145,143 @@ async def test_plugin_skill_is_selected_with_dollar_menu_and_loads_sourced_conte
 
 
 @pytest.mark.asyncio
+async def test_bare_dollar_explains_untrusted_project_skills(tmp_path: Path) -> None:
+    skill = tmp_path / ".windcode" / "skills" / "review"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: review\ndescription: Review code\n---\nReview this project.\n",
+        encoding="utf-8",
+    )
+    app = WindcodeApp(
+        AppConfig(extensions=ExtensionConfig(enabled=True)),
+        workspace=tmp_path,
+        state_root=tmp_path / "state",
+    )
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.press("$")
+        await pilot.pause()
+
+        menu = app.query_one("#command-menu", CommandMenu)
+        assert menu.display
+        assert not menu.items
+        assert "项目 Skill 尚未信任" in str(menu.content)
+        assert "/extensions" in str(menu.content)
+        assert "按 T" in str(menu.content)
+
+        await app.client.trust_extension_workspace(tmp_path)
+        await app.client.reload_extensions()
+        app.query_one("#chat-input", ChatInput).clear()
+        await pilot.press("$")
+        await pilot.pause()
+
+        assert [item.name for item in menu.items] == ["review"]
+
+
+@pytest.mark.asyncio
+async def test_extension_manager_t_toggles_selected_capability_trust(tmp_path: Path) -> None:
+    skill = tmp_path / ".windcode" / "skills" / "review"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: review\ndescription: Review code\n---\nReview this project.\n",
+        encoding="utf-8",
+    )
+    app = WindcodeApp(
+        AppConfig(
+            extensions=ExtensionConfig(
+                enabled=True,
+                mcp_servers={"project": McpStdioConfig(command="never-started")},
+                project_mcp_servers=frozenset({"project"}),
+            )
+        ),
+        workspace=tmp_path,
+        state_root=tmp_path / "state",
+    )
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.press(*"/extensions", "enter")
+        await pilot.pause()
+
+        manager = cast(ExtensionManager, app.screen)
+        listing = manager.query_one("#extension-list", OptionList)
+        listing.highlighted = next(
+            index
+            for index, option in enumerate(listing.options)
+            if option.id == "capability:project:skill:review"
+        )
+        option = listing.highlighted_option
+        assert option is not None
+        assert "未信任" in str(option.prompt)
+
+        await pilot.press("t")
+        await pilot.pause()
+
+        assert [item.name for item in app.client.search_skills()] == ["review"]
+        record = (await app.client.inspect_extension("skill:review"))[0]
+        assert record.trusted
+        mcp = (await app.client.inspect_extension("mcp_server:project"))[0]
+        assert not mcp.trusted
+        assert app.client.mcp_startup_status.total == 0
+        option = listing.highlighted_option
+        assert option is not None
+        assert "已信任" in str(option.prompt)
+
+        listing.highlighted = next(
+            index
+            for index, item in enumerate(listing.options)
+            if item.id == "capability:project:mcp_server:project"
+        )
+        await pilot.press("t")
+        await pilot.pause()
+
+        assert [item.name for item in app.client.search_skills()] == ["review"]
+        assert (await app.client.inspect_extension("skill:review"))[0].trusted
+        assert (await app.client.inspect_extension("mcp_server:project"))[0].trusted
+        assert app.client.mcp_startup_status.lazy == 1
+        option = listing.highlighted_option
+        assert option is not None
+        assert "已信任" in str(option.prompt)
+
+
+@pytest.mark.asyncio
+async def test_extension_manager_t_toggles_global_capability_trust(tmp_path: Path) -> None:
+    app = WindcodeApp(
+        AppConfig(
+            extensions=ExtensionConfig(
+                enabled=True,
+                mcp_servers={"global": McpStdioConfig(command="never-started")},
+            )
+        ),
+        workspace=tmp_path,
+        state_root=tmp_path / "state",
+    )
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.press(*"/extensions", "enter")
+        await pilot.pause()
+
+        manager = cast(ExtensionManager, app.screen)
+        listing = manager.query_one("#extension-list", OptionList)
+        listing.highlighted = next(
+            index
+            for index, option in enumerate(listing.options)
+            if option.id == "capability:user:mcp_server:global"
+        )
+        option = listing.highlighted_option
+        assert option is not None
+        assert "已信任" in str(option.prompt)
+
+        await pilot.press("t")
+        await pilot.pause()
+
+        record = (await app.client.inspect_extension("mcp_server:global"))[0]
+        assert not record.trusted
+        option = listing.highlighted_option
+        assert option is not None
+        assert "未信任" in str(option.prompt)
+
+
+@pytest.mark.asyncio
 async def test_extension_manager_inspects_and_toggles_a_plugin(tmp_path: Path) -> None:
     fixture = Path(__file__).parents[2] / "fixtures" / "extensions" / "complete_plugin"
     app = WindcodeApp(
@@ -136,12 +301,12 @@ async def test_extension_manager_inspects_and_toggles_a_plugin(tmp_path: Path) -
         manager = cast(ExtensionManager, app.screen)
         listing = manager.query_one("#extension-list", OptionList)
         option_ids = {option.id for option in listing.options}
-        assert "plugin:complete/skill/review" not in option_ids
-        assert "plugin:complete/mcp_server/analysis" not in option_ids
+        assert "capability:user:plugin:complete/skill/review" not in option_ids
+        assert "capability:user:plugin:complete/mcp_server/analysis" not in option_ids
         plugin_index = next(
             index
             for index, option in enumerate(listing.options)
-            if option.id == "plugin:complete/plugin/complete"
+            if option.id == "capability:user:plugin:complete/plugin/complete"
         )
         listing.highlighted = plugin_index
         await pilot.press("enter")
@@ -178,7 +343,7 @@ async def test_extension_manager_toggles_configured_mcp_with_space(tmp_path: Pat
         listing.highlighted = next(
             index
             for index, option in enumerate(listing.options)
-            if option.id == "mcp_server:toggleable"
+            if option.id == "capability:user:mcp_server:toggleable"
         )
         await pilot.press("space")
         await pilot.pause()
