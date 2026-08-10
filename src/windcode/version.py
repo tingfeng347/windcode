@@ -1,3 +1,3 @@
 """Windcode package version shared by public metadata and compatibility checks."""
 
-VERSION = "0.3.1"
+VERSION = "3.0.2"
