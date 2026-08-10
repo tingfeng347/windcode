@@ -16,6 +16,12 @@ Windcode 是一个面向真实代码仓库的终端 Coding Agent。它可以理�
 - 使用形态：交互式 TUI（基于 Textual），核心运行时也可作为 Python SDK 使用。
 - 设计理念：安全优先、默认可审计、易于通过 MCP / Skills / Plugins 扩展。
 
+## v0.3.1 亮点
+
+- 扩展管理支持逐项信任：项目 Skill、MCP 和插件按项目保存，全局扩展按用户保存，互不干扰。
+- TUI 可在 `/extensions` 中使用 `T` 单独切换所选扩展的信任状态，不再启动时自动弹出信任窗口。
+- 改进 Skill 空列表与 MCP 启动状态提示，并修复无必需 MCP 服务时错误显示加载中的问题。
+
 ## v0.3.0 亮点
 
 - 重构 runtime 与 application 装配边界，父运行和子运行共享统一的 `RunBuilder`，降低核心控制流
@@ -144,7 +150,7 @@ uv run windcode /path/to/project
 发布版本可从 GitHub Container Registry 拉取，并以交互模式挂载待处理的项目目录：
 
 ```bash
-docker run --rm -it -v "$PWD:/workspace" ghcr.io/tingfeng347/windcode:0.3.0
+docker run --rm -it -v "$PWD:/workspace" ghcr.io/tingfeng347/windcode:0.3.1
 ```
 
 完整的发布、私有镜像登录和状态持久化说明见 [GHCR 镜像说明](docs/ghcr.md)。
