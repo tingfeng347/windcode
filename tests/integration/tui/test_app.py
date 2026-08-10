@@ -18,7 +18,7 @@ from windcode.config import (
 )
 from windcode.config.models import ExtensionConfig, McpStdioConfig
 from windcode.domain.events import RunRequest
-from windcode.domain.messages import TextBlock
+from windcode.domain.messages import TextBlock, ToolResultBlock
 from windcode.domain.models import (
     ModelCompleted,
     ModelEvent,
@@ -36,6 +36,7 @@ from windcode.tui.widgets import (
     MemoryManager,
     MessageStream,
     ProviderManager,
+    QuestionWidget,
     WelcomeView,
 )
 
@@ -112,6 +113,36 @@ class QueuedTransport:
         pass
 
 
+class AskQuestionTransport:
+    name = "ask-question"
+
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+        self.tool_output = ""
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            yield ToolCallDelta(
+                "question",
+                "ask_user",
+                (
+                    '{"questions":[{"id":"strategy","prompt":"选择方案",'
+                    '"options":["方案 A","方案 B"]}]}'
+                ),
+            )
+            yield ModelCompleted(StopReason.TOOL_USE)
+            return
+        result = request.messages[-1].content[0]
+        assert isinstance(result, ToolResultBlock)
+        self.tool_output = result.content
+        yield TextDelta("已采用方案 B。")
+        yield ModelCompleted(StopReason.STOP)
+
+    async def aclose(self) -> None:
+        pass
+
+
 @pytest.mark.asyncio
 async def test_new_session_shows_welcome_and_accepts_status_command(tmp_path: Path) -> None:
     app = WindcodeApp(AppConfig(), workspace=tmp_path, state_root=tmp_path / "state")
@@ -128,6 +159,24 @@ async def test_new_session_shows_welcome_and_accepts_status_command(tmp_path: Pa
         assert "会话: 新会话" in str(notice.content)
         assert "委派: explicit" in str(notice.content)
         assert not app.query_one("#command-menu", CommandMenu).is_open
+
+
+@pytest.mark.asyncio
+async def test_ask_question_selection_reaches_next_model_request(tmp_path: Path) -> None:
+    app = WindcodeApp(AppConfig(), workspace=tmp_path, state_root=tmp_path / "state")
+    transport = AskQuestionTransport()
+    async with app.run_test(size=(80, 24)) as pilot:
+        app.client.register_transport("ask-question", "model", transport, primary=True)
+        app.query_one("#chat-input", ChatInput).insert("请让我选择方案")
+        await pilot.press("enter")
+        while not list(app.query(QuestionWidget)):
+            await pilot.pause(0.01)
+
+        await pilot.press("enter", "down", "down", "enter")
+        while app.handle is None or not app.handle.done:
+            await pilot.pause(0.01)
+
+    assert "方案 B" in transport.tool_output
 
 
 @pytest.mark.asyncio

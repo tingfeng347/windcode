@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -55,4 +56,12 @@ class AskUserTool:
                 is_error=True,
                 data={"error": "incomplete_user_response"},
             )
-        return ToolResult(output="user answered the questions", data={"answers": answers})
+        options = {question.id: frozenset(question.options) for question in parsed.questions}
+        if any(answer not in options[question_id] for question_id, answer in answers.items()):
+            return ToolResult(
+                output="user response contains an invalid option",
+                is_error=True,
+                data={"error": "invalid_user_response"},
+            )
+        data = {"answers": answers}
+        return ToolResult(output=json.dumps(data, ensure_ascii=False, sort_keys=True), data=data)

@@ -19,6 +19,7 @@ async def test_waits_for_run_response_channel(tmp_path: Path) -> None:
         AskUserInput(questions=(Question(id="choice", prompt="Continue?", options=("yes", "no")),)),
     )
     assert result.data["answers"] == {"choice": "yes"}
+    assert '"choice": "yes"' in result.output
 
 
 def test_validates_question_and_option_counts() -> None:
