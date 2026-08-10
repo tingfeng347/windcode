@@ -12,12 +12,16 @@ from windcode.memory import (
     MemoryStatus,
 )
 from windcode.tools.memory import (
+    MemoryDeleteInput,
+    MemoryDeleteTool,
     MemoryGetInput,
     MemoryGetTool,
     MemoryListInput,
     MemoryListTool,
     MemorySearchInput,
     MemorySearchTool,
+    MemoryUpdateInput,
+    MemoryUpdateTool,
     MemoryWriteInput,
     MemoryWriteTool,
 )
@@ -217,6 +221,204 @@ async def test_memory_write_activates_experience_without_evidence(tmp_path: Path
     record = service.store.get(str(result.data["memory_id"]))
     assert record.activation is MemoryActivation.SEARCH
     assert record.evidence
+
+
+async def test_memory_write_allows_model_selected_experience_without_explicit_intent(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    service = MemoryService(tmp_path / "state", workspace)
+
+    async def observe(action: str, details: dict[str, object]) -> None:
+        del action, details
+
+    tool = MemoryWriteTool(
+        service,
+        observe,
+        max_chars=4_000,
+        user_prompt="修复解析器后, focused tests 证明边界检查应放在规范化之后",
+        source=MemorySource("session", "run"),
+    )
+    result = await tool.execute(
+        context(workspace),
+        MemoryWriteInput(
+            content="解析器的边界检查应放在输入规范化之后, 并用 focused tests 验证。",
+            kind=MemoryKind.EXPERIENCE,
+        ),
+    )
+
+    assert not result.is_error
+    assert result.data["result"] == "stored"
+    assert result.data["kind"] == MemoryKind.EXPERIENCE.value
+
+
+async def test_memory_update_revises_visible_experience_in_place(tmp_path: Path) -> None:
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    service = MemoryService(tmp_path / "state", workspace)
+    original = service.create_candidate(
+        kind=MemoryKind.EXPERIENCE,
+        scope=MemoryScope.PROJECT,
+        title="解析器经验",
+        summary="先校验再规范化",
+        body="解析器应先校验再规范化。",
+    )
+    original = service.store.transition(original.memory_id, MemoryStatus.ACTIVE)
+    observed: list[tuple[str, dict[str, object]]] = []
+
+    async def observe(action: str, details: dict[str, object]) -> None:
+        observed.append((action, details))
+
+    tool = MemoryUpdateTool(
+        service,
+        observe,
+        max_chars=4_000,
+        user_prompt="修复解析器并验证了正确顺序",
+    )
+    result = await tool.execute(
+        context(workspace),
+        MemoryUpdateInput(
+            memory_id=original.memory_id[:10],
+            content="解析器应先规范化输入, 再执行边界检查。",
+        ),
+    )
+
+    updated = service.store.get(original.memory_id)
+    assert not result.is_error
+    assert result.data["result"] == "updated"
+    assert result.data["memory_id"] == original.memory_id
+    assert updated.body == "解析器应先规范化输入, 再执行边界检查。"
+    assert updated.version == original.version + 1
+    assert len(service.store.list(project_id=service.project_id)) == 1
+    assert [action for action, _ in observed] == ["updated"]
+
+
+async def test_memory_update_rejects_hidden_non_experience_and_sensitive_content(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "state"
+    first = MemoryService(state, tmp_path / "first")
+    hidden = first.create_candidate(
+        kind=MemoryKind.EXPERIENCE,
+        scope=MemoryScope.PROJECT,
+        title="项目经验",
+        summary="只属于项目 A",
+        body="项目 A 的经验。",
+    )
+    first.store.transition(hidden.memory_id, MemoryStatus.ACTIVE)
+    second = MemoryService(state, tmp_path / "second")
+    profile = second.create_candidate(
+        kind=MemoryKind.USER_PROFILE,
+        scope=MemoryScope.USER,
+        title="回答偏好",
+        summary="偏好简洁回答",
+        body="用户偏好简洁回答。",
+    )
+    second.store.transition(profile.memory_id, MemoryStatus.ACTIVE)
+    visible = second.create_candidate(
+        kind=MemoryKind.EXPERIENCE,
+        scope=MemoryScope.PROJECT,
+        title="可见经验",
+        summary="当前项目经验",
+        body="当前项目的经验。",
+    )
+    second.store.transition(visible.memory_id, MemoryStatus.ACTIVE)
+
+    async def observe(action: str, details: dict[str, object]) -> None:
+        del action, details
+
+    tool = MemoryUpdateTool(
+        second,
+        observe,
+        max_chars=4_000,
+        user_prompt="整理已有经验",
+    )
+    assert tool.effects == frozenset({ToolEffect.OUTSIDE_WORKSPACE})
+    hidden_result = await tool.execute(
+        context(second.workspace),
+        MemoryUpdateInput(memory_id=hidden.memory_id, content="覆盖其他项目经验。"),
+    )
+    profile_result = await tool.execute(
+        context(second.workspace),
+        MemoryUpdateInput(memory_id=profile.memory_id, content="改变用户偏好。"),
+    )
+    sensitive_result = await tool.execute(
+        context(second.workspace),
+        MemoryUpdateInput(memory_id=visible.memory_id, content="API key: abc"),
+    )
+
+    assert hidden_result.data["error"] == "memory_not_found_or_ambiguous"
+    assert profile_result.data["error"] == "memory_kind_not_updatable"
+    assert sensitive_result.data["error"] == "sensitive_memory_rejected"
+
+
+async def test_memory_delete_removes_visible_memory_without_keyword_gate(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "state"
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    service = MemoryService(state, workspace)
+    memory = service.create_candidate(
+        kind=MemoryKind.EXPERIENCE,
+        scope=MemoryScope.PROJECT,
+        title="旧经验",
+        summary="已经失效的经验",
+        body="旧的处理方式。",
+    )
+    service.store.transition(memory.memory_id, MemoryStatus.ACTIVE)
+    observed: list[tuple[str, dict[str, object]]] = []
+
+    async def observe(action: str, details: dict[str, object]) -> None:
+        observed.append((action, details))
+
+    tool = MemoryDeleteTool(
+        service,
+        observe,
+        max_chars=4_000,
+    )
+    result = await tool.execute(
+        context(workspace),
+        MemoryDeleteInput(memory_id=memory.memory_id[:10]),
+    )
+
+    assert not result.is_error
+    assert result.data["result"] == "deleted"
+    assert result.data["memory_id"] == memory.memory_id
+    assert service.store.list(project_id=service.project_id) == ()
+    assert [action for action, _ in observed] == ["deleted"]
+
+
+async def test_memory_delete_cannot_delete_another_projects_record(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "state"
+    first = MemoryService(state, tmp_path / "first")
+    hidden = first.create_candidate(
+        kind=MemoryKind.EXPERIENCE,
+        scope=MemoryScope.PROJECT,
+        title="项目经验",
+        summary="只属于项目 A",
+        body="项目 A 的经验。",
+    )
+    first.store.transition(hidden.memory_id, MemoryStatus.ACTIVE)
+    second = MemoryService(state, tmp_path / "second")
+
+    async def observe(action: str, details: dict[str, object]) -> None:
+        del action, details
+
+    tool = MemoryDeleteTool(
+        second,
+        observe,
+        max_chars=4_000,
+    )
+    hidden_result = await tool.execute(
+        context(second.workspace), MemoryDeleteInput(memory_id=hidden.memory_id)
+    )
+
+    assert hidden_result.data["error"] == "memory_not_found_or_ambiguous"
+    assert first.store.get(hidden.memory_id).memory_id == hidden.memory_id
 
 
 async def test_memory_write_user_experience_intent_overrides_model_sop_kind(

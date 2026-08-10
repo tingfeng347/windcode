@@ -155,7 +155,9 @@ class MemoryWriteTransport:
     async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
         self.requests.append(request)
         if len(self.requests) == 1:
-            assert "memory_write" in {tool.name for tool in request.tools}
+            tool_names = {tool.name for tool in request.tools}
+            assert "memory_write" in tool_names
+            assert "memory_delete" in tool_names
             assert "只有工具返回 stored 或 already_exists 后" in request.system_prompt
             yield ToolCallDelta(
                 "remember",
@@ -165,6 +167,89 @@ class MemoryWriteTransport:
             yield ModelCompleted(StopReason.TOOL_USE)
             return
         yield TextDelta("已经写入长期记忆。")
+        yield ModelCompleted(StopReason.STOP)
+
+    async def aclose(self) -> None:
+        pass
+
+
+class MemoryUpdateTransport:
+    name = "memory-update"
+
+    def __init__(self, memory_id: str) -> None:
+        self.memory_id = memory_id
+        self.requests: list[ModelRequest] = []
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            assert "memory_update" in {tool.name for tool in request.tools}
+            assert "只能使用 memory_* 工具" in request.system_prompt
+            yield ToolCallDelta(
+                "update-memory",
+                "memory_update",
+                (
+                    '{"memory_id":"'
+                    + self.memory_id[:10]
+                    + '","content":"解析器应先规范化输入, 再执行边界检查。"}'
+                ),
+            )
+            yield ModelCompleted(StopReason.TOOL_USE)
+            return
+        yield TextDelta("经验已更新。")
+        yield ModelCompleted(StopReason.STOP)
+
+    async def aclose(self) -> None:
+        pass
+
+
+class VerifiedMemoryUpdateTransport:
+    name = "verified-memory-update"
+
+    def __init__(self, memory_id: str) -> None:
+        self.memory_id = memory_id
+        self.step = 0
+        self.assessment_calls = 0
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        block = request.messages[-1].content[0]
+        if isinstance(block, TextBlock) and "should_store" in block.text:
+            self.assessment_calls += 1
+            yield TextDelta(
+                '{"should_store":true,"reason":"更新现有经验",'
+                '"problem":"解析器顺序错误","solution":"先规范化再检查边界",'
+                '"applicability":"输入解析器","title":"解析器经验",'
+                '"summary":"先规范化再检查边界",'
+                '"body":"解析器应先规范化输入, 再执行边界检查。","tags":["parser"]}'
+            )
+            yield ModelCompleted(StopReason.STOP)
+            return
+        self.step += 1
+        if self.step == 1:
+            yield ToolCallDelta(
+                "write-parser",
+                "write_file",
+                '{"path":"parser_fix.py","content":"VALUE = 1\\n"}',
+            )
+            yield ModelCompleted(StopReason.TOOL_USE)
+            return
+        if self.step == 2:
+            yield ToolCallDelta("check-parser", "shell", '{"command":"ruff check parser_fix.py"}')
+            yield ModelCompleted(StopReason.TOOL_USE)
+            return
+        if self.step == 3:
+            yield ToolCallDelta(
+                "update-memory",
+                "memory_update",
+                (
+                    '{"memory_id":"'
+                    + self.memory_id[:10]
+                    + '","content":"解析器应先规范化输入, 再执行边界检查。"}'
+                ),
+            )
+            yield ModelCompleted(StopReason.TOOL_USE)
+            return
+        yield TextDelta("解析器已修复, 经验已更新。")
         yield ModelCompleted(StopReason.STOP)
 
     async def aclose(self) -> None:
@@ -244,6 +329,72 @@ async def test_model_can_write_explicit_memory_without_duplicate_extraction(tmp_
     )
 
 
+async def test_model_updates_experience_through_memory_tool_without_duplicate(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    async with Windcode.open({}, state_root=tmp_path / "state", workspace=workspace) as client:
+        original = client.create_memory_candidate(
+            kind=MemoryKind.EXPERIENCE,
+            scope=MemoryScope.PROJECT,
+            title="解析器经验",
+            summary="先校验再规范化",
+            body="解析器应先校验再规范化。",
+        )
+        original = client.confirm_memory(original.memory_id)
+        transport = MemoryUpdateTransport(original.memory_id)
+        client.register_transport("memory-update", "model", transport, primary=True)
+        handle = client.start_run(RunRequest("修复解析器并整理已有经验", workspace))
+        events: list[object] = []
+        async for event in handle:
+            events.append(event)
+            if isinstance(event, ApprovalRequested):
+                await handle.respond(ApprovalResponse(event.request_id, "allow_once"))
+        await handle.result()
+        records = client.list_memories()
+
+    assert len(records) == 1
+    assert records[0].memory_id == original.memory_id
+    assert records[0].version == original.version + 1
+    assert records[0].body == "解析器应先规范化输入, 再执行边界检查。"
+    assert any(
+        isinstance(event, MemoryEvent)
+        and event.action == "updated"
+        and event.memory_id == original.memory_id
+        for event in events
+    )
+
+
+async def test_verified_tool_update_is_not_reextracted_or_duplicated(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    config = AppConfig(sandbox=SandboxConfig(preset="danger_full_access"))
+    async with Windcode.open(config, state_root=tmp_path / "state", workspace=workspace) as client:
+        original = client.create_memory_candidate(
+            kind=MemoryKind.EXPERIENCE,
+            scope=MemoryScope.PROJECT,
+            title="解析器经验",
+            summary="先校验再规范化",
+            body="解析器应先校验再规范化。",
+        )
+        original = client.confirm_memory(original.memory_id)
+        transport = VerifiedMemoryUpdateTransport(original.memory_id)
+        client.register_transport("verified-memory-update", "model", transport, primary=True)
+        handle = client.start_run(RunRequest("修复解析器并更新相关经验", workspace))
+        async for event in handle:
+            if isinstance(event, ApprovalRequested):
+                await handle.respond(ApprovalResponse(event.request_id, "allow_once"))
+        await handle.result()
+        records = client.list_memories()
+
+    assert len(records) == 1
+    assert records[0].memory_id == original.memory_id
+    assert records[0].body == "解析器应先规范化输入, 再执行边界检查。"
+    assert records[0].evidence == ("ruff check parser_fix.py (exit 0)",)
+    assert transport.assessment_calls == 0
+
+
 async def test_disabled_memory_has_no_storage_or_events(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -260,6 +411,9 @@ async def test_disabled_memory_has_no_storage_or_events(tmp_path: Path) -> None:
         "memory_search",
         "memory_list",
         "memory_get",
+        "memory_delete",
+        "memory_update",
+        "memory_write",
     } & {tool.name for tool in transport.requests[0].tools}
     assert "长期记忆已禁用或不可用" in transport.requests[0].system_prompt
 

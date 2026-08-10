@@ -131,6 +131,9 @@ def test_prompt_routes_explicit_memory_queries_to_memory_tools(tmp_path: Path) -
         memory_enabled=True,
     )
     assert "必须调用 memory_list" in enabled
+    assert "memory_update" in enabled
+    assert "memory_delete" in enabled
+    assert "长期记忆的查询、写入、更新和删除只能使用 memory_" in enabled
     assert "不得使用 glob、grep、read_file、shell" in enabled
     assert "自动注入的记忆只用于当前任务上下文" in enabled
 

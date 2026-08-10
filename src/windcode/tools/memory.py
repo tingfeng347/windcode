@@ -60,6 +60,19 @@ class MemoryWriteInput(BaseModel):
     scope: MemoryScope | None = None
 
 
+class MemoryUpdateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory_id: str = Field(min_length=1, max_length=64)
+    content: str = Field(min_length=1, max_length=4_000)
+
+
+class MemoryDeleteInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory_id: str = Field(min_length=1, max_length=64)
+
+
 def _record_data(record: MemoryRecord, *, include_body: bool) -> dict[str, Any]:
     data: dict[str, Any] = {
         "memory_id": record.memory_id,
@@ -117,6 +130,11 @@ def _bounded(items: list[dict[str, Any]], max_chars: int) -> tuple[list[dict[str
         selected.append(item)
         size += len(encoded) + 1
     return selected, False
+
+
+def _compact_memory_text(text: str, limit: int) -> str:
+    compact = " ".join(text.split()).strip()
+    return compact if len(compact) <= limit else compact[: limit - 3].rstrip() + "..."
 
 
 class _MemoryTool:
@@ -249,9 +267,11 @@ class MemoryGetTool(_MemoryTool):
 class MemoryWriteTool(_MemoryTool):
     name = "memory_write"
     description = (
-        "Write a long-term memory only when the current user explicitly asks to remember it. "
-        "User facts, project knowledge, experiences, and references become active; only SOPs "
-        "remain candidates. Never claim it was saved before this tool succeeds."
+        "Write a long-term memory when the user explicitly asks, or autonomously when a completed "
+        "task produced a durable, reusable engineering experience. Autonomous writes must use "
+        "kind=experience; do not save routine results, temporary state, guesses, or raw tool "
+        "output. "
+        "Never claim it was saved before this tool succeeds."
     )
     input_model = MemoryWriteInput
     effects = frozenset({ToolEffect.OUTSIDE_WORKSPACE})
@@ -271,17 +291,13 @@ class MemoryWriteTool(_MemoryTool):
         self.source = source
         self.enabled_kinds = frozenset(MemoryKind) if enabled_kinds is None else enabled_kinds
 
-    @staticmethod
-    def _compact(text: str, limit: int) -> str:
-        compact = " ".join(text.split()).strip()
-        return compact if len(compact) <= limit else compact[: limit - 3].rstrip() + "..."
-
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
         del context
         parsed = cast(MemoryWriteInput, arguments)
-        if not has_explicit_memory_intent(self.user_prompt):
+        explicit_intent = has_explicit_memory_intent(self.user_prompt)
+        if not explicit_intent and parsed.kind is not MemoryKind.EXPERIENCE:
             return ToolResult(
-                "the current user did not explicitly request long-term memory storage",
+                "autonomous memory writes are limited to reusable engineering experiences",
                 is_error=True,
                 data={"error": "explicit_memory_intent_required"},
             )
@@ -349,8 +365,8 @@ class MemoryWriteTool(_MemoryTool):
         candidate = self.service.create_candidate(
             kind=kind,
             scope=scope,
-            title=self._compact(content, 80),
-            summary=self._compact(content, 240),
+            title=_compact_memory_text(content, 80),
+            summary=_compact_memory_text(content, 240),
             body=content,
             source=self.source,
             evidence=(() if kind is MemoryKind.SOP else (self.user_prompt,)),
@@ -374,6 +390,116 @@ class MemoryWriteTool(_MemoryTool):
         return ToolResult(json.dumps(data, ensure_ascii=False), data=data)
 
 
+class MemoryUpdateTool(_MemoryTool):
+    name = "memory_update"
+    description = (
+        "Update one existing visible experience in place by exact ID or unique ID prefix. "
+        "Use memory_search or memory_get first, then provide the complete revised experience. "
+        "Do not edit memory files or databases and do not create a replacement memory."
+    )
+    input_model = MemoryUpdateInput
+    effects = frozenset({ToolEffect.OUTSIDE_WORKSPACE})
+
+    def __init__(
+        self,
+        service: MemoryService,
+        observer: MemoryToolObserver,
+        *,
+        max_chars: int,
+        user_prompt: str,
+        enabled_kinds: frozenset[MemoryKind] | None = None,
+    ) -> None:
+        super().__init__(service, observer, max_chars=max_chars)
+        self.user_prompt = user_prompt
+        self.enabled_kinds = frozenset(MemoryKind) if enabled_kinds is None else enabled_kinds
+
+    async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
+        del context
+        parsed = cast(MemoryUpdateInput, arguments)
+        matches = tuple(
+            record
+            for record in self.service.store.list(project_id=self.service.project_id)
+            if record.memory_id.startswith(parsed.memory_id)
+        )
+        if len(matches) != 1:
+            return ToolResult(
+                "memory ID does not exist or prefix is not unique",
+                is_error=True,
+                data={"error": "memory_not_found_or_ambiguous"},
+            )
+        current = matches[0]
+        if current.kind is not MemoryKind.EXPERIENCE:
+            return ToolResult(
+                "only experience memories can be updated with this tool",
+                is_error=True,
+                data={"error": "memory_kind_not_updatable", "kind": current.kind.value},
+            )
+        if MemoryKind.EXPERIENCE not in self.enabled_kinds:
+            return ToolResult(
+                "memory kind is disabled: experience",
+                is_error=True,
+                data={"error": "memory_kind_disabled", "kind": MemoryKind.EXPERIENCE.value},
+            )
+        content = parsed.content.strip()
+        try:
+            validate_memory_text(content, self.user_prompt)
+        except SensitiveMemoryError as exc:
+            return ToolResult(str(exc), is_error=True, data={"error": "sensitive_memory_rejected"})
+        record = self.service.store.update(
+            current.memory_id,
+            title=_compact_memory_text(content, 80),
+            summary=_compact_memory_text(content, 240),
+            body=content,
+        )
+        data = {
+            "memory_id": record.memory_id,
+            "status": record.status.value,
+            "kind": record.kind.value,
+            "scope": record.scope.value,
+            "version": record.version,
+            "result": "updated",
+        }
+        await self._observe("updated", data)
+        return ToolResult(json.dumps(data, ensure_ascii=False), data=data)
+
+
+class MemoryDeleteTool(_MemoryTool):
+    name = "memory_delete"
+    description = (
+        "Permanently delete one visible long-term memory by exact ID or unique ID prefix, only "
+        "when the full conversation context shows that the user wants it deleted or forgotten. "
+        "Use memory_search or memory_get first. Never delete memory files or database rows with "
+        "other tools."
+    )
+    input_model = MemoryDeleteInput
+    effects = frozenset({ToolEffect.OUTSIDE_WORKSPACE})
+
+    async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
+        del context
+        parsed = cast(MemoryDeleteInput, arguments)
+        matches = tuple(
+            record
+            for record in self.service.store.list(project_id=self.service.project_id)
+            if record.memory_id.startswith(parsed.memory_id)
+        )
+        if len(matches) != 1:
+            return ToolResult(
+                "memory ID does not exist or prefix is not unique",
+                is_error=True,
+                data={"error": "memory_not_found_or_ambiguous"},
+            )
+        record = matches[0]
+        self.service.store.delete(record.memory_id)
+        data = {
+            "memory_id": record.memory_id,
+            "kind": record.kind.value,
+            "scope": record.scope.value,
+            "result": "deleted",
+        }
+        await self._observe("deleted", data)
+        return ToolResult(json.dumps(data, ensure_ascii=False), data=data)
+
+
 def register_memory_tools(
     registry: ToolRegistry,
     service: MemoryService,
@@ -388,6 +514,18 @@ def register_memory_tools(
         MemorySearchTool(service, observer, max_chars=max_chars),
         MemoryListTool(service, observer, max_chars=max_chars),
         MemoryGetTool(service, observer, max_chars=max_chars),
+        MemoryDeleteTool(
+            service,
+            observer,
+            max_chars=max_chars,
+        ),
+        MemoryUpdateTool(
+            service,
+            observer,
+            max_chars=max_chars,
+            user_prompt=user_prompt,
+            enabled_kinds=enabled_kinds,
+        ),
         MemoryWriteTool(
             service,
             observer,

@@ -94,7 +94,7 @@ class RunMemory:
 
     async def _observe_tool(self, action: str, details: dict[str, object]) -> None:
         memory_id = details.get("memory_id")
-        if action in {"activated", "candidate_created", "already_exists"} and isinstance(
+        if action in {"activated", "candidate_created", "already_exists", "updated"} and isinstance(
             memory_id, str
         ):
             self._tool_memory_id = memory_id
@@ -136,6 +136,14 @@ class RunMemory:
         if service is None:
             return
         explicit_experience_id = await self._extract_explicit_memory(service)
+        if explicit_experience_id is not None:
+            if result.verification:
+                experience = service.store.get(explicit_experience_id)
+                evidence = tuple(dict.fromkeys((*experience.evidence, *result.verification)))
+                if evidence != experience.evidence:
+                    service.store.update(explicit_experience_id, evidence=evidence)
+                service.store.record_outcome(explicit_experience_id, success=True)
+            return
         if self._config.experience_enabled and should_assess_experience(
             status=result.status,
             changed_files=result.changed_files,
