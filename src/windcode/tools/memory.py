@@ -514,11 +514,7 @@ def register_memory_tools(
         MemorySearchTool(service, observer, max_chars=max_chars),
         MemoryListTool(service, observer, max_chars=max_chars),
         MemoryGetTool(service, observer, max_chars=max_chars),
-        MemoryDeleteTool(
-            service,
-            observer,
-            max_chars=max_chars,
-        ),
+        MemoryDeleteTool(service, observer, max_chars=max_chars),
         MemoryUpdateTool(
             service,
             observer,
