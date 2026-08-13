@@ -28,4 +28,7 @@ def create_sandbox_backend(
         return SeatbeltSandbox(workspace), policy
     if selected.startswith("win") or selected == "nt":
         return WindowsSandbox(workspace), policy
-    return None, policy
+    raise RuntimeError(
+        f"Unsupported platform {selected!r} for sandbox preset {preset.value!r}; "
+        "switch to DANGER_FULL_ACCESS to run without a sandbox"
+    )

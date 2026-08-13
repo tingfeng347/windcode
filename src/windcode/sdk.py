@@ -178,7 +178,10 @@ class Windcode:
     def sandbox_status(self, workspace: Path | None = None) -> str:
         selected_workspace = (workspace or self.workspace).expanduser().resolve()
         preset = SandboxPreset(self.config.sandbox.preset)
-        backend, _ = create_sandbox_backend(selected_workspace, preset=preset)
+        try:
+            backend, _ = create_sandbox_backend(selected_workspace, preset=preset)
+        except RuntimeError as exc:
+            return f"unavailable/{preset.value} ({exc})"
         if backend is None:
             return f"none/{preset.value}"
         return f"{backend.status.backend}/{preset.value}/{backend.status.state.value}"
