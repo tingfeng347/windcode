@@ -46,7 +46,7 @@ Windcode 是一个面向真实代码仓库的终端 Coding Agent。它可以理�
 ### 多模型与可靠运行
 
 - 原生支持 Anthropic Messages、OpenAI Responses 和 OpenAI-compatible 三种协议。
-- 内置 OpenAI、Anthropic、DeepSeek、Moonshot AI、SiliconFlow、OpenRouter、智谱 AI、
+- 内置 OpenAI、DeepSeek、Moonshot AI、SiliconFlow、OpenRouter、智谱 AI、
   阿里云、Groq、Mistral、xAI 和 Google Gemini 配置预设，也可连接自定义兼容端点。
 - 支持主 Provider、显式 fallback chain、流式文本/推理/工具调用、网络错误重试和模型回退。
 - Provider 可直接在 `/model` 管理界面中新增、编辑、断开、设为默认和加载模型列表；API Key
@@ -93,15 +93,16 @@ Windcode 是一个面向真实代码仓库的终端 Coding Agent。它可以理�
   取消命令以及项目级命令前缀规则。
 - Linux 使用 Bubblewrap，macOS 使用 Seatbelt；支持 `read_only`、`workspace_write` 和
   `danger_full_access` 三种沙箱 preset。
-- Windows 默认使用 PowerShell。当前不提供系统级文件沙箱，因此会如实显示降级状态，并继续由
-  权限策略保护高风险命令，而不会伪装成已隔离。
+- Windows 默认使用 PowerShell，并通过可选的 `windcode-sandbox` 原生助手提供文件、网络与进程
+  隔离；助手未安装时会如实显示降级状态，并继续由权限策略保护高风险命令，而不会伪装成已隔离。
 
 ## 快速开始
 
 环境要求：Linux、macOS 或 Windows，Python 3.11+、[uv](https://docs.astral.sh/uv/)。
 
-Linux 使用 Bubblewrap，macOS 使用 Seatbelt。Windows 暂不提供系统级进程沙箱，PowerShell
-命令通过权限策略逐次授权；`full_access` 模式下可按配置直接执行。
+Linux 使用 Bubblewrap，macOS 使用 Seatbelt，Windows 通过可选的 `windcode-sandbox` 助手提供
+隔离（可运行 `windcode sandbox setup` 安装/初始化）。助手不可用时，PowerShell 命令通过权限
+策略逐次授权；`full_access` 模式下可按配置直接执行。
 
 沙箱 preset 为 `read_only`、默认的 `workspace_write` 和显式的
 `danger_full_access`。旧配置 `enabled=true/false` 仍可读取，并分别映射到
@@ -133,7 +134,7 @@ uv run windcode /path/to/project
 发布版本可从 GitHub Container Registry 拉取，并以交互模式挂载待处理的项目目录：
 
 ```bash
-docker run --rm -it -v "$PWD:/workspace" ghcr.io/tingfeng347/windcode:3.0.2
+docker run --rm -it -v "$PWD:/workspace" ghcr.io/tingfeng347/windcode:0.4.0
 ```
 
 完整的发布、私有镜像登录和状态持久化说明见 [GHCR 镜像说明](docs/ghcr.md)。
@@ -219,9 +220,9 @@ required = false
 ```
 
 `enable = false` 的服务器不会连接、不会参与工具搜索，也不会注入模型上下文。`required` 只在
-服务器启用时表示启动阶段主动连接；连接失败会显示降级状态，但不会阻断普通消息。首次生成的
-用户配置和 `.windcode/config.toml.example` 当前会启用 `gaodemap-mcp`；不需要时请将其
-`enable` 改为 `false`。
+服务器启用时表示启动阶段主动连接；连接失败会显示降级状态，但不会阻断普通消息。默认配置不
+启用任何 MCP 服务器，需要时请在 `~/.windcode/config.toml` 或项目 `.windcode/config.toml`
+中显式添加。
 
 ## 多智能体配置
 
