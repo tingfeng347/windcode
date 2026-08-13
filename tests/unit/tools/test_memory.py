@@ -49,9 +49,7 @@ class _StubTransport:
 
 
 # Canned responses for refine_memory and assess_experience
-_REFINE_RESPONSE = (
-    '{"title":"经验","summary":"经验摘要","body":"经验正文","tags":["经验"]}'
-)
+_REFINE_RESPONSE = '{"title":"经验","summary":"经验摘要","body":"经验正文","tags":["经验"]}'
 _ASSESS_EXPERIENCE_RESPONSE = (
     '{"should_store":true,"reason":"可复用经验","problem":"边界检查时机",'
     '"solution":"先规范化再检查","applicability":"解析器场景","title":"经验标题",'
@@ -316,6 +314,7 @@ async def test_memory_update_revises_visible_experience_in_place(tmp_path: Path)
         observe,
         max_chars=4_000,
         user_prompt="修复解析器并验证了正确顺序",
+        model=_model(),
     )
     result = await tool.execute(
         context(workspace),
@@ -329,13 +328,13 @@ async def test_memory_update_revises_visible_experience_in_place(tmp_path: Path)
     assert not result.is_error
     assert result.data["result"] == "updated"
     assert result.data["memory_id"] == original.memory_id
-    assert updated.body == "解析器应先规范化输入, 再执行边界检查。"
+    assert updated.body == "经验正文"
     assert updated.version == original.version + 1
     assert len(await service.store.list(project_id=service.project_id)) == 1
     assert [action for action, _ in observed] == ["updated"]
 
 
-async def test_memory_update_rejects_hidden_non_experience_and_sensitive_content(
+async def test_memory_update_rejects_hidden_and_sensitive_allows_profile(
     tmp_path: Path,
 ) -> None:
     state = tmp_path / "state"
@@ -374,6 +373,7 @@ async def test_memory_update_rejects_hidden_non_experience_and_sensitive_content
         observe,
         max_chars=4_000,
         user_prompt="整理已有经验",
+        model=_model(),
     )
     assert tool.effects == frozenset({ToolEffect.OUTSIDE_WORKSPACE})
     hidden_result = await tool.execute(
@@ -390,7 +390,8 @@ async def test_memory_update_rejects_hidden_non_experience_and_sensitive_content
     )
 
     assert hidden_result.data["error"] == "memory_not_found_or_ambiguous"
-    assert profile_result.data["error"] == "memory_kind_not_updatable"
+    assert not profile_result.is_error
+    assert profile_result.data["result"] == "updated"
     assert sensitive_result.data["error"] == "sensitive_memory_rejected"
 
 

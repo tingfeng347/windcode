@@ -139,11 +139,6 @@ def _bounded(items: list[dict[str, Any]], max_chars: int) -> tuple[list[dict[str
     return selected, False
 
 
-def _compact_memory_text(text: str, limit: int) -> str:
-    compact = " ".join(text.split()).strip()
-    return compact if len(compact) <= limit else compact[: limit - 3].rstrip() + "..."
-
-
 class _MemoryTool:
     effects = frozenset({ToolEffect.READ})
 
@@ -430,8 +425,8 @@ class MemoryWriteTool(_MemoryTool):
 class MemoryUpdateTool(_MemoryTool):
     name = "memory_update"
     description = (
-        "Update one existing visible experience in place by exact ID or unique ID prefix. "
-        "Use memory_search or memory_get first, then provide the complete revised experience. "
+        "Update one existing visible long-term memory in place by exact ID or unique ID prefix. "
+        "Use memory_search or memory_get first, then provide the complete revised content. "
         "Do not edit memory files or databases and do not create a replacement memory."
     )
     input_model = MemoryUpdateInput
@@ -444,10 +439,12 @@ class MemoryUpdateTool(_MemoryTool):
         *,
         max_chars: int,
         user_prompt: str,
+        model: ModelTarget,
         enabled_kinds: frozenset[MemoryKind] | None = None,
     ) -> None:
         super().__init__(service, observer, max_chars=max_chars)
         self.user_prompt = user_prompt
+        self.model = model
         self.enabled_kinds = frozenset(MemoryKind) if enabled_kinds is None else enabled_kinds
 
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
@@ -461,28 +458,28 @@ class MemoryUpdateTool(_MemoryTool):
                 is_error=True,
                 data={"error": "memory_not_found_or_ambiguous"},
             )
-        if current.kind is not MemoryKind.EXPERIENCE:
+        if current.kind not in self.enabled_kinds:
             return ToolResult(
-                "only experience memories can be updated with this tool",
+                f"memory kind is disabled: {current.kind.value}",
                 is_error=True,
-                data={"error": "memory_kind_not_updatable", "kind": current.kind.value},
-            )
-        if MemoryKind.EXPERIENCE not in self.enabled_kinds:
-            return ToolResult(
-                "memory kind is disabled: experience",
-                is_error=True,
-                data={"error": "memory_kind_disabled", "kind": MemoryKind.EXPERIENCE.value},
+                data={"error": "memory_kind_disabled", "kind": current.kind.value},
             )
         content = parsed.content.strip()
         try:
             validate_memory_text(content, self.user_prompt)
         except SensitiveMemoryError as exc:
             return ToolResult(str(exc), is_error=True, data={"error": "sensitive_memory_rejected"})
+        refined = await refine_memory(
+            self.model,
+            text=content,
+            kind=current.kind,
+            evidence=(self.user_prompt,),
+        )
         record = await self.service.update(
             current.memory_id,
-            title=_compact_memory_text(content, 80),
-            summary=_compact_memory_text(content, 240),
-            body=content,
+            title=refined.title,
+            summary=refined.summary,
+            body=refined.body,
         )
         data = {
             "memory_id": record.memory_id,
@@ -550,6 +547,7 @@ def register_memory_tools(
             observer,
             max_chars=max_chars,
             user_prompt=user_prompt,
+            model=model,
             enabled_kinds=enabled_kinds,
         ),
         MemoryWriteTool(
