@@ -183,10 +183,7 @@ class MemoryStore:
             ).fetchone()
         if row is None:
             raise KeyError(memory_id)
-        path = (self.root / str(row["path"])).resolve()
-        if not path.is_relative_to(self.records_dir):
-            raise ValueError("memory index contains an unsafe path")
-        return self._parse(path.read_text(encoding="utf-8"))
+        return self._read_record(str(row["path"]))
 
     def _sync_list(
         self,
@@ -210,9 +207,15 @@ class MemoryStore:
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         with self._connect() as connection:
             rows = connection.execute(
-                f"SELECT memory_id FROM memories{where} ORDER BY updated_at DESC", values
+                f"SELECT path FROM memories{where} ORDER BY updated_at DESC", values
             ).fetchall()
-        return tuple(self._sync_get(str(row["memory_id"])) for row in rows)
+        return tuple(self._read_record(str(row["path"])) for row in rows)
+
+    def _read_record(self, relative_path: str) -> MemoryRecord:
+        path = (self.root / relative_path).resolve()
+        if not path.is_relative_to(self.records_dir):
+            raise ValueError("memory index contains an unsafe path")
+        return self._parse(path.read_text(encoding="utf-8"))
 
     def _sync_search(
         self,
@@ -248,7 +251,7 @@ class MemoryStore:
             filters.append("m.activation = ?")
             filter_values.append(activation.value)
         sql = f"""
-            SELECT m.memory_id, bm25(memories_fts) AS rank, m.confidence
+            SELECT m.memory_id, m.path, bm25(memories_fts) AS rank, m.confidence
             FROM memories_fts JOIN memories m USING(memory_id)
             WHERE memories_fts MATCH ? AND {" AND ".join(filters)}
             ORDER BY rank ASC, m.confidence DESC, m.updated_at DESC LIMIT ?
@@ -259,7 +262,7 @@ class MemoryStore:
         except sqlite3.OperationalError:
             rows = ()
         indexed = tuple(
-            MemorySearchResult(self._sync_get(str(row["memory_id"])), float(-row["rank"]))
+            MemorySearchResult(self._read_record(str(row["path"])), float(-row["rank"]))
             for row in rows
         )
         if len(indexed) >= limit:

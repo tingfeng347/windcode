@@ -27,7 +27,11 @@ class MemoryService:
     async def migrate(self) -> None:
         for record in await self.store.list(project_id=self.project_id):
             current = record
-            if current.status is MemoryStatus.CANDIDATE and current.kind is not MemoryKind.SOP:
+            if (
+                current.status is MemoryStatus.CANDIDATE
+                and current.kind is not MemoryKind.SOP
+                and not current.conflicts_with
+            ):
                 current = await self.store.transition(current.memory_id, MemoryStatus.ACTIVE)
             if (
                 current.kind is MemoryKind.REFERENCE
