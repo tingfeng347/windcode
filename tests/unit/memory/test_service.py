@@ -143,3 +143,58 @@ async def test_baseline_budget_prefers_priority(tmp_path: Path) -> None:
     context = await service.baseline_context(max_records=1)
     assert "High" in context
     assert "Low" not in context
+
+
+async def test_user_profile_candidate_flags_conflict_on_overlapping_tags(tmp_path: Path) -> None:
+    service = MemoryService(tmp_path / "state", tmp_path / "workspace")
+    existing = await service.create_candidate(
+        kind=MemoryKind.USER_PROFILE,
+        scope=MemoryScope.USER,
+        title="用户姓名",
+        summary="用户叫 tingfeng",
+        body="用户姓名是 tingfeng。",
+        tags=("姓名", "identity"),
+    )
+    await service.store.transition(existing.memory_id, MemoryStatus.ACTIVE)
+    # 不同标题但 tags 交集 -> 冲突
+    conflicting = await service.create_candidate(
+        kind=MemoryKind.USER_PROFILE,
+        scope=MemoryScope.USER,
+        title="称呼",
+        summary="用户叫小明",
+        body="用户姓名是小明。",
+        tags=("姓名",),
+    )
+    assert existing.memory_id in conflicting.conflicts_with
+    # 无交集 tags -> 不冲突
+    unrelated = await service.create_candidate(
+        kind=MemoryKind.USER_PROFILE,
+        scope=MemoryScope.USER,
+        title="语言偏好",
+        summary="偏好中文",
+        body="使用中文回答。",
+        tags=("语言",),
+    )
+    assert unrelated.conflicts_with == ()
+
+
+async def test_non_user_profile_ignores_tags_intersection_for_conflict(tmp_path: Path) -> None:
+    service = MemoryService(tmp_path / "state", tmp_path / "workspace")
+    existing = await service.create_candidate(
+        kind=MemoryKind.PROJECT_KNOWLEDGE,
+        scope=MemoryScope.PROJECT,
+        title="项目语言",
+        summary="项目用 Python",
+        body="项目使用 Python。",
+        tags=("python",),
+    )
+    await service.store.transition(existing.memory_id, MemoryStatus.ACTIVE)
+    candidate = await service.create_candidate(
+        kind=MemoryKind.PROJECT_KNOWLEDGE,
+        scope=MemoryScope.PROJECT,
+        title="测试框架",
+        summary="用 pytest",
+        body="项目使用 pytest。",
+        tags=("python",),
+    )
+    assert candidate.conflicts_with == ()

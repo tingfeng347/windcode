@@ -565,3 +565,73 @@ async def test_memory_uses_selected_state_root_and_filters_current_project(tmp_p
     assert (await source.store.get(user.memory_id)).memory_id == user.memory_id
     assert (await source.store.get(project.memory_id)).memory_id == project.memory_id
     assert (await source.store.get(other.memory_id)).memory_id == other.memory_id
+
+
+class UserProfileConflictTransport:
+    """Returns a tagged refine JSON so auto-extraction produces a conflicting candidate."""
+
+    name = "user-profile-conflict"
+
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        self.requests.append(request)
+        block = request.messages[-1].content[0]
+        if isinstance(block, TextBlock) and "提炼" in block.text:
+            yield TextDelta(
+                '{"title":"用户姓名","summary":"用户叫小明",'
+                '"body":"用户姓名是小明。","tags":["姓名"]}'
+            )
+            yield ModelCompleted(StopReason.STOP)
+            return
+        yield TextDelta("好的,已记下。")
+        yield ModelCompleted(StopReason.STOP)
+
+    async def aclose(self) -> None:
+        pass
+
+
+async def test_conflicting_user_profile_stays_candidate_without_autosave(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    transport = UserProfileConflictTransport()
+    async with Windcode.open({}, state_root=tmp_path / "state", workspace=workspace) as client:
+        existing = await client.create_memory_candidate(
+            kind=MemoryKind.USER_PROFILE,
+            scope=MemoryScope.USER,
+            title="用户姓名",
+            summary="用户叫 tingfeng",
+            body="用户姓名是 tingfeng。",
+            tags=("姓名",),
+        )
+        await client.confirm_memory(existing.memory_id)
+        client.register_transport("user-profile-conflict", "model", transport, primary=True)
+        handle = client.start_run(RunRequest("我叫小明", workspace))
+        events = [event async for event in handle]
+        await handle.result()
+        active = await client.list_memories(status=MemoryStatus.ACTIVE)
+        candidates = await client.list_memories(status=MemoryStatus.CANDIDATE)
+
+    # 已有 tingfeng 仍是唯一的 ACTIVE 记录, 未被覆盖
+    assert len(active) == 1
+    assert active[0].memory_id == existing.memory_id
+    # 新的"小明"作为 CANDIDATE 暂存, 未自动转 ACTIVE
+    assert len(candidates) == 1
+    assert candidates[0].body == "用户姓名是小明。"
+    assert existing.memory_id in candidates[0].conflicts_with
+    # 发出 conflict_pending, 没有发 stable_user_fact 自动保存事件
+    assert any(
+        isinstance(event, MemoryEvent)
+        and event.action == "candidate_created"
+        and event.details.get("policy") == "conflict_pending"
+        for event in events
+    )
+    assert not any(
+        isinstance(event, MemoryEvent)
+        and event.action == "activated"
+        and event.details.get("policy") == "stable_user_fact"
+        for event in events
+    )

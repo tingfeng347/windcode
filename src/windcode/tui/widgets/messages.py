@@ -296,6 +296,12 @@ class MessageStream(VerticalScroll):
             and event.details.get("policy") == "stable_user_fact"
         ):
             await self.add_system_message("已自动保存长期记忆")
+        elif (
+            isinstance(event, MemoryEvent)
+            and event.action == "candidate_created"
+            and event.details.get("policy") == "conflict_pending"
+        ):
+            await self.add_system_message("检测到与已有记忆冲突,已暂存待确认")
         elif isinstance(event, RunCompleted):
             await self.finish_run()
         elif isinstance(event, RunFailed):

@@ -80,6 +80,7 @@ class MemoryService:
             activation=activation,
             priority=priority,
         )
+        new_tags = set(tags)
         conflicts = tuple(
             record.memory_id
             for record in await self.store.list(
@@ -87,7 +88,15 @@ class MemoryService:
             )
             if record.kind is kind
             and record.scope is scope
-            and record.title.casefold() == title.casefold()
+            and (
+                record.title.casefold() == title.casefold()
+                or (
+                    # USER_PROFILE 属于单值属性: tags 交集视为同一属性的不同取值。
+                    kind is MemoryKind.USER_PROFILE
+                    and bool(new_tags)
+                    and bool(new_tags & set(record.tags))
+                )
+            )
         )
         if conflicts:
             candidate = replace(candidate, conflicts_with=conflicts)

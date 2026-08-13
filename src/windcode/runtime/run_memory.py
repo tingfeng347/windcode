@@ -212,6 +212,11 @@ class RunMemory:
             saved = candidate
             action = "candidate_created"
             policy = "explicit_sop_candidate"
+        elif candidate.conflicts_with:
+            # 与已有 ACTIVE 记忆冲突: 保持 CANDIDATE 待用户确认, 不自动覆盖。
+            saved = candidate
+            action = "candidate_created"
+            policy = "conflict_pending"
         else:
             saved = await service.store.transition(candidate.memory_id, MemoryStatus.ACTIVE)
             if intent_kind is MemoryKind.EXPERIENCE:
