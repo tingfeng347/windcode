@@ -4,10 +4,11 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 from windcode.auth import CredentialStore
 from windcode.domain.errors import RequiredExtensionError
-from windcode.domain.events import RunRequest, RunResult
+from windcode.domain.events import RunCancelled, RunRequest, RunResult
 from windcode.domain.messages import Message
 from windcode.extensions import ExtensionSnapshot
 from windcode.extensions.hooks import HookEvent
@@ -20,7 +21,7 @@ from windcode.runtime.parent_access import ParentAccess
 from windcode.runtime.resources import RunResources
 from windcode.runtime.run_memory import RunMemory
 from windcode.runtime.subagents import SubagentCoordinator
-from windcode.sessions import ArtifactStore, SessionStore
+from windcode.sessions import ArtifactStore, SessionStatus, SessionStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +77,7 @@ class ParentRun:
     async def run(self) -> RunResult:
         observer_token = self.extensions.mcp.bind_observer(self.extensions.observe_mcp)
         try:
+            await self.memory.prepare()
             await self._prepare_mcp_tools()
             await self.memory.publish_recalled()
             await self._start_lifecycle()
@@ -97,6 +99,9 @@ class ParentRun:
             await self.loop.record_startup_failure(exc)
             await self._observe_error()
             raise
+        except asyncio.CancelledError:
+            await self._observe_cancelled()
+            return RunResult(status="cancelled")
         except BaseException:
             await self._observe_error()
             raise
@@ -160,5 +165,21 @@ class ParentRun:
     async def _observe_error(self) -> None:
         try:
             await self.extensions.lifecycle(HookEvent.RUN_ERROR, status="error")
+        except BaseException:
+            pass
+
+    async def _observe_cancelled(self) -> None:
+        """Publish RunCancelled and mark the session as cancelled."""
+        try:
+            await self.resources.event_bus.publish(
+                RunCancelled(
+                    event_id=uuid4().hex,
+                    session_id=self.preparation.session.metadata.session_id,
+                    run_id=self.preparation.run_id,
+                    turn=0,
+                ),
+                durable=True,
+            )
+            self.preparation.session.set_status(SessionStatus.CANCELLED)
         except BaseException:
             pass

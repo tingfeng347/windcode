@@ -40,7 +40,7 @@ class ApplicationLifecycle:
             state_root.mkdir(  # noqa: ASYNC240 - local state is initialized before concurrent work
                 parents=True, exist_ok=True
             )
-            self.memory.open(state_root=state_root, workspace=workspace)
+            await self.memory.open(state_root=state_root, workspace=workspace)
             await self.providers.open()
             self.runs.open()
             await self.extensions.open()

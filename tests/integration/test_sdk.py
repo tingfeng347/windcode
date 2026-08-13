@@ -185,9 +185,28 @@ async def test_run_waits_for_required_mcp_before_model_request(
         await startup_gate.wait()
         return runtime.required_server_ids
 
-    monkeypatch.setattr(McpRuntime, "activate_required", delayed_startup)
+    async def noop_register_direct_tools(
+        self: McpCapabilityService, *args: object, **kwargs: object
+    ) -> tuple[str, ...]:
+        return ()
 
-    async with Windcode.open(state_root=tmp_path / "state") as client:
+    monkeypatch.setattr(McpRuntime, "activate_required", delayed_startup)
+    monkeypatch.setattr(McpCapabilityService, "register_direct_tools", noop_register_direct_tools)
+
+    config = {
+        "extensions": {
+            "enabled": True,
+            "mcp_servers": {
+                "blocked": {
+                    "transport": "streamable_http",
+                    "url": "https://example.test/mcp",
+                    "required": True,
+                }
+            },
+        },
+    }
+
+    async with Windcode.open(config, state_root=tmp_path / "state") as client:
         client.register_transport("history", "model", transport, primary=True)
 
         handle = client.start_run(RunRequest("reply after startup", tmp_path))
@@ -214,18 +233,37 @@ async def test_cancelling_run_does_not_cancel_shared_required_mcp_startup(
         await startup_gate.wait()
         return runtime.required_server_ids
 
-    monkeypatch.setattr(McpRuntime, "activate_required", delayed_startup)
+    async def noop_register_direct_tools(
+        self: McpCapabilityService, *args: object, **kwargs: object
+    ) -> tuple[str, ...]:
+        return ()
 
-    async with Windcode.open(state_root=tmp_path / "state") as client:
+    monkeypatch.setattr(McpRuntime, "activate_required", delayed_startup)
+    monkeypatch.setattr(McpCapabilityService, "register_direct_tools", noop_register_direct_tools)
+
+    config = {
+        "extensions": {
+            "enabled": True,
+            "mcp_servers": {
+                "blocked": {
+                    "transport": "streamable_http",
+                    "url": "https://example.test/mcp",
+                    "required": True,
+                }
+            },
+        },
+    }
+
+    async with Windcode.open(config, state_root=tmp_path / "state") as client:
         client.register_transport("history", "model", transport, primary=True)
 
         cancelled = client.start_run(RunRequest("cancel while starting", tmp_path))
         surviving = client.start_run(RunRequest("survive startup", tmp_path))
         await asyncio.sleep(0)
 
-        with pytest.raises(asyncio.CancelledError):
-            await cancelled.cancel()
         assert client.required_mcp_loading
+        await cancelled.cancel()
+        assert (await cancelled.result()).status == "cancelled"
 
         startup_gate.set()
         assert (await asyncio.wait_for(surviving.result(), timeout=1)).status == "completed"
@@ -269,8 +307,7 @@ async def test_close_rejects_new_runs_after_handle_snapshot(
         await client.__aenter__()
 
     finish_cancel.set()
-    with pytest.raises(asyncio.CancelledError):
-        await close_task
+    await close_task
     await client.aclose()
 
 
