@@ -147,7 +147,9 @@ class RunMemory:
                 evidence = tuple(dict.fromkeys((*experience.evidence, *result.verification)))
                 if evidence != experience.evidence:
                     await service.store.update(explicit_experience_id, evidence=evidence)
-                await service.store.record_outcome(explicit_experience_id, success=True)
+                await service.store.record_outcome(
+                    explicit_experience_id, success=result.status == "completed"
+                )
             return
         if self._config.experience_enabled and should_assess_experience(
             status=result.status,

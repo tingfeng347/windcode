@@ -38,10 +38,6 @@ class _DynamicEffects(Protocol):
     def effects_for(self, arguments: Mapping[str, Any]) -> frozenset[ToolEffect]: ...
 
 
-class _CommandAnalyzer(Protocol):
-    def analyze(self, arguments: Mapping[str, Any]) -> CommandAnalysis: ...
-
-
 class _ApprovalSummarizer(Protocol):
     def approval_summary(self, arguments: Mapping[str, Any]) -> str: ...
 
@@ -68,7 +64,7 @@ class ToolScheduler:
         self.after_execute = after_execute
         self.session_approval_recorder = session_approval_recorder
 
-    def _policy_request(
+    async def _policy_request(
         self,
         call: ScheduledCall,
         context: ToolContext,
@@ -93,7 +89,7 @@ class ToolScheduler:
         analysis: CommandAnalysis | None = None
         analyzer = getattr(tool, "analyze", None)
         if call.tool_name == "shell" and callable(analyzer):
-            analysis = cast(_CommandAnalyzer, tool).analyze(call.arguments)
+            analysis = cast(CommandAnalysis, await asyncio.to_thread(analyzer, call.arguments))
         network = call.arguments.get("network") is True
         proposed_rule = (
             None
@@ -157,7 +153,7 @@ class ToolScheduler:
                         data={"error": "extension_rejected"},
                     ),
                 )
-            request = self._policy_request(call, context, constraints.additional_effects)
+            request = await self._policy_request(call, context, constraints.additional_effects)
         except KeyError as exc:
             return ScheduledResult(
                 call.call_id,
@@ -204,7 +200,7 @@ class ToolScheduler:
                 if self.session_approval_recorder is not None:
                     self.session_approval_recorder(request)
             elif choice is ApprovalChoice.ALLOW_PROJECT:
-                self.policy.approve_for_project(request)
+                await asyncio.to_thread(self.policy.approve_for_project, request)
         if self.before_execute is not None:
             await self.before_execute(call, request)
         approved_context = replace(context, granted_effects=request.effects)
@@ -238,7 +234,7 @@ class ToolScheduler:
                         if self.session_approval_recorder is not None:
                             self.session_approval_recorder(escalation)
                     elif retry_choice is ApprovalChoice.ALLOW_PROJECT:
-                        self.policy.approve_for_project(escalation)
+                        await asyncio.to_thread(self.policy.approve_for_project, escalation)
                     retry_context = replace(context, granted_effects=escalation.effects)
                     result = await self.registry.execute(
                         call.tool_name, retry_context, call.arguments
@@ -270,8 +266,24 @@ class ToolScheduler:
                 end += 1
             batch = calls[index:end]
             batch_results = await asyncio.gather(
-                *(self._execute_one(call, context) for call in batch)
+                *(self._execute_one(call, context) for call in batch),
+                return_exceptions=True,
             )
-            results.extend(batch_results)
+            for call, item in zip(batch, batch_results, strict=True):
+                if isinstance(item, BaseException):
+                    if isinstance(item, asyncio.CancelledError):
+                        raise item
+                    results.append(
+                        ScheduledResult(
+                            call.call_id,
+                            ToolResult(
+                                output=str(item),
+                                is_error=True,
+                                data={"error": "execution_failed"},
+                            ),
+                        )
+                    )
+                else:
+                    results.append(item)
             index = end
         return tuple(results)
