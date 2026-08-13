@@ -171,9 +171,12 @@ class AnthropicTransport(BaseTransport):
             delta_type = as_string(get_value(delta, "type"))
             if delta_type == "text_delta":
                 emitted.append(TextDelta(as_string(get_value(delta, "text"))))
-            elif delta_type in {"thinking_delta", "signature_delta"}:
-                summary = as_string(get_value(delta, "thinking", get_value(delta, "signature", "")))
-                emitted.append(ReasoningDelta(summary))
+            elif delta_type == "thinking_delta":
+                emitted.append(ReasoningDelta(as_string(get_value(delta, "thinking"))))
+            elif delta_type == "signature_delta":
+                # signature_delta carries a cryptographic signature used to verify
+                # thinking blocks on round-trip; it is not displayable reasoning text.
+                pass
             elif delta_type == "input_json_delta":
                 emitted.append(
                     ToolCallDelta(
@@ -214,5 +217,5 @@ class AnthropicTransport(BaseTransport):
                 yield ModelCompleted(StopReason.STOP, usage)
         except asyncio.CancelledError:
             raise
-        except BaseException as exc:
+        except Exception as exc:
             raise map_provider_error(exc) from exc

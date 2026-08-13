@@ -115,10 +115,7 @@ class OpenAICompatibleTransport(BaseTransport):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self._session = session
-        self._owns_session = session is None
         self._chunk_factory = chunk_factory or self._http_chunks
-        if session is not None:
-            self._owns_session = False
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None:
@@ -230,5 +227,5 @@ class OpenAICompatibleTransport(BaseTransport):
                 )
         except asyncio.CancelledError:
             raise
-        except BaseException as exc:
+        except Exception as exc:
             raise map_provider_error(exc) from exc

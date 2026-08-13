@@ -188,5 +188,5 @@ class OpenAIResponsesTransport(BaseTransport):
                 yield ModelCompleted(StopReason.STOP, usage)
         except asyncio.CancelledError:
             raise
-        except BaseException as exc:
+        except Exception as exc:
             raise map_provider_error(exc) from exc
