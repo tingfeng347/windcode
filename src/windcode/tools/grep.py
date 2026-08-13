@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import re
+from pathlib import Path
 from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,9 +29,12 @@ class GrepTool:
 
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
         parsed = cast(GrepInput, arguments)
+        return await asyncio.to_thread(self._search, context.workspace, parsed)
+
+    def _search(self, workspace: Path, parsed: GrepInput) -> ToolResult:
         flags = 0 if parsed.case_sensitive else re.IGNORECASE
         expression = re.compile(parsed.pattern, flags)
-        root = context.workspace.resolve()
+        root = workspace.resolve()
         output: list[str] = []
         matched = 0
         for path in sorted(root.glob(parsed.glob)):

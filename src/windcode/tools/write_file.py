@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import difflib
+from pathlib import Path
 from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -31,6 +33,9 @@ class WriteFileTool:
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
         parsed = cast(WriteFileInput, arguments)
         path = require_workspace_path(context.workspace, parsed.path)
+        return await asyncio.to_thread(self._write, path, context.workspace, parsed)
+
+    def _write(self, path: Path, workspace: Path, parsed: WriteFileInput) -> ToolResult:
         existed = path.exists()
         old_content = path.read_text(encoding="utf-8") if existed else ""
         old_digest = content_sha256(old_content) if existed else None
@@ -41,7 +46,7 @@ class WriteFileTool:
                 data={"error": "stale_content", "actual_sha256": old_digest},
             )
         atomic_write_text(path, parsed.content)
-        relative = str(path.relative_to(context.workspace.resolve()))
+        relative = str(path.relative_to(workspace.resolve()))
         diff = "".join(
             difflib.unified_diff(
                 old_content.splitlines(keepends=True),

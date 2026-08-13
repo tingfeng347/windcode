@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
 from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,6 +28,9 @@ class ReadFileTool:
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
         parsed = cast(ReadFileInput, arguments)
         path = require_workspace_path(context.workspace, parsed.path)
+        return await asyncio.to_thread(self._read, path, context.workspace, parsed)
+
+    def _read(self, path: Path, workspace: Path, parsed: ReadFileInput) -> ToolResult:
         raw = path.read_bytes()
         if len(raw) > self.max_bytes:
             return ToolResult(
@@ -46,7 +51,7 @@ class ReadFileTool:
         return ToolResult(
             output=output,
             data={
-                "path": str(path.relative_to(context.workspace.resolve())),
+                "path": str(path.relative_to(workspace.resolve())),
                 "sha256": content_sha256(raw),
                 "line_count": len(lines),
                 "truncated": truncated,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -157,13 +158,16 @@ class ApplyPatchTool:
 
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
         parsed = cast(ApplyPatchInput, arguments)
+        return await asyncio.to_thread(self._apply, context.workspace, parsed)
+
+    def _apply(self, workspace: Path, parsed: ApplyPatchInput) -> ToolResult:
         patches = parse_unified_diff(parsed.patch)
         planned: list[tuple[FilePatch, Path, str | None, str]] = []
         for patch in patches:
             relative = patch.new_path or patch.old_path
             if relative is None:
                 raise PatchParseError("patch is missing a usable path")
-            path = require_workspace_path(context.workspace, relative)
+            path = require_workspace_path(workspace, relative)
             old_content = "" if patch.old_path is None else path.read_text(encoding="utf-8")
             expected = parsed.expected_sha256.get(relative)
             actual = content_sha256(old_content) if patch.old_path is not None else None

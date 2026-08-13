@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -29,7 +30,7 @@ class EditFileTool:
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
         parsed = cast(EditFileInput, arguments)
         path = require_workspace_path(context.workspace, parsed.path)
-        content = path.read_text(encoding="utf-8")
+        content = await asyncio.to_thread(path.read_text, encoding="utf-8")
         digest = content_sha256(content)
         if parsed.expected_sha256 is not None and parsed.expected_sha256 != digest:
             return ToolResult(

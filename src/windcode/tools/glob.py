@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import cast
 
@@ -41,13 +42,17 @@ class GlobTool:
                 is_error=True,
                 data={"error": "pattern_outside_workspace"},
             )
+        matches, selected = await asyncio.to_thread(self._collect, root, pattern, parsed.limit)
+        return ToolResult(
+            output="\n".join(selected),
+            data={"count": len(selected), "truncated": len(matches) > len(selected)},
+        )
+
+    @staticmethod
+    def _collect(root: Path, pattern: str, limit: int) -> tuple[list[str], list[str]]:
         matches = sorted(
             str(path.resolve().relative_to(root))
             for path in root.glob(pattern)
             if path.is_file() and path.resolve().is_relative_to(root)
         )
-        selected = matches[: parsed.limit]
-        return ToolResult(
-            output="\n".join(selected),
-            data={"count": len(selected), "truncated": len(matches) > len(selected)},
-        )
+        return matches, matches[:limit]
