@@ -30,16 +30,28 @@ def save_model_config(path: Path, previous: AppConfig, updated: AppConfig) -> No
     disabled.update(previous.providers.keys() - updated.providers.keys())
     disabled.difference_update(updated.providers)
 
-    data["providers"] = {
-        alias: provider.model_dump(mode="json", exclude_none=True)
-        for alias, provider in updated.providers.items()
-    }
+    file_providers: dict[str, Any] = {}
+    raw_providers = data.get("providers", {})
+    if isinstance(raw_providers, dict):
+        file_providers = cast(dict[str, Any], raw_providers)
+    file_aliases: set[str] = set(file_providers)
+    previous_aliases: set[str] = set(previous.providers.keys())
+    updated_aliases: set[str] = set(updated.providers.keys())
+    user_added = updated_aliases - previous_aliases
+    user_removed = previous_aliases - updated_aliases
+
+    merged: dict[str, Any] = {alias: file_providers[alias] for alias in file_aliases - user_removed}
+    for alias in sorted(updated_aliases):
+        if alias in file_aliases or alias in user_added:
+            merged[alias] = updated.providers[alias].model_dump(mode="json", exclude_none=True)
+    data["providers"] = merged
+
     if updated.primary_provider is None:
         data.pop("primary_provider", None)
     else:
         data["primary_provider"] = updated.primary_provider
     data["fallback_chain"] = list(updated.fallback_chain)
-    data["enabled_providers"] = sorted(updated.providers)
+    data["enabled_providers"] = sorted(merged)
     if disabled:
         data["disabled_providers"] = sorted(disabled)
     else:
