@@ -58,6 +58,7 @@ class RunMemory:
                 max_chars=config.recall_max_chars,
                 user_prompt=request.prompt,
                 source=self._source,
+                model=model,
                 enabled_kinds=self._enabled_kinds,
             )
         self.context = ""

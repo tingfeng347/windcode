@@ -18,8 +18,16 @@ from windcode.memory import (
     classify_memory_intent,
     explicitly_always_project_fact,
     has_explicit_memory_intent,
+    is_stable_user_fact,
+)
+from windcode.memory.refiner import (
+    RefinedMemory,
+    assess_core_project_fact,
+    assess_experience,
+    refine_memory,
 )
 from windcode.memory.security import SensitiveMemoryError, validate_memory_text
+from windcode.providers import ModelTarget
 from windcode.tools.registry import ToolRegistry
 
 MemoryToolObserver = Callable[[str, dict[str, Any]], Awaitable[None]]
@@ -280,11 +288,13 @@ class MemoryWriteTool(_MemoryTool):
         max_chars: int,
         user_prompt: str,
         source: MemorySource,
+        model: ModelTarget,
         enabled_kinds: frozenset[MemoryKind] | None = None,
     ) -> None:
         super().__init__(service, observer, max_chars=max_chars)
         self.user_prompt = user_prompt
         self.source = source
+        self.model = model
         self.enabled_kinds = frozenset(MemoryKind) if enabled_kinds is None else enabled_kinds
 
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
@@ -315,6 +325,15 @@ class MemoryWriteTool(_MemoryTool):
                 is_error=True,
                 data={"error": "memory_kind_disabled", "kind": kind.value},
             )
+        # Spec 3: stable user identity and long-term preferences are system-extracted only.
+        # Block agent from writing USER_PROFILE for transient or non-stable facts.
+        if kind is MemoryKind.USER_PROFILE and not is_stable_user_fact(self.user_prompt):
+            return ToolResult(
+                "user profile memories require a stable, durable user fact; "
+                "transient states and one-time events are not saved",
+                is_error=True,
+                data={"error": "unstable_user_fact_rejected"},
+            )
         project_fact = kind is not MemoryKind.USER_PROFILE and (
             kind is not MemoryKind.REFERENCE or parsed.scope is MemoryScope.PROJECT
         )
@@ -330,7 +349,37 @@ class MemoryWriteTool(_MemoryTool):
             validate_memory_text(content, self.user_prompt)
         except SensitiveMemoryError as exc:
             return ToolResult(str(exc), is_error=True, data={"error": "sensitive_memory_rejected"})
-        normalized = " ".join(content.casefold().split())
+        # Spec 1: autonomous experience writes must pass model validation gate.
+        # Spec 4a/b: project knowledge activation and title/summary quality use model-driven paths.
+        evidence = () if kind is MemoryKind.SOP else (self.user_prompt,)
+        refined: RefinedMemory
+        if kind is MemoryKind.EXPERIENCE and not explicit_intent:
+            assessment = await assess_experience(
+                self.model,
+                text=content,
+                evidence=evidence,
+            )
+            if not assessment.should_store:
+                return ToolResult(
+                    f"experience not stored: {assessment.reason}",
+                    is_error=True,
+                    data={"error": "experience_assessment_rejected", "reason": assessment.reason},
+                )
+            if assessment.memory is None:
+                return ToolResult(
+                    "experience assessment returned no structured memory",
+                    is_error=True,
+                    data={"error": "experience_assessment_malformed"},
+                )
+            refined = assessment.memory
+        else:
+            refined = await refine_memory(
+                self.model,
+                text=content,
+                kind=kind,
+                evidence=evidence,
+            )
+        normalized = " ".join(refined.body.casefold().split())
         existing = next(
             (
                 record
@@ -353,21 +402,23 @@ class MemoryWriteTool(_MemoryTool):
             return ToolResult(json.dumps(data, ensure_ascii=False), data=data)
         activation = None
         if kind is MemoryKind.PROJECT_KNOWLEDGE:
-            activation = (
-                MemoryActivation.ALWAYS
-                if explicitly_always_project_fact(self.user_prompt)
-                else MemoryActivation.MANUAL
-            )
+            core = explicitly_always_project_fact(
+                self.user_prompt
+            ) or await assess_core_project_fact(self.model, text=content)
+            activation = MemoryActivation.ALWAYS if core else MemoryActivation.MANUAL
+        priority = 60 if activation is MemoryActivation.ALWAYS else None
         candidate = await self.service.create_candidate(
             kind=kind,
             scope=scope,
-            title=_compact_memory_text(content, 80),
-            summary=_compact_memory_text(content, 240),
-            body=content,
+            title=refined.title,
+            summary=refined.summary,
+            body=refined.body,
             source=self.source,
-            evidence=(() if kind is MemoryKind.SOP else (self.user_prompt,)),
+            tags=refined.tags,
+            evidence=evidence,
             confidence=0.8,
             activation=activation,
+            priority=priority,
         )
         if kind is MemoryKind.SOP:
             record = candidate
@@ -496,6 +547,7 @@ def register_memory_tools(
     max_chars: int,
     user_prompt: str,
     source: MemorySource,
+    model: ModelTarget,
     enabled_kinds: frozenset[MemoryKind] | None = None,
 ) -> None:
     for tool in (
@@ -516,6 +568,7 @@ def register_memory_tools(
             max_chars=max_chars,
             user_prompt=user_prompt,
             source=source,
+            model=model,
             enabled_kinds=enabled_kinds,
         ),
     ):

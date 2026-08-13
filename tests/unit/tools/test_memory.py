@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from pathlib import Path
 
+from windcode.domain.models import ModelCompleted, ModelEvent, ModelRequest, StopReason, TextDelta
 from windcode.domain.tools import ToolContext, ToolEffect
 from windcode.memory import (
     MemoryActivation,
@@ -11,6 +13,7 @@ from windcode.memory import (
     MemorySource,
     MemoryStatus,
 )
+from windcode.providers import ModelTarget
 from windcode.tools.memory import (
     MemoryDeleteInput,
     MemoryDeleteTool,
@@ -25,6 +28,39 @@ from windcode.tools.memory import (
     MemoryWriteInput,
     MemoryWriteTool,
 )
+
+
+class _StubTransport:
+    """Stub transport returning a canned JSON response for all model requests."""
+
+    name = "stub"
+
+    def __init__(self, response: str) -> None:
+        self.response = response
+        self.requests: list[ModelRequest] = []
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        self.requests.append(request)
+        yield TextDelta(self.response)
+        yield ModelCompleted(StopReason.STOP)
+
+    async def aclose(self) -> None:
+        pass
+
+
+# Canned responses for refine_memory and assess_experience
+_REFINE_RESPONSE = (
+    '{"title":"经验","summary":"经验摘要","body":"经验正文","tags":["经验"]}'
+)
+_ASSESS_EXPERIENCE_RESPONSE = (
+    '{"should_store":true,"reason":"可复用经验","problem":"边界检查时机",'
+    '"solution":"先规范化再检查","applicability":"解析器场景","title":"经验标题",'
+    '"summary":"经验摘要","body":"经验正文","tags":["经验"]}'
+)
+
+
+def _model(response: str = _REFINE_RESPONSE) -> ModelTarget:
+    return ModelTarget("test", "model", _StubTransport(response))
 
 
 def context(workspace: Path) -> ToolContext:
@@ -140,6 +176,7 @@ async def test_memory_write_stores_explicit_user_fact_and_deduplicates(tmp_path:
         max_chars=4_000,
         user_prompt="给我记住, 我偏好简洁回答",
         source=MemorySource("session", "run"),
+        model=_model(),
     )
     assert tool.effects == frozenset({ToolEffect.OUTSIDE_WORKSPACE})
     arguments = MemoryWriteInput(
@@ -172,6 +209,7 @@ async def test_memory_write_requires_explicit_intent_and_rejects_sensitive_data(
         max_chars=4_000,
         user_prompt="我今天在调试登录功能",
         source=MemorySource("session", "run"),
+        model=_model(),
     )
     result = await implicit.execute(
         context(workspace),
@@ -186,6 +224,7 @@ async def test_memory_write_requires_explicit_intent_and_rejects_sensitive_data(
         max_chars=4_000,
         user_prompt="记住这个 API key: abc",
         source=MemorySource("session", "run"),
+        model=_model(),
     )
     result = await sensitive.execute(
         context(workspace),
@@ -209,6 +248,7 @@ async def test_memory_write_activates_experience_without_evidence(tmp_path: Path
         max_chars=4_000,
         user_prompt="记住一条经验: 修改后先运行 focused tests",
         source=MemorySource("session", "run"),
+        model=_model(),
     )
     result = await tool.execute(
         context(workspace),
@@ -239,6 +279,7 @@ async def test_memory_write_allows_model_selected_experience_without_explicit_in
         max_chars=4_000,
         user_prompt="修复解析器后, focused tests 证明边界检查应放在规范化之后",
         source=MemorySource("session", "run"),
+        model=_model(_ASSESS_EXPERIENCE_RESPONSE),
     )
     result = await tool.execute(
         context(workspace),
@@ -437,6 +478,7 @@ async def test_memory_write_user_experience_intent_overrides_model_sop_kind(
         max_chars=4_000,
         user_prompt="把 commit 工作流程的经验记下来",
         source=MemorySource("session", "run"),
+        model=_model(),
     )
     result = await tool.execute(
         context(workspace),
@@ -463,6 +505,7 @@ async def test_memory_write_rejects_disabled_kind(tmp_path: Path) -> None:
         max_chars=4_000,
         user_prompt="记住我的回答偏好",
         source=MemorySource("session", "run"),
+        model=_model(),
         enabled_kinds=frozenset(),
     )
     result = await tool.execute(
