@@ -9,7 +9,7 @@ from typing import Any, cast
 
 from windcode.config.paths import default_user_storage_root
 from windcode.domain.events import AgentEvent, AgentEventType, event_to_dict
-from windcode.observability.redaction import redact
+from windcode.observability.redaction import DynamicRedactor, redact
 
 _TRANSIENT_EVENT_KINDS = frozenset(
     {"text_delta", "reasoning_status", "tool_progress", "subagent_progress"}
@@ -33,6 +33,7 @@ class TraceStore:
         self.root = (root or default_user_storage_root() / "traces").expanduser().resolve()
         self.path = self.root / f"{run_id}.jsonl"
         self.secrets = tuple(secrets)
+        self._redactor: DynamicRedactor | None = None
         self.enabled = enabled
         self.include_tool_arguments = include_tool_arguments
         self.include_transient_events = include_transient_events
@@ -41,6 +42,10 @@ class TraceStore:
         if self.enabled:
             self.root.mkdir(parents=True, exist_ok=True)
             self._prune()
+
+    def bind_redactor(self, redactor: DynamicRedactor) -> None:
+        """Bind a run-scoped DynamicRedactor so dynamically registered secrets are redacted."""
+        self._redactor = redactor
 
     def _prune(self) -> None:
         traces = [path for path in self.root.glob("*.jsonl") if path.is_file()]
@@ -69,7 +74,13 @@ class TraceStore:
                 nested_copy = cast(dict[str, Any], nested).copy()
                 nested_copy.pop("arguments", None)
                 prepared["payload"] = nested_copy
-        return cast(dict[str, Any], redact(prepared, secrets=self.secrets))
+        return cast(dict[str, Any], self._redacted(prepared))
+
+    def _redacted(self, payload: Mapping[str, Any]) -> Any:
+        redactor = self._redactor
+        if redactor is not None:
+            return redactor.redact(payload)
+        return redact(payload, secrets=self.secrets)
 
     def write(
         self,

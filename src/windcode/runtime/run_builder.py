@@ -91,6 +91,7 @@ class RunBuilder:
         preparation = self.prepare_parent(request)
         resources = self.resources(preparation)
         redactor = DynamicRedactor()
+        resources.trace_store.bind_redactor(redactor)
         extensions = self._run_extensions(preparation, resources, redactor)
         access = self.access_builder.prepare(
             preparation.workspace,

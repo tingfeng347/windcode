@@ -17,6 +17,10 @@ _SENSITIVE_KEYS = {
     "secret",
     "credential",
     "credentials",
+    "token",
+    "auth_token",
+    "bearer_token",
+    "session_token",
 }
 
 
@@ -27,7 +31,7 @@ def _normalize_key(key: object) -> str:
 def _is_sensitive_key(key: object) -> bool:
     normalized = _normalize_key(key)
     return normalized in _SENSITIVE_KEYS or normalized.endswith(
-        ("_api_key", "_access_token", "_refresh_token", "_password", "_secret")
+        ("_api_key", "_access_token", "_refresh_token", "_password", "_secret", "_token")
     )
 
 
