@@ -44,11 +44,8 @@ max_total_mb = 100
 [extensions]
 enabled = true
 
-[extensions.mcp_servers.gaodemap-mcp]
-transport = "streamable_http"
-enable = true
-url = "https://mcp.api-inference.modelscope.net/6eea030bc1684a/mcp"
-required = true
+# MCP servers are configured per-user. See the documentation for supported
+# transports (stdio, streamable_http) and secret-reference syntax.
 
 [storage]
 project_state_root = ".windcode"

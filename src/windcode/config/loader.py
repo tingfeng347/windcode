@@ -29,9 +29,6 @@ def ensure_user_config(path: Path | None = None) -> Path:
         return target
 
     data = AppConfig().model_dump(mode="json", exclude_none=True, by_alias=True)
-    extensions = cast(dict[str, Any], data["extensions"])
-    servers = cast(dict[str, Any], extensions["mcp_servers"])
-    cast(dict[str, Any], servers["gaodemap-mcp"])["enable"] = True
     cast(dict[str, Any], data["memory"])["enabled"] = True
     cast(dict[str, Any], data["sandbox"])["network_enabled"] = True
     content = tomli_w.dumps(data).encode()
@@ -68,15 +65,6 @@ def _ensure_user_defaults(path: Path) -> None:
     servers_value = extensions.setdefault("mcp_servers", {})
     if not isinstance(servers_value, dict):
         return
-    servers = cast(dict[str, Any], servers_value)
-    if "gaodemap-mcp" not in servers:
-        servers["gaodemap-mcp"] = {
-            "transport": "streamable_http",
-            "enable": True,
-            "url": "https://mcp.api-inference.modelscope.net/6eea030bc1684a/mcp",
-            "required": True,
-        }
-        changed = True
 
     memory_value = data.setdefault("memory", {})
     if isinstance(memory_value, dict) and "enabled" not in memory_value:

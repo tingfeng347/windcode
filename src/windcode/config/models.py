@@ -189,14 +189,7 @@ McpServerConfig = Annotated[McpStdioConfig | McpHttpConfig, Field(union_mode="le
 
 
 def _default_mcp_servers() -> dict[str, McpServerConfig]:
-    return {
-        "gaodemap-mcp": McpHttpConfig(
-            transport="streamable_http",
-            enabled=False,
-            url="https://mcp.api-inference.modelscope.net/6eea030bc1684a/mcp",
-            required=True,
-        )
-    }
+    return {}
 
 
 class ExtensionConfig(StrictModel):
