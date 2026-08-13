@@ -335,7 +335,7 @@ async def test_memory_command_opens_manager_and_persists_enabled_switch(tmp_path
         config_file=config_file,
     )
     async with app.run_test(size=(80, 24)) as pilot:
-        app.client.create_memory_candidate(
+        await app.client.create_memory_candidate(
             kind=MemoryKind.USER_PROFILE,
             scope=MemoryScope.USER,
             title="编程偏好",

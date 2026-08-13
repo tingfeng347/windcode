@@ -30,7 +30,7 @@ from windcode.domain.events import (
 from windcode.domain.messages import TextBlock, message_from_dict
 from windcode.extensions.models import CapabilityKind, ExtensionScope
 from windcode.sdk import RunHandle, Windcode
-from windcode.tui.command_handlers import ExtensionCommandHandler, MemoryCommandHandler
+from windcode.tui.command_handlers import MemoryCommandHandler
 from windcode.tui.commands import (
     COMMANDS,
     CommandDefinition,
@@ -40,6 +40,7 @@ from windcode.tui.commands import (
     complete_skills,
     parse_command,
 )
+from windcode.tui.extension_commands import ExtensionCommandHandler
 from windcode.tui.widgets import (
     ApprovalWidget,
     ChatInput,
@@ -418,7 +419,7 @@ class WindcodeApp(App[None]):
     async def _open_memory_manager(self) -> None:
         if self.memory_manager is not None:
             await self.memory_manager.dismiss()
-        records = self.client.list_memories() if self.config.memory.enabled else ()
+        records = await self.client.list_memories() if self.config.memory.enabled else ()
         self.memory_manager = MemoryManager(records, enabled=self.config.memory.enabled)
         await self.push_screen(self.memory_manager)
 
@@ -755,33 +756,33 @@ class WindcodeApp(App[None]):
     @on(MemoryManager.EnabledChanged)
     async def memory_enabled_changed(self, event: MemoryManager.EnabledChanged) -> None:
         try:
-            self.client.set_memory_enabled(event.enabled, config_file=self.config_file)
+            await self.client.set_memory_enabled(event.enabled, config_file=self.config_file)
         except (OSError, ValueError) as exc:
             await self._show_system_message(f"无法保存长期记忆设置: {exc}", error=True)
             return
         self.config = self.client.config
         self.provider_service.update_config(self.config)
         if self.memory_manager is not None:
-            records = self.client.list_memories() if event.enabled else ()
+            records = await self.client.list_memories() if event.enabled else ()
             self.memory_manager.refresh_records(records)
 
     @on(MemoryManager.Forget)
     async def memory_forget(self, event: MemoryManager.Forget) -> None:
-        self.client.delete_memory(event.memory_id)
+        await self.client.delete_memory(event.memory_id)
         if self.memory_manager is not None:
-            self.memory_manager.refresh_records(self.client.list_memories())
+            self.memory_manager.refresh_records(await self.client.list_memories())
 
     @on(MemoryManager.ActivationChanged)
     async def memory_activation_changed(self, event: MemoryManager.ActivationChanged) -> None:
-        self.client.set_memory_activation(event.memory_id, event.activation)
+        await self.client.set_memory_activation(event.memory_id, event.activation)
         if self.memory_manager is not None:
-            self.memory_manager.refresh_records(self.client.list_memories())
+            self.memory_manager.refresh_records(await self.client.list_memories())
 
     @on(MemoryManager.Rebuild)
     async def memory_rebuild(self) -> None:
-        self.client.rebuild_memory_index()
+        await self.client.rebuild_memory_index()
         if self.memory_manager is not None:
-            self.memory_manager.refresh_records(self.client.list_memories())
+            self.memory_manager.refresh_records(await self.client.list_memories())
 
     @on(MemoryManager.Closed)
     async def memory_manager_closed(self) -> None:
@@ -963,7 +964,7 @@ class WindcodeApp(App[None]):
         elif command.name == "memory":
             if active:
                 raise ValueError("任务运行期间不能管理长期记忆")
-            outcome = self.memory_commands.execute(
+            outcome = await self.memory_commands.execute(
                 command.arguments,
                 enabled=self.config.memory.enabled,
             )
