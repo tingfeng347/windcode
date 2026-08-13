@@ -203,14 +203,15 @@ async def test_arrow_keys_switch_provider_group_and_choose_model(tmp_path: Path)
             provider_id="openai",
             credential_id="codex",
         ),
-        "claude": ProviderConfig(
-            protocol=ProviderProtocol.ANTHROPIC_MESSAGES,
-            model="claude-sonnet",
-            provider_id="anthropic",
-            credential_id="claude",
+        "ds": ProviderConfig(
+            protocol=ProviderProtocol.OPENAI_COMPATIBLE,
+            model="deepseek-chat",
+            provider_id="deepseek",
+            credential_id="ds",
+            base_url="https://api.deepseek.com/v1",
         ),
     }
-    store = MemoryCredentialStore({"codex": "one", "claude": "two"})
+    store = MemoryCredentialStore({"codex": "one", "ds": "two"})
     app = WindcodeApp(
         AppConfig(providers=profiles, primary_provider="codex"),
         workspace=tmp_path,
@@ -223,11 +224,18 @@ async def test_arrow_keys_switch_provider_group_and_choose_model(tmp_path: Path)
         picker = cast(ModelManager, app.screen)
 
         await pilot.press("right", "right")
-        assert "Anthropic" in str(picker.query_one("#model-provider-tabs", Static).content)
-        await pilot.press("down", "enter")
+        await pilot.pause()
+        assert "DeepSeek" in str(picker.query_one("#model-provider-tabs", Static).content)
+        model_list = picker.query_one("#model-list", OptionList)
+        model_list.highlighted = next(
+            i
+            for i in range(model_list.option_count)
+            if model_list.get_option_at_index(i).id == "ds"
+        )
+        await pilot.press("enter")
         await pilot.pause()
 
-        assert app.model == "claude"
+        assert app.model == "ds"
         assert app.screen.id == "_default"
 
 

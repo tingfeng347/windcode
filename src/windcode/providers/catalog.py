@@ -23,13 +23,6 @@ PROVIDER_PRESETS: tuple[ProviderPreset, ...] = (
         "https://api.openai.com/v1",
     ),
     ProviderPreset(
-        "anthropic",
-        "Anthropic",
-        ProviderProtocol.ANTHROPIC_MESSAGES,
-        "ANTHROPIC_API_KEY",
-        "https://api.anthropic.com",
-    ),
-    ProviderPreset(
         "deepseek",
         "DeepSeek",
         ProviderProtocol.OPENAI_COMPATIBLE,
@@ -114,6 +107,4 @@ def provider_preset(config: ProviderConfig) -> ProviderPreset | None:
             return preset
     if config.protocol is ProviderProtocol.OPENAI_RESPONSES:
         return PRESETS_BY_ID["openai"]
-    if config.protocol is ProviderProtocol.ANTHROPIC_MESSAGES:
-        return PRESETS_BY_ID["anthropic"]
     return None
