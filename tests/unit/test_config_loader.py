@@ -19,16 +19,12 @@ def test_ensure_user_config_creates_defaults_with_private_permissions(tmp_path: 
     content = target.read_text(encoding="utf-8")
     assert "[memory]" in content
     assert "[extensions]" in content
-    assert "[extensions.mcp_servers.gaodemap-mcp]" in content
-    assert "enable = true" in content
-    assert "https://mcp.api-inference.modelscope.net/6eea030bc1684a/mcp" in content
     assert "dashscope-web-search" not in content
     config = load_config(tmp_path, user_file=target)
     assert config.memory.enabled
     assert config.sandbox.network_enabled
     assert config.extensions.enabled
-    assert set(config.extensions.mcp_servers) == {"gaodemap-mcp"}
-    assert config.extensions.mcp_servers["gaodemap-mcp"].enabled
+    assert config.extensions.mcp_servers == {}
 
 
 def test_ensure_user_config_preserves_explicit_existing_settings(tmp_path: Path) -> None:
@@ -42,7 +38,7 @@ def test_ensure_user_config_preserves_explicit_existing_settings(tmp_path: Path)
     config = load_config(tmp_path, user_file=target)
     assert config.permission.mode is PermissionMode.PLAN
     assert not config.extensions.enabled
-    assert set(config.extensions.mcp_servers) == {"gaodemap-mcp"}
+    assert config.extensions.mcp_servers == {}
 
 
 def test_ensure_user_config_migrates_existing_file_with_extension_defaults(
@@ -63,7 +59,7 @@ def test_ensure_user_config_migrates_existing_file_with_extension_defaults(
     assert config.primary_provider == "local"
     assert config.providers["local"].model == "model"
     assert config.extensions.enabled
-    assert set(config.extensions.mcp_servers) == {"gaodemap-mcp"}
+    assert config.extensions.mcp_servers == {}
     assert config.memory.enabled
     assert config.sandbox.network_enabled
     assert "dashscope-web-search" not in content

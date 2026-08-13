@@ -140,6 +140,7 @@ async def test_sets_default_and_disconnects_provider(tmp_path: Path) -> None:
         AppConfig(providers=profiles, primary_provider="first", fallback_chain=("second",)),
         workspace=tmp_path,
         state_root=tmp_path / "state",
+        config_file=tmp_path / ".windcode" / "config.toml",
         credential_store=store,
     )
     async with app.run_test(size=(110, 40)) as pilot:

@@ -4,10 +4,10 @@ import pytest
 from pydantic import ValidationError
 
 from windcode.config.loader import load_config
-from windcode.config.models import AppConfig, ExtensionConfig, McpHttpConfig
+from windcode.config.models import AppConfig, ExtensionConfig
 
 
-def test_extensions_and_disabled_gaodemap_config_are_present_by_default(tmp_path: Path) -> None:
+def test_extensions_are_enabled_with_empty_mcp_servers_by_default(tmp_path: Path) -> None:
     user = tmp_path / "user.toml"
     user.write_text("", encoding="utf-8")
     config = load_config(tmp_path, user_file=user)
@@ -15,12 +15,7 @@ def test_extensions_and_disabled_gaodemap_config_are_present_by_default(tmp_path
     assert config.extensions == ExtensionConfig()
     assert config.extensions.enabled
     assert config.extensions.skill_roots == ()
-    assert set(config.extensions.mcp_servers) == {"gaodemap-mcp"}
-    gaodemap = config.extensions.mcp_servers["gaodemap-mcp"]
-    assert isinstance(gaodemap, McpHttpConfig)
-    assert not gaodemap.enabled
-    assert gaodemap.required
-    assert gaodemap.url == "https://mcp.api-inference.modelscope.net/6eea030bc1684a/mcp"
+    assert config.extensions.mcp_servers == {}
 
 
 def test_project_mcp_provenance_survives_layer_merge(tmp_path: Path) -> None:
