@@ -236,7 +236,8 @@ class RunExtensions:
             "started": "hook_started",
             "finished": "hook_finished",
             "rejected": "hook_rejected",
-        }[phase]
+            "failed": "hook_failed",
+        }.get(phase, "hook_failed")
         await self._emit(
             action,
             extension_id=hook.source_id,
@@ -384,4 +385,8 @@ class RunExtensions:
         pending = [self.hooks.aclose()]
         if self.owns_mcp:
             pending.append(self.mcp.aclose())
-        await asyncio.gather(*pending, return_exceptions=True)
+        try:
+            async with asyncio.timeout(15.0):
+                await asyncio.gather(*pending, return_exceptions=True)
+        except TimeoutError:
+            pass

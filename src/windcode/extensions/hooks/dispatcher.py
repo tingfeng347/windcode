@@ -97,6 +97,12 @@ class HookDispatcher:
                     outcome,
                 )
             return outcome
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if self.observer is not None:
+                await self.observer("failed", hook, context, None)
+            raise
         finally:
             self._active_sources.discard(recursion_key)
 
