@@ -18,7 +18,6 @@ from windcode.memory import (
     classify_memory_intent,
     explicitly_always_project_fact,
     has_explicit_memory_intent,
-    is_stable_user_fact,
 )
 from windcode.memory.refiner import (
     RefinedMemory,
@@ -324,15 +323,6 @@ class MemoryWriteTool(_MemoryTool):
                 f"memory kind is disabled: {kind.value}",
                 is_error=True,
                 data={"error": "memory_kind_disabled", "kind": kind.value},
-            )
-        # Spec 3: stable user identity and long-term preferences are system-extracted only.
-        # Block agent from writing USER_PROFILE for transient or non-stable facts.
-        if kind is MemoryKind.USER_PROFILE and not is_stable_user_fact(self.user_prompt):
-            return ToolResult(
-                "user profile memories require a stable, durable user fact; "
-                "transient states and one-time events are not saved",
-                is_error=True,
-                data={"error": "unstable_user_fact_rejected"},
             )
         project_fact = kind is not MemoryKind.USER_PROFILE and (
             kind is not MemoryKind.REFERENCE or parsed.scope is MemoryScope.PROJECT
