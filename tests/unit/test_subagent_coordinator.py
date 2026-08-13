@@ -349,6 +349,22 @@ async def test_default_total_limit_rejects_ninth_task_without_partial_creation(
     assert coord.list() == ()
 
 
+async def test_spawn_reuses_task_name_after_terminal(tmp_path: Path) -> None:
+    coord, factory, _ = coordinator(
+        tmp_path,
+        config=SubagentConfig(max_tasks=4, max_concurrent=2),
+    )
+    (first,) = await coord.spawn((task("reuse"),))
+    factory.gates["reuse"].set()
+    await coord.wait(first.subagent_id)
+    assert coord.list()[0].status is SubagentStatus.COMPLETED
+
+    # A terminal record must not block a new task with the same name.
+    (second,) = await coord.spawn((task("reuse"),))
+    assert second.spec.task_name == "reuse"
+    assert second.subagent_id != first.subagent_id
+
+
 async def test_network_read_task_is_rejected_before_creation(tmp_path: Path) -> None:
     coord, factory, _ = coordinator(tmp_path)
     network_task = replace(task("weather"), requires_network=True)

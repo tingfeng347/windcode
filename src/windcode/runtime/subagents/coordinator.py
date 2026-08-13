@@ -178,7 +178,12 @@ class SubagentCoordinator:
         return await run_collaboration(self, request)
 
     def available_task_capacity(self) -> int:
-        return max(0, self.config.max_tasks - len(self._records))
+        active = sum(
+            1
+            for record in self._records.values()
+            if record.status in {SubagentStatus.QUEUED, SubagentStatus.RUNNING}
+        )
+        return max(0, self.config.max_tasks - active)
 
     def available_concurrency(self) -> int:
         return max(0, self.config.max_concurrent - self._active)
@@ -507,13 +512,18 @@ class SubagentCoordinator:
         async with self._lock:
             if self._closed:
                 raise SubagentCoordinatorError("closed", "subagent coordinator is closed")
-            if len(self._records) + len(specs) > self.config.max_tasks:
+            active = [
+                record
+                for record in self._records.values()
+                if record.status in {SubagentStatus.QUEUED, SubagentStatus.RUNNING}
+            ]
+            if len(active) + len(specs) > self.config.max_tasks:
                 raise SubagentCoordinatorError(
                     "capacity_exceeded",
                     f"subagent task limit is {self.config.max_tasks}",
                 )
             names = [spec.task_name for spec in specs]
-            existing_names = {record.spec.task_name for record in self._records.values()}
+            existing_names = {record.spec.task_name for record in active}
             if len(set(names)) != len(names) or existing_names.intersection(names):
                 raise SubagentCoordinatorError(
                     "duplicate_task_name", "task names must be unique within a parent run"
