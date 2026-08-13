@@ -49,19 +49,12 @@ async def test_drain_or_close_returns_immediately_when_no_pending() -> None:
 
 
 @pytest.mark.asyncio
-async def test_drain_or_close_waits_for_pending_completion() -> None:
+async def test_drain_or_close_does_not_block_for_pending() -> None:
     source = SubagentCompletionSource()
     source.track()
-
-    async def deliver_later() -> None:
-        await asyncio.sleep(0.05)
-        await source.deliver(_result())
-
-    task = asyncio.create_task(deliver_later())
-    messages = await asyncio.wait_for(source.drain_or_close_inbound(), timeout=2.0)
-    await task
-    assert len(messages) == 1
-    assert "scout" in messages[0].content[0].text  # type: ignore[union-attr]
+    # Should return immediately (empty) even though a subagent is pending
+    messages = await asyncio.wait_for(source.drain_or_close_inbound(), timeout=0.5)
+    assert messages == ()
 
 
 @pytest.mark.asyncio

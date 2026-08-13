@@ -81,7 +81,7 @@ class ParentRun:
             await self._prepare_mcp_tools()
             await self.memory.publish_recalled()
             await self._start_lifecycle()
-            if self.preparation.existing_session:
+            if self.preparation.existing_session and not self.coordinator.has_running():
                 await self.coordinator.recover()
             result = await self.loop.run(
                 self.request.prompt,
@@ -106,16 +106,18 @@ class ParentRun:
             await self._observe_error()
             raise
         finally:
-            await asyncio.gather(
-                self.coordinator.shutdown("parent run ended"), return_exceptions=True
-            )
+            if not self.coordinator.has_running():
+                await asyncio.gather(
+                    self.coordinator.shutdown("parent run ended"), return_exceptions=True
+                )
             await asyncio.gather(
                 self.extensions.lifecycle(HookEvent.SESSION_END), return_exceptions=True
             )
             await asyncio.gather(self.extensions.aclose(), return_exceptions=True)
             self.extensions.mcp.reset_observer(observer_token)
             self.redactor.clear()
-            await self.resources.event_bus.close()
+            if not self.coordinator.has_running():
+                await self.resources.event_bus.close()
 
     async def _prepare_mcp_tools(self) -> None:
         if self.extension_state.startup_task is not None:

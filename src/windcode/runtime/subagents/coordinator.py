@@ -140,6 +140,29 @@ class SubagentCoordinator:
         for runtime in self._runtimes.values():
             runtime.set_parent_permission(previous, mode)
 
+    def has_running(self) -> bool:
+        """Return True if any subagent is still queued or running."""
+        return any(
+            record.status in {SubagentStatus.QUEUED, SubagentStatus.RUNNING}
+            for record in self._records.values()
+        )
+
+    def reattach(
+        self,
+        *,
+        event_bus: EventBus,
+        event_observer: Callable[[SubagentEvent], Awaitable[None]] | None,
+        parent_run_id: str,
+    ) -> None:
+        """Rebind the coordinator to a new run's event bus and observer.
+
+        Called when a coordinator is reused across runs so that background
+        subagents can publish events to the active run's bus.
+        """
+        self.event_bus = event_bus
+        self.event_observer = event_observer
+        self.parent_run_id = parent_run_id
+
     async def _publish_approval(self, event: ApprovalRequested) -> None:
         await self.event_bus.publish(event, durable=True)
 

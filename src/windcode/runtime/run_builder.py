@@ -30,6 +30,7 @@ from windcode.runtime import (
     ToolRuntime,
     ToolScheduler,
 )
+from windcode.runtime.event_bus import EventBus
 from windcode.runtime.parent_access import ParentAccess, ParentAccessBuilder
 from windcode.runtime.parent_run import (
     ParentRun,
@@ -87,6 +88,9 @@ class RunBuilder:
             state_root=state_root,
             base_tools=base_tools,
         )
+        self._coordinators: dict[
+            str, tuple[SubagentCoordinator, SubagentCompletionSource, EventBus]
+        ] = {}
 
     def start(self, request: RunRequest) -> RunHandle:
         preparation = self.prepare_parent(request)
@@ -116,10 +120,21 @@ class RunBuilder:
             model=model_chain[0],
         )
         control = self._control(request)
-        completion_source = SubagentCompletionSource()
-        coordinator = self._coordinator(
-            preparation, request, resources, access, extensions, completion_source
-        )
+        session_id = preparation.session.metadata.session_id
+        reused = self._coordinators.get(session_id)
+        if reused is not None and reused[0].has_running():
+            coordinator, completion_source, _ = reused
+            coordinator.reattach(
+                event_bus=resources.event_bus,
+                event_observer=extensions.subagent_lifecycle,
+                parent_run_id=preparation.run_id,
+            )
+        else:
+            completion_source = SubagentCompletionSource()
+            coordinator = self._coordinator(
+                preparation, request, resources, access, extensions, completion_source
+            )
+        self._coordinators[session_id] = (coordinator, completion_source, resources.event_bus)
         add_subagent_tools(access.registry, coordinator)
         system_prompt = self._system_prompt(preparation, access, extensions, memory)
         scheduler = self._scheduler(preparation, access, extensions, control)

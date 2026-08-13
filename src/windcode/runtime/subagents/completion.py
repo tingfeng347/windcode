@@ -42,9 +42,11 @@ def _format_completion(result: SubagentResult) -> Message:
 class SubagentCompletionSource:
     """Inbound message source that delivers subagent completion notifications.
 
-    The parent agent loop drains pending completions at the start of each turn
-    (non-blocking). When the model has no more tool calls, ``drain_or_close``
-    waits for the next running subagent before allowing the run to end.
+    Both ``drain_inbound`` and ``drain_or_close_inbound`` are non-blocking — they
+    return only results that have already been delivered. This allows the parent
+    agent loop to finish its run (so the user can interact) while subagents keep
+    running in the background. Completions are picked up at the start of the next
+    run via ``drain_inbound``.
     """
 
     def __init__(self) -> None:
@@ -68,15 +70,9 @@ class SubagentCompletionSource:
         return tuple(messages)
 
     async def drain_or_close_inbound(self) -> tuple[Message, ...]:
-        """Drain completed results; if subagents are still running, wait for
-        the next completion (up to 5 minutes) before returning."""
-        messages = list(await self.drain_inbound())
-        if messages or self._pending_count <= 0:
-            return tuple(messages)
-        try:
-            async with asyncio.timeout(300.0):
-                messages.append(await self._queue.get())
-        except TimeoutError:
-            pass
-        messages.extend(await self.drain_inbound())
-        return tuple(messages)
+        """Non-blocking drain — never waits for running subagents.
+
+        Returns already-completed results so the parent run can end and the user
+        can continue interacting. Pending subagents survive to the next run.
+        """
+        return await self.drain_inbound()
