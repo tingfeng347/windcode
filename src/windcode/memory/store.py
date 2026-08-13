@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import re
@@ -57,7 +58,7 @@ class MemoryStore:
                 for suffix in ("-wal", "-shm"):
                     Path(f"{self.index_path}{suffix}").unlink(missing_ok=True)
                 self._create_schema()
-                self.rebuild()
+                self._sync_rebuild()
                 return
             self._create_schema()
         except sqlite3.DatabaseError:
@@ -66,7 +67,7 @@ class MemoryStore:
             for suffix in ("-wal", "-shm"):
                 Path(f"{self.index_path}{suffix}").unlink(missing_ok=True)
             self._create_schema()
-            self.rebuild()
+            self._sync_rebuild()
 
     def _create_schema(self) -> None:
         with self._connect() as connection:
@@ -160,7 +161,9 @@ class MemoryStore:
             ),
         )
 
-    def save(self, record: MemoryRecord) -> MemoryRecord:
+    # -- sync implementations (private) --
+
+    def _sync_save(self, record: MemoryRecord) -> MemoryRecord:
         if not record.title or not record.summary or not record.body:
             raise ValueError("memory title, summary, and body are required")
         if record.scope is MemoryScope.PROJECT and not record.project_id:
@@ -173,7 +176,7 @@ class MemoryStore:
             self._index(connection, record, path)
         return record
 
-    def get(self, memory_id: str) -> MemoryRecord:
+    def _sync_get(self, memory_id: str) -> MemoryRecord:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT path FROM memories WHERE memory_id = ?", (memory_id,)
@@ -185,18 +188,19 @@ class MemoryStore:
             raise ValueError("memory index contains an unsafe path")
         return self._parse(path.read_text(encoding="utf-8"))
 
-    def list(
+    def _sync_list(
         self,
         *,
-        status: MemoryStatus | None = None,
+        statuses: tuple[MemoryStatus, ...] | None = None,
         project_id: str | None = None,
         activation: MemoryActivation | None = None,
     ) -> tuple[MemoryRecord, ...]:
         clauses: list[str] = []
         values: list[str] = []
-        if status is not None:
-            clauses.append("status = ?")
-            values.append(status.value)
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            clauses.append(f"status IN ({placeholders})")
+            values.extend(s.value for s in statuses)
         if project_id is not None:
             clauses.append("(scope = 'user' OR project_id = ?)")
             values.append(project_id)
@@ -208,9 +212,9 @@ class MemoryStore:
             rows = connection.execute(
                 f"SELECT memory_id FROM memories{where} ORDER BY updated_at DESC", values
             ).fetchall()
-        return tuple(self.get(str(row["memory_id"])) for row in rows)
+        return tuple(self._sync_get(str(row["memory_id"])) for row in rows)
 
-    def search(
+    def _sync_search(
         self,
         query: str,
         *,
@@ -255,17 +259,18 @@ class MemoryStore:
         except sqlite3.OperationalError:
             rows = ()
         indexed = tuple(
-            MemorySearchResult(self.get(str(row["memory_id"])), float(-row["rank"])) for row in rows
+            MemorySearchResult(self._sync_get(str(row["memory_id"])), float(-row["rank"]))
+            for row in rows
         )
         if len(indexed) >= limit:
             return indexed
 
         # unicode61 does not segment unspaced CJK sentences reliably. A bounded
-        # lexical supplement lets “我喜欢什么” recall “我喜欢 Python”.
+        # lexical supplement lets "我喜欢什么" recall "我喜欢 Python".
         selected = {item.record.memory_id for item in indexed}
         query_terms = self._lexical_terms(query)
         supplemental: list[MemorySearchResult] = []
-        for record in self.list(project_id=project_id):
+        for record in self._sync_list(project_id=project_id):
             if (
                 record.memory_id in selected
                 or record.status not in statuses
@@ -293,12 +298,12 @@ class MemoryStore:
             terms.update(run[index : index + 2] for index in range(max(0, len(run) - 1)))
         return terms
 
-    def transition(self, memory_id: str, status: MemoryStatus) -> MemoryRecord:
-        record = self.get(memory_id).transition(status)
-        return self.save(record)
+    def _sync_transition(self, memory_id: str, status: MemoryStatus) -> MemoryRecord:
+        record = self._sync_get(memory_id).transition(status)
+        return self._sync_save(record)
 
-    def update(self, memory_id: str, **changes: Any) -> MemoryRecord:
-        current = self.get(memory_id)
+    def _sync_update(self, memory_id: str, **changes: Any) -> MemoryRecord:
+        current = self._sync_get(memory_id)
         allowed = {
             "title",
             "summary",
@@ -312,17 +317,17 @@ class MemoryStore:
         if unknown := set(changes) - allowed:
             raise ValueError(f"unsupported memory fields: {', '.join(sorted(unknown))}")
         updated = replace(current, **changes, version=current.version + 1, updated_at=utc_now())
-        return self.save(updated)
+        return self._sync_save(updated)
 
-    def delete(self, memory_id: str) -> None:
-        record = self.get(memory_id)
+    def _sync_delete(self, memory_id: str) -> None:
+        record = self._sync_get(memory_id)
         path = self._path(record)
         with self._connect() as connection:
             connection.execute("DELETE FROM memories_fts WHERE memory_id = ?", (memory_id,))
             connection.execute("DELETE FROM memories WHERE memory_id = ?", (memory_id,))
         path.unlink(missing_ok=True)
 
-    def rebuild(self) -> int:
+    def _sync_rebuild(self) -> int:
         records: list[tuple[MemoryRecord, Path]] = []
         for path in sorted(self.records_dir.rglob("*.md")):
             if path.is_symlink() or not path.is_file():
@@ -337,11 +342,11 @@ class MemoryStore:
                 self._index(connection, record, path)
         return len(records)
 
-    def export_project(self, project_id: str, destination: Path) -> tuple[Path, ...]:
+    def _sync_export_project(self, project_id: str, destination: Path) -> tuple[Path, ...]:
         destination = destination.expanduser().resolve()
         destination.mkdir(parents=True, exist_ok=True)
         exported: list[Path] = []
-        for record in self.list(status=MemoryStatus.ACTIVE, project_id=project_id):
+        for record in self._sync_list(statuses=(MemoryStatus.ACTIVE,), project_id=project_id):
             if record.scope is not MemoryScope.PROJECT:
                 continue
             target = destination / f"{record.memory_id}.md"
@@ -349,8 +354,8 @@ class MemoryStore:
             exported.append(target)
         return tuple(exported)
 
-    def record_outcome(self, memory_id: str, *, success: bool) -> MemoryRecord:
-        current = self.get(memory_id)
+    def _sync_record_outcome(self, memory_id: str, *, success: bool) -> MemoryRecord:
+        current = self._sync_get(memory_id)
         updated = replace(
             current,
             success_count=current.success_count + int(success),
@@ -359,4 +364,63 @@ class MemoryStore:
             version=current.version + 1,
             updated_at=utc_now(),
         )
-        return self.save(updated)
+        return self._sync_save(updated)
+
+    # -- async public API --
+
+    async def save(self, record: MemoryRecord) -> MemoryRecord:
+        return await asyncio.to_thread(self._sync_save, record)
+
+    async def get(self, memory_id: str) -> MemoryRecord:
+        return await asyncio.to_thread(self._sync_get, memory_id)
+
+    async def list(
+        self,
+        *,
+        statuses: tuple[MemoryStatus, ...] | None = None,
+        project_id: str | None = None,
+        activation: MemoryActivation | None = None,
+    ) -> tuple[MemoryRecord, ...]:
+        return await asyncio.to_thread(
+            self._sync_list, statuses=statuses, project_id=project_id, activation=activation
+        )
+
+    async def search(
+        self,
+        query: str,
+        *,
+        project_id: str | None = None,
+        limit: int = 5,
+        statuses: tuple[MemoryStatus, ...] = (MemoryStatus.ACTIVE,),
+        kind: MemoryKind | None = None,
+        scope: MemoryScope | None = None,
+        activation: MemoryActivation | None = None,
+    ) -> tuple[MemorySearchResult, ...]:
+        return await asyncio.to_thread(
+            self._sync_search,
+            query,
+            project_id=project_id,
+            limit=limit,
+            statuses=statuses,
+            kind=kind,
+            scope=scope,
+            activation=activation,
+        )
+
+    async def transition(self, memory_id: str, status: MemoryStatus) -> MemoryRecord:
+        return await asyncio.to_thread(self._sync_transition, memory_id, status)
+
+    async def update(self, memory_id: str, **changes: Any) -> MemoryRecord:
+        return await asyncio.to_thread(self._sync_update, memory_id, **changes)
+
+    async def delete(self, memory_id: str) -> None:
+        await asyncio.to_thread(self._sync_delete, memory_id)
+
+    async def rebuild(self) -> int:
+        return await asyncio.to_thread(self._sync_rebuild)
+
+    async def export_project(self, project_id: str, destination: Path) -> tuple[Path, ...]:
+        return await asyncio.to_thread(self._sync_export_project, project_id, destination)
+
+    async def record_outcome(self, memory_id: str, *, success: bool) -> MemoryRecord:
+        return await asyncio.to_thread(self._sync_record_outcome, memory_id, success=success)

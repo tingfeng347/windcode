@@ -65,19 +65,19 @@ def test_legacy_auth_fixture_can_be_updated_and_reopened(tmp_path: Path) -> None
     }
 
 
-def test_memory_v1_fixture_can_be_rebuilt_updated_and_reopened(tmp_path: Path) -> None:
+async def test_memory_v1_fixture_can_be_rebuilt_updated_and_reopened(tmp_path: Path) -> None:
     record_path = tmp_path / "memory" / "records" / "user" / "user_profile" / "legacy-memory.md"
     record_path.parent.mkdir(parents=True)
     shutil.copyfile(FIXTURES / "memory_v1.md", record_path)
 
     store = MemoryStore(tmp_path / "memory")
-    assert store.rebuild() == 1
-    legacy = store.get("legacy-memory")
+    assert await store.rebuild() == 1
+    legacy = await store.get("legacy-memory")
     assert legacy.activation is MemoryActivation.ALWAYS
     assert legacy.priority == 80
 
-    updated = store.update("legacy-memory", summary="Updated legacy preference")
-    reopened = MemoryStore(tmp_path / "memory").get("legacy-memory")
+    updated = await store.update("legacy-memory", summary="Updated legacy preference")
+    reopened = await MemoryStore(tmp_path / "memory").get("legacy-memory")
 
     assert updated.version == 2
     assert reopened.summary == "Updated legacy preference"

@@ -117,7 +117,7 @@ def _status_label(status: MemoryStatus | None) -> str:
 
 def _bounded(items: list[dict[str, Any]], max_chars: int) -> tuple[list[dict[str, Any]], bool]:
     selected: list[dict[str, Any]] = []
-    size = 2
+    size = 2  # JSON array brackets "[]"
     for item in items:
         encoded = json.dumps(item, ensure_ascii=False)
         if selected and size + len(encoded) + 1 > max_chars:
@@ -167,9 +167,8 @@ class MemorySearchTool(_MemoryTool):
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
         del context
         parsed = cast(MemorySearchInput, arguments)
-        candidates = self.service.store.search(
+        candidates = await self.service.search(
             parsed.query,
-            project_id=self.service.project_id,
             limit=min(100, max(parsed.limit * 4, 20)),
             statuses=_query_statuses(parsed.status),
             kind=parsed.kind,
@@ -211,11 +210,11 @@ class MemoryListTool(_MemoryTool):
         statuses = _query_statuses(parsed.status)
         records = [
             record
-            for record in self.service.store.list(
-                project_id=self.service.project_id,
+            for record in await self.service.list(
+                statuses=statuses,
+                activation=parsed.activation,
             )
-            if record.status in statuses
-            and _matches(
+            if _matches(
                 record,
                 kind=parsed.kind,
                 scope=parsed.scope,
@@ -243,23 +242,20 @@ class MemoryGetTool(_MemoryTool):
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
         del context
         parsed = cast(MemoryGetInput, arguments)
-        matches = tuple(
-            record
-            for record in self.service.store.list(project_id=self.service.project_id)
-            if record.memory_id.startswith(parsed.memory_id)
-        )
-        if len(matches) != 1:
+        try:
+            match = await self.service.resolve_prefix(parsed.memory_id)
+        except ValueError:
             return ToolResult(
                 "memory ID does not exist or prefix is not unique",
                 is_error=True,
                 data={"error": "memory_not_found_or_ambiguous"},
             )
-        raw = _record_data(matches[0], include_body=True)
+        raw = _record_data(match, include_body=True)
         items, truncated = _bounded([raw], self.max_chars)
         data = {"memory": items[0], "truncated": truncated}
         await self._observe(
             "retrieved",
-            {"memory_id": matches[0].memory_id, "status": matches[0].status.value},
+            {"memory_id": match.memory_id, "status": match.status.value},
         )
         return ToolResult(json.dumps(data, ensure_ascii=False), data=data)
 
@@ -338,7 +334,7 @@ class MemoryWriteTool(_MemoryTool):
         existing = next(
             (
                 record
-                for record in self.service.store.list(project_id=self.service.project_id)
+                for record in await self.service.list()
                 if record.kind is kind
                 and record.scope is scope
                 and " ".join(record.body.casefold().split()) == normalized
@@ -362,7 +358,7 @@ class MemoryWriteTool(_MemoryTool):
                 if explicitly_always_project_fact(self.user_prompt)
                 else MemoryActivation.MANUAL
             )
-        candidate = self.service.create_candidate(
+        candidate = await self.service.create_candidate(
             kind=kind,
             scope=scope,
             title=_compact_memory_text(content, 80),
@@ -377,7 +373,7 @@ class MemoryWriteTool(_MemoryTool):
             record = candidate
             action = "candidate_created"
         else:
-            record = self.service.store.transition(candidate.memory_id, MemoryStatus.ACTIVE)
+            record = await self.service.transition(candidate.memory_id, MemoryStatus.ACTIVE)
             action = "activated"
         data = {
             "memory_id": record.memory_id,
@@ -416,18 +412,14 @@ class MemoryUpdateTool(_MemoryTool):
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
         del context
         parsed = cast(MemoryUpdateInput, arguments)
-        matches = tuple(
-            record
-            for record in self.service.store.list(project_id=self.service.project_id)
-            if record.memory_id.startswith(parsed.memory_id)
-        )
-        if len(matches) != 1:
+        try:
+            current = await self.service.resolve_prefix(parsed.memory_id)
+        except ValueError:
             return ToolResult(
                 "memory ID does not exist or prefix is not unique",
                 is_error=True,
                 data={"error": "memory_not_found_or_ambiguous"},
             )
-        current = matches[0]
         if current.kind is not MemoryKind.EXPERIENCE:
             return ToolResult(
                 "only experience memories can be updated with this tool",
@@ -445,7 +437,7 @@ class MemoryUpdateTool(_MemoryTool):
             validate_memory_text(content, self.user_prompt)
         except SensitiveMemoryError as exc:
             return ToolResult(str(exc), is_error=True, data={"error": "sensitive_memory_rejected"})
-        record = self.service.store.update(
+        record = await self.service.update(
             current.memory_id,
             title=_compact_memory_text(content, 80),
             summary=_compact_memory_text(content, 240),
@@ -477,19 +469,15 @@ class MemoryDeleteTool(_MemoryTool):
     async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
         del context
         parsed = cast(MemoryDeleteInput, arguments)
-        matches = tuple(
-            record
-            for record in self.service.store.list(project_id=self.service.project_id)
-            if record.memory_id.startswith(parsed.memory_id)
-        )
-        if len(matches) != 1:
+        try:
+            record = await self.service.resolve_prefix(parsed.memory_id)
+        except ValueError:
             return ToolResult(
                 "memory ID does not exist or prefix is not unique",
                 is_error=True,
                 data={"error": "memory_not_found_or_ambiguous"},
             )
-        record = matches[0]
-        self.service.store.delete(record.memory_id)
+        await self.service.delete(record.memory_id)
         data = {
             "memory_id": record.memory_id,
             "kind": record.kind.value,

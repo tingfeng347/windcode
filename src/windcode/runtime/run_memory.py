@@ -60,15 +60,19 @@ class RunMemory:
                 source=self._source,
                 enabled_kinds=self._enabled_kinds,
             )
-            self.context = self._service.build_context(
-                request.prompt,
-                baseline_max_records=config.baseline_max_records,
-                baseline_max_chars=config.baseline_max_chars,
-                search_limit=config.recall_limit,
-                search_max_chars=config.recall_max_chars,
-            )
-        else:
-            self.context = ""
+        self.context = ""
+
+    async def prepare(self) -> None:
+        if self._service is None:
+            return
+        await self._service.migrate()
+        self.context = await self._service.build_context(
+            self._request.prompt,
+            baseline_max_records=self._config.baseline_max_records,
+            baseline_max_chars=self._config.baseline_max_chars,
+            search_limit=self._config.recall_limit,
+            search_max_chars=self._config.recall_max_chars,
+        )
 
     @property
     def enabled(self) -> bool:
@@ -138,11 +142,11 @@ class RunMemory:
         explicit_experience_id = await self._extract_explicit_memory(service)
         if explicit_experience_id is not None:
             if result.verification:
-                experience = service.store.get(explicit_experience_id)
+                experience = await service.store.get(explicit_experience_id)
                 evidence = tuple(dict.fromkeys((*experience.evidence, *result.verification)))
                 if evidence != experience.evidence:
-                    service.store.update(explicit_experience_id, evidence=evidence)
-                service.store.record_outcome(explicit_experience_id, success=True)
+                    await service.store.update(explicit_experience_id, evidence=evidence)
+                await service.store.record_outcome(explicit_experience_id, success=True)
             return
         if self._config.experience_enabled and should_assess_experience(
             status=result.status,
@@ -154,7 +158,7 @@ class RunMemory:
     async def _extract_explicit_memory(self, service: MemoryService) -> str | None:
         explicit_experience_id: str | None = None
         if self._tool_memory_id is not None:
-            tool_memory = service.store.get(self._tool_memory_id)
+            tool_memory = await service.store.get(self._tool_memory_id)
             if tool_memory.kind is MemoryKind.EXPERIENCE:
                 explicit_experience_id = self._tool_memory_id
         intent_kind = classify_memory_intent(self._request.prompt)
@@ -188,7 +192,7 @@ class RunMemory:
             )
             activation = MemoryActivation.ALWAYS if core else MemoryActivation.MANUAL
         priority = 60 if activation is MemoryActivation.ALWAYS else None
-        candidate = service.create_candidate(
+        candidate = await service.create_candidate(
             kind=intent_kind,
             scope=scope,
             title=refined.title,
@@ -208,7 +212,7 @@ class RunMemory:
             action = "candidate_created"
             policy = "explicit_sop_candidate"
         else:
-            saved = service.store.transition(candidate.memory_id, MemoryStatus.ACTIVE)
+            saved = await service.store.transition(candidate.memory_id, MemoryStatus.ACTIVE)
             if intent_kind is MemoryKind.EXPERIENCE:
                 explicit_experience_id = saved.memory_id
             action = "activated"
@@ -242,9 +246,8 @@ class RunMemory:
         refined = assessment.memory
         duplicates = tuple(
             record
-            for record in service.store.list(
-                status=MemoryStatus.ACTIVE,
-                project_id=service.project_id,
+            for record in await service.list(
+                statuses=(MemoryStatus.ACTIVE,),
             )
             if record.kind is MemoryKind.EXPERIENCE
             and (
@@ -255,13 +258,13 @@ class RunMemory:
         if duplicates:
             existing = duplicates[0]
             if explicit_experience_id is not None:
-                service.store.delete(explicit_experience_id)
+                await service.store.delete(explicit_experience_id)
             evidence = tuple(dict.fromkeys((*existing.evidence, *result.verification)))
-            service.store.update(existing.memory_id, evidence=evidence)
-            service.store.record_outcome(existing.memory_id, success=True)
+            await service.store.update(existing.memory_id, evidence=evidence)
+            await service.store.record_outcome(existing.memory_id, success=True)
             return
         if explicit_experience_id is not None:
-            experience = service.store.update(
+            experience = await service.store.update(
                 explicit_experience_id,
                 title=refined.title,
                 summary=refined.summary,
@@ -271,7 +274,7 @@ class RunMemory:
                 confidence=0.8,
             )
         else:
-            experience = service.create_candidate(
+            experience = await service.create_candidate(
                 kind=MemoryKind.EXPERIENCE,
                 scope=MemoryScope.PROJECT,
                 title=refined.title,
@@ -282,7 +285,7 @@ class RunMemory:
                 evidence=result.verification,
                 confidence=0.7,
             )
-        verified = service.store.transition(experience.memory_id, MemoryStatus.ACTIVE)
+        verified = await service.store.transition(experience.memory_id, MemoryStatus.ACTIVE)
         await self._publish_record(
             verified,
             action="activated",
@@ -290,7 +293,7 @@ class RunMemory:
         )
         if self._config.sop_enabled and assessment.sop is not None:
             sop = assessment.sop
-            candidate = service.create_candidate(
+            candidate = await service.create_candidate(
                 kind=MemoryKind.SOP,
                 scope=MemoryScope.PROJECT,
                 title=sop.title,

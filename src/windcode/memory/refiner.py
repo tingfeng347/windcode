@@ -26,6 +26,15 @@ class ExperienceAssessment:
     sop: RefinedMemory | None = None
 
 
+async def _stream_text(target: ModelTarget, request: ModelRequest) -> str:
+    """Collect text from a model stream, returning concatenated TextDelta content."""
+    parts: list[str] = []
+    async for event in target.transport.stream(request):
+        if isinstance(event, TextDelta):
+            parts.append(event.text)
+    return "".join(parts)
+
+
 async def assess_core_project_fact(
     target: ModelTarget, *, text: str, max_output_tokens: int = 128
 ) -> bool:
@@ -42,13 +51,9 @@ async def assess_core_project_fact(
         system_prompt="你是保守的项目核心事实分类器。只输出严格 JSON。",
         max_output_tokens=max_output_tokens,
     )
-    parts: list[str] = []
     try:
-        async for event in target.transport.stream(request):
-            if isinstance(event, TextDelta):
-                parts.append(event.text)
-        raw = json.loads("".join(parts).strip())
-    except Exception:
+        raw = json.loads((await _stream_text(target, request)).strip())
+    except (json.JSONDecodeError, ValueError, RuntimeError, ConnectionError, OSError):
         return False
     if not isinstance(raw, dict):
         return False
@@ -112,14 +117,11 @@ async def refine_memory(
         system_prompt="你是 Windcode 的长期记忆提炼器。只输出严格 JSON，不调用工具。",  # noqa: RUF001
         max_output_tokens=max_output_tokens,
     )
-    parts: list[str] = []
     try:
-        async for event in target.transport.stream(request):
-            if isinstance(event, TextDelta):
-                parts.append(event.text)
-    except Exception:
+        text = await _stream_text(target, request)
+    except (RuntimeError, ConnectionError, OSError):
         return fallback
-    return _decode("".join(parts), fallback)
+    return _decode(text, fallback)
 
 
 async def assess_experience(
@@ -150,13 +152,9 @@ async def assess_experience(
         system_prompt="你是保守的工程经验筛选器。拿不准时必须拒绝保存。",
         max_output_tokens=max_output_tokens,
     )
-    parts: list[str] = []
     try:
-        async for event in target.transport.stream(request):
-            if isinstance(event, TextDelta):
-                parts.append(event.text)
-        raw = json.loads("".join(parts).strip())
-    except Exception:
+        raw = json.loads((await _stream_text(target, request)).strip())
+    except (json.JSONDecodeError, ValueError, RuntimeError, ConnectionError, OSError):
         return ExperienceAssessment(False, "模型评估失败")
     if not isinstance(raw, dict):
         return ExperienceAssessment(False, "模型评估格式无效")

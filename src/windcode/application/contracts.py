@@ -4,7 +4,12 @@ from windcode.domain.events import RunRequest
 from windcode.domain.messages import Message
 from windcode.domain.tools import Tool
 from windcode.extensions.commands import CommandRoute
-from windcode.extensions.models import CapabilityRecord, ExtensionSnapshot, ManagementResult
+from windcode.extensions.models import (
+    CapabilityRecord,
+    ExtensionScope,
+    ExtensionSnapshot,
+    ManagementResult,
+)
 from windcode.extensions.plugins.installer import InstallResult
 from windcode.extensions.service import ExtensionService
 from windcode.extensions.skills.tools import SkillSearchResult
@@ -27,6 +32,7 @@ __all__ = [
     "CapabilityRecord",
     "CommandRoute",
     "EventRecord",
+    "ExtensionScope",
     "ExtensionService",
     "ExtensionSnapshot",
     "InstallResult",

@@ -35,23 +35,23 @@ async def test_memory_tools_search_list_and_get_visible_records(tmp_path: Path) 
     workspace = tmp_path / "project"
     workspace.mkdir()
     service = MemoryService(tmp_path / "state", workspace)
-    user = service.create_candidate(
+    user = await service.create_candidate(
         kind=MemoryKind.USER_PROFILE,
         scope=MemoryScope.USER,
         title="语言偏好",
         summary="用户偏好中文回答",
         body="始终使用中文回答。",
     )
-    service.store.transition(user.memory_id, MemoryStatus.ACTIVE)
-    project = service.create_candidate(
+    await service.store.transition(user.memory_id, MemoryStatus.ACTIVE)
+    project = await service.create_candidate(
         kind=MemoryKind.PROJECT_KNOWLEDGE,
         scope=MemoryScope.PROJECT,
         title="项目语言",
         summary="项目使用 Python",
         body="本项目使用 Python 3.12。",
     )
-    service.store.transition(project.memory_id, MemoryStatus.ACTIVE)
-    candidate = service.create_candidate(
+    await service.store.transition(project.memory_id, MemoryStatus.ACTIVE)
+    candidate = await service.create_candidate(
         kind=MemoryKind.EXPERIENCE,
         scope=MemoryScope.PROJECT,
         title="提交经验",
@@ -103,14 +103,14 @@ async def test_memory_tools_search_list_and_get_visible_records(tmp_path: Path) 
 async def test_memory_get_cannot_read_another_projects_record(tmp_path: Path) -> None:
     state = tmp_path / "state"
     first = MemoryService(state, tmp_path / "first")
-    hidden = first.create_candidate(
+    hidden = await first.create_candidate(
         kind=MemoryKind.PROJECT_KNOWLEDGE,
         scope=MemoryScope.PROJECT,
         title="私有项目事实",
         summary="只属于项目 A",
         body="项目 A 的内部约定。",
     )
-    first.store.transition(hidden.memory_id, MemoryStatus.ACTIVE)
+    await first.store.transition(hidden.memory_id, MemoryStatus.ACTIVE)
     second = MemoryService(state, tmp_path / "second")
 
     async def observe(action: str, details: dict[str, object]) -> None:
@@ -152,7 +152,7 @@ async def test_memory_write_stores_explicit_user_fact_and_deduplicates(tmp_path:
     assert first.data["result"] == "stored"
     assert first.data["status"] == MemoryStatus.ACTIVE.value
     assert second.data == {**first.data, "result": "already_exists"}
-    assert len(service.store.list(project_id=service.project_id)) == 1
+    assert len(await service.store.list(project_id=service.project_id)) == 1
     assert [action for action, _ in observed] == ["activated", "already_exists"]
 
 
@@ -218,7 +218,7 @@ async def test_memory_write_activates_experience_without_evidence(tmp_path: Path
         ),
     )
     assert result.data["status"] == MemoryStatus.ACTIVE.value
-    record = service.store.get(str(result.data["memory_id"]))
+    record = await service.store.get(str(result.data["memory_id"]))
     assert record.activation is MemoryActivation.SEARCH
     assert record.evidence
 
@@ -257,14 +257,14 @@ async def test_memory_update_revises_visible_experience_in_place(tmp_path: Path)
     workspace = tmp_path / "project"
     workspace.mkdir()
     service = MemoryService(tmp_path / "state", workspace)
-    original = service.create_candidate(
+    original = await service.create_candidate(
         kind=MemoryKind.EXPERIENCE,
         scope=MemoryScope.PROJECT,
         title="解析器经验",
         summary="先校验再规范化",
         body="解析器应先校验再规范化。",
     )
-    original = service.store.transition(original.memory_id, MemoryStatus.ACTIVE)
+    original = await service.store.transition(original.memory_id, MemoryStatus.ACTIVE)
     observed: list[tuple[str, dict[str, object]]] = []
 
     async def observe(action: str, details: dict[str, object]) -> None:
@@ -284,13 +284,13 @@ async def test_memory_update_revises_visible_experience_in_place(tmp_path: Path)
         ),
     )
 
-    updated = service.store.get(original.memory_id)
+    updated = await service.store.get(original.memory_id)
     assert not result.is_error
     assert result.data["result"] == "updated"
     assert result.data["memory_id"] == original.memory_id
     assert updated.body == "解析器应先规范化输入, 再执行边界检查。"
     assert updated.version == original.version + 1
-    assert len(service.store.list(project_id=service.project_id)) == 1
+    assert len(await service.store.list(project_id=service.project_id)) == 1
     assert [action for action, _ in observed] == ["updated"]
 
 
@@ -299,31 +299,31 @@ async def test_memory_update_rejects_hidden_non_experience_and_sensitive_content
 ) -> None:
     state = tmp_path / "state"
     first = MemoryService(state, tmp_path / "first")
-    hidden = first.create_candidate(
+    hidden = await first.create_candidate(
         kind=MemoryKind.EXPERIENCE,
         scope=MemoryScope.PROJECT,
         title="项目经验",
         summary="只属于项目 A",
         body="项目 A 的经验。",
     )
-    first.store.transition(hidden.memory_id, MemoryStatus.ACTIVE)
+    await first.store.transition(hidden.memory_id, MemoryStatus.ACTIVE)
     second = MemoryService(state, tmp_path / "second")
-    profile = second.create_candidate(
+    profile = await second.create_candidate(
         kind=MemoryKind.USER_PROFILE,
         scope=MemoryScope.USER,
         title="回答偏好",
         summary="偏好简洁回答",
         body="用户偏好简洁回答。",
     )
-    second.store.transition(profile.memory_id, MemoryStatus.ACTIVE)
-    visible = second.create_candidate(
+    await second.store.transition(profile.memory_id, MemoryStatus.ACTIVE)
+    visible = await second.create_candidate(
         kind=MemoryKind.EXPERIENCE,
         scope=MemoryScope.PROJECT,
         title="可见经验",
         summary="当前项目经验",
         body="当前项目的经验。",
     )
-    second.store.transition(visible.memory_id, MemoryStatus.ACTIVE)
+    await second.store.transition(visible.memory_id, MemoryStatus.ACTIVE)
 
     async def observe(action: str, details: dict[str, object]) -> None:
         del action, details
@@ -360,14 +360,14 @@ async def test_memory_delete_removes_visible_memory_without_keyword_gate(
     workspace = tmp_path / "project"
     workspace.mkdir()
     service = MemoryService(state, workspace)
-    memory = service.create_candidate(
+    memory = await service.create_candidate(
         kind=MemoryKind.EXPERIENCE,
         scope=MemoryScope.PROJECT,
         title="旧经验",
         summary="已经失效的经验",
         body="旧的处理方式。",
     )
-    service.store.transition(memory.memory_id, MemoryStatus.ACTIVE)
+    await service.store.transition(memory.memory_id, MemoryStatus.ACTIVE)
     observed: list[tuple[str, dict[str, object]]] = []
 
     async def observe(action: str, details: dict[str, object]) -> None:
@@ -386,7 +386,7 @@ async def test_memory_delete_removes_visible_memory_without_keyword_gate(
     assert not result.is_error
     assert result.data["result"] == "deleted"
     assert result.data["memory_id"] == memory.memory_id
-    assert service.store.list(project_id=service.project_id) == ()
+    assert await service.store.list(project_id=service.project_id) == ()
     assert [action for action, _ in observed] == ["deleted"]
 
 
@@ -395,14 +395,14 @@ async def test_memory_delete_cannot_delete_another_projects_record(
 ) -> None:
     state = tmp_path / "state"
     first = MemoryService(state, tmp_path / "first")
-    hidden = first.create_candidate(
+    hidden = await first.create_candidate(
         kind=MemoryKind.EXPERIENCE,
         scope=MemoryScope.PROJECT,
         title="项目经验",
         summary="只属于项目 A",
         body="项目 A 的经验。",
     )
-    first.store.transition(hidden.memory_id, MemoryStatus.ACTIVE)
+    await first.store.transition(hidden.memory_id, MemoryStatus.ACTIVE)
     second = MemoryService(state, tmp_path / "second")
 
     async def observe(action: str, details: dict[str, object]) -> None:
@@ -418,7 +418,7 @@ async def test_memory_delete_cannot_delete_another_projects_record(
     )
 
     assert hidden_result.data["error"] == "memory_not_found_or_ambiguous"
-    assert first.store.get(hidden.memory_id).memory_id == hidden.memory_id
+    assert (await first.store.get(hidden.memory_id)).memory_id == hidden.memory_id
 
 
 async def test_memory_write_user_experience_intent_overrides_model_sop_kind(
@@ -446,7 +446,7 @@ async def test_memory_write_user_experience_intent_overrides_model_sop_kind(
         ),
     )
     assert result.data["kind"] == MemoryKind.EXPERIENCE.value
-    assert service.store.get(str(result.data["memory_id"])).kind is MemoryKind.EXPERIENCE
+    assert (await service.store.get(str(result.data["memory_id"]))).kind is MemoryKind.EXPERIENCE
 
 
 async def test_memory_write_rejects_disabled_kind(tmp_path: Path) -> None:

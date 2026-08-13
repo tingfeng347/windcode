@@ -19,6 +19,7 @@ from windcode.application.contracts import (
     CapabilityRecord,
     CommandRoute,
     EventRecord,
+    ExtensionScope,
     ExtensionService,
     ExtensionSnapshot,
     InstallResult,
@@ -43,7 +44,6 @@ from windcode.application.contracts import (
 )
 from windcode.auth import CredentialStore, FileCredentialStore
 from windcode.config import AppConfig
-from windcode.extensions.models import ExtensionScope
 from windcode.sandbox import SandboxPreset, create_sandbox_backend
 
 
@@ -298,16 +298,20 @@ class Windcode:
     def can_resolve_model(self, requested: str | None = None) -> bool:
         return self._providers.can_resolve(requested)
 
-    def list_memories(self, *, status: MemoryStatus | None = None) -> tuple[MemoryRecord, ...]:
-        return self._memory_application.list(status=status)
+    async def list_memories(
+        self, *, status: MemoryStatus | None = None
+    ) -> tuple[MemoryRecord, ...]:
+        return await self._memory_application.list(status=status)
 
-    def search_memories(self, query: str, *, limit: int | None = None) -> tuple[MemoryRecord, ...]:
-        return self._memory_application.search(query, limit=limit)
+    async def search_memories(
+        self, query: str, *, limit: int | None = None
+    ) -> tuple[MemoryRecord, ...]:
+        return await self._memory_application.search(query, limit=limit)
 
-    def get_memory(self, memory_id: str) -> MemoryRecord:
-        return self._memory_application.get(memory_id)
+    async def get_memory(self, memory_id: str) -> MemoryRecord:
+        return await self._memory_application.get(memory_id)
 
-    def create_memory_candidate(
+    async def create_memory_candidate(
         self,
         *,
         kind: MemoryKind,
@@ -322,7 +326,7 @@ class Windcode:
         activation: MemoryActivation | None = None,
         priority: int | None = None,
     ) -> MemoryRecord:
-        return self._memory_application.create_candidate(
+        return await self._memory_application.create_candidate(
             kind=kind,
             scope=scope,
             title=title,
@@ -336,37 +340,37 @@ class Windcode:
             priority=priority,
         )
 
-    def confirm_memory(self, memory_id: str) -> MemoryRecord:
-        return self._memory_application.transition(memory_id, MemoryStatus.ACTIVE)
+    async def confirm_memory(self, memory_id: str) -> MemoryRecord:
+        return await self._memory_application.transition(memory_id, MemoryStatus.ACTIVE)
 
-    def reject_memory(self, memory_id: str) -> MemoryRecord:
-        return self._memory_application.transition(memory_id, MemoryStatus.REJECTED)
+    async def reject_memory(self, memory_id: str) -> MemoryRecord:
+        return await self._memory_application.transition(memory_id, MemoryStatus.REJECTED)
 
-    def archive_memory(self, memory_id: str) -> MemoryRecord:
-        return self._memory_application.transition(memory_id, MemoryStatus.ARCHIVED)
+    async def archive_memory(self, memory_id: str) -> MemoryRecord:
+        return await self._memory_application.transition(memory_id, MemoryStatus.ARCHIVED)
 
-    def update_memory(self, memory_id: str, **changes: Any) -> MemoryRecord:
-        return self._memory_application.update(memory_id, **changes)
+    async def update_memory(self, memory_id: str, **changes: Any) -> MemoryRecord:
+        return await self._memory_application.update(memory_id, **changes)
 
-    def set_memory_activation(
+    async def set_memory_activation(
         self, memory_id: str, activation: MemoryActivation | str
     ) -> MemoryRecord:
-        return self._memory_application.set_activation(memory_id, activation)
+        return await self._memory_application.set_activation(memory_id, activation)
 
-    def delete_memory(self, memory_id: str) -> None:
-        self._memory_application.delete(memory_id)
+    async def delete_memory(self, memory_id: str) -> None:
+        await self._memory_application.delete(memory_id)
 
-    def rebuild_memory_index(self) -> int:
-        return self._memory_application.rebuild_index()
+    async def rebuild_memory_index(self) -> int:
+        return await self._memory_application.rebuild_index()
 
-    def export_project_memories(self, destination: Path) -> tuple[Path, ...]:
-        return self._memory_application.export_project(destination)
+    async def export_project_memories(self, destination: Path) -> tuple[Path, ...]:
+        return await self._memory_application.export_project(destination)
 
-    def draft_skill_from_memory(self, memory_id: str) -> str:
-        return self._memory_application.draft_skill(memory_id)
+    async def draft_skill_from_memory(self, memory_id: str) -> str:
+        return await self._memory_application.draft_skill(memory_id)
 
-    def set_memory_enabled(self, enabled: bool, *, config_file: Path) -> None:
-        self._memory_application.set_enabled(
+    async def set_memory_enabled(self, enabled: bool, *, config_file: Path) -> None:
+        await self._memory_application.set_enabled(
             enabled,
             config_file=config_file,
             state_root=self.state_root,

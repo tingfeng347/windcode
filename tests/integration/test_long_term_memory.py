@@ -271,7 +271,7 @@ async def test_confirmed_user_memory_is_recalled_across_sessions(tmp_path: Path)
             if isinstance(event, MemoryEvent) and event.action == "activated"
         )
         assert activated_event.memory_id is not None
-        memory = client.get_memory(activated_event.memory_id)
+        memory = await client.get_memory(activated_event.memory_id)
         assert memory.status is MemoryStatus.ACTIVE
 
         second = client.start_run(RunRequest("我喜欢什么？", workspace))  # noqa: RUF001
@@ -293,7 +293,7 @@ async def test_stable_name_is_saved_automatically_without_explicit_request(tmp_p
         handle = client.start_run(RunRequest("我叫tingfeng347", workspace))
         events = [event async for event in handle]
         await handle.result()
-        records = client.list_memories(status=MemoryStatus.ACTIVE)
+        records = await client.list_memories(status=MemoryStatus.ACTIVE)
 
     assert len(records) == 1
     assert records[0].kind is MemoryKind.USER_PROFILE
@@ -319,7 +319,7 @@ async def test_model_can_write_explicit_memory_without_duplicate_extraction(tmp_
             if isinstance(event, ApprovalRequested):
                 await handle.respond(ApprovalResponse(event.request_id, "allow_once"))
         await handle.result()
-        records = client.list_memories()
+        records = await client.list_memories()
 
     assert len(records) == 1
     assert records[0].body == "用户偏好先运行 focused tests。"
@@ -335,14 +335,14 @@ async def test_model_updates_experience_through_memory_tool_without_duplicate(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     async with Windcode.open({}, state_root=tmp_path / "state", workspace=workspace) as client:
-        original = client.create_memory_candidate(
+        original = await client.create_memory_candidate(
             kind=MemoryKind.EXPERIENCE,
             scope=MemoryScope.PROJECT,
             title="解析器经验",
             summary="先校验再规范化",
             body="解析器应先校验再规范化。",
         )
-        original = client.confirm_memory(original.memory_id)
+        original = await client.confirm_memory(original.memory_id)
         transport = MemoryUpdateTransport(original.memory_id)
         client.register_transport("memory-update", "model", transport, primary=True)
         handle = client.start_run(RunRequest("修复解析器并整理已有经验", workspace))
@@ -352,7 +352,7 @@ async def test_model_updates_experience_through_memory_tool_without_duplicate(
             if isinstance(event, ApprovalRequested):
                 await handle.respond(ApprovalResponse(event.request_id, "allow_once"))
         await handle.result()
-        records = client.list_memories()
+        records = await client.list_memories()
 
     assert len(records) == 1
     assert records[0].memory_id == original.memory_id
@@ -371,14 +371,14 @@ async def test_verified_tool_update_is_not_reextracted_or_duplicated(tmp_path: P
     workspace.mkdir()
     config = AppConfig(sandbox=SandboxConfig(preset="danger_full_access"))
     async with Windcode.open(config, state_root=tmp_path / "state", workspace=workspace) as client:
-        original = client.create_memory_candidate(
+        original = await client.create_memory_candidate(
             kind=MemoryKind.EXPERIENCE,
             scope=MemoryScope.PROJECT,
             title="解析器经验",
             summary="先校验再规范化",
             body="解析器应先校验再规范化。",
         )
-        original = client.confirm_memory(original.memory_id)
+        original = await client.confirm_memory(original.memory_id)
         transport = VerifiedMemoryUpdateTransport(original.memory_id)
         client.register_transport("verified-memory-update", "model", transport, primary=True)
         handle = client.start_run(RunRequest("修复解析器并更新相关经验", workspace))
@@ -386,7 +386,7 @@ async def test_verified_tool_update_is_not_reextracted_or_duplicated(tmp_path: P
             if isinstance(event, ApprovalRequested):
                 await handle.respond(ApprovalResponse(event.request_id, "allow_once"))
         await handle.result()
-        records = client.list_memories()
+        records = await client.list_memories()
 
     assert len(records) == 1
     assert records[0].memory_id == original.memory_id
@@ -429,7 +429,7 @@ async def test_explicit_experience_activates_without_execution_evidence(tmp_path
         )
         events = [event async for event in handle]
         await handle.result()
-        active = client.list_memories(status=MemoryStatus.ACTIVE)
+        active = await client.list_memories(status=MemoryStatus.ACTIVE)
 
     assert len(active) == 1
     assert active[0].kind is MemoryKind.EXPERIENCE
@@ -455,7 +455,7 @@ async def test_routine_verification_without_changes_creates_no_experience(tmp_pa
             if isinstance(event, ApprovalRequested):
                 await handle.respond(ApprovalResponse(event.request_id, "allow_once"))
         await handle.result()
-        records = client.list_memories()
+        records = await client.list_memories()
 
     assert records == ()
     assert transport.assessment_calls == 0
@@ -473,7 +473,7 @@ async def test_reusable_verified_change_creates_active_experience(tmp_path: Path
             if isinstance(event, ApprovalRequested):
                 await handle.respond(ApprovalResponse(event.request_id, "allow_once"))
         await handle.result()
-        records = client.list_memories(status=MemoryStatus.ACTIVE)
+        records = await client.list_memories(status=MemoryStatus.ACTIVE)
 
     assert len(records) == 1
     assert records[0].kind is MemoryKind.EXPERIENCE
@@ -495,7 +495,7 @@ async def test_successful_external_action_without_verified_change_creates_no_exp
             if isinstance(event, ApprovalRequested):
                 await handle.respond(ApprovalResponse(event.request_id, "allow_once"))
         await handle.result()
-        records = client.list_memories(status=MemoryStatus.ACTIVE)
+        records = await client.list_memories(status=MemoryStatus.ACTIVE)
 
     assert records == ()
     assert transport.assessment_calls == 0
@@ -507,14 +507,14 @@ async def test_natural_language_memory_request_uses_read_only_memory_tool(tmp_pa
     transport = ActiveMemoryQueryTransport()
     async with Windcode.open({}, state_root=tmp_path / "state", workspace=workspace) as client:
         client.register_transport("active-memory-query", "model", transport, primary=True)
-        memory = client.create_memory_candidate(
+        memory = await client.create_memory_candidate(
             kind=MemoryKind.USER_PROFILE,
             scope=MemoryScope.USER,
             title="语言偏好",
             summary="用户偏好中文",
             body="使用中文回答。",
         )
-        client.confirm_memory(memory.memory_id)
+        await client.confirm_memory(memory.memory_id)
         handle = client.start_run(RunRequest("在长期记忆中看看", workspace))
         events = [event async for event in handle]
         result = await handle.result()
@@ -534,21 +534,21 @@ async def test_memory_uses_selected_state_root_and_filters_current_project(tmp_p
     workspace.mkdir()
     other_workspace.mkdir()
     source = MemoryService(state_root, workspace)
-    user = source.create_candidate(
+    user = await source.create_candidate(
         kind=MemoryKind.USER_PROFILE,
         scope=MemoryScope.USER,
         title="Language preference",
         summary="Use Chinese",
         body="Use Chinese for answers.",
     )
-    project = source.create_candidate(
+    project = await source.create_candidate(
         kind=MemoryKind.PROJECT_KNOWLEDGE,
         scope=MemoryScope.PROJECT,
         title="Current architecture",
         summary="Runtime owns orchestration",
         body="Keep orchestration in runtime.",
     )
-    other = MemoryService(state_root, other_workspace).create_candidate(
+    other = await MemoryService(state_root, other_workspace).create_candidate(
         kind=MemoryKind.PROJECT_KNOWLEDGE,
         scope=MemoryScope.PROJECT,
         title="Other architecture",
@@ -559,9 +559,9 @@ async def test_memory_uses_selected_state_root_and_filters_current_project(tmp_p
     async with Windcode.open({}, state_root=state_root, workspace=workspace) as client:
         assert client.memory_service is not None
         assert client.memory_service.store.root == state_root / "memory"
-        visible = client.list_memories()
+        visible = await client.list_memories()
 
     assert {record.memory_id for record in visible} == {user.memory_id, project.memory_id}
-    assert source.store.get(user.memory_id).memory_id == user.memory_id
-    assert source.store.get(project.memory_id).memory_id == project.memory_id
-    assert source.store.get(other.memory_id).memory_id == other.memory_id
+    assert (await source.store.get(user.memory_id)).memory_id == user.memory_id
+    assert (await source.store.get(project.memory_id)).memory_id == project.memory_id
+    assert (await source.store.get(other.memory_id)).memory_id == other.memory_id
