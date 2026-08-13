@@ -136,7 +136,7 @@ def _action(source: str, dialect: ShellDialect, argv: list[str]) -> CommandActio
         argv=normalized,
         source=source.strip(),
         redirects=redirects,
-        command_substitution="$(" in source or "`" in source or "$(" in source,
+        command_substitution="$(" in source or "`" in source,
         critical=_is_critical(normalized, dialect),
     )
 

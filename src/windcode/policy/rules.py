@@ -95,6 +95,7 @@ class CommandRuleStore:
                     temporary.unlink(missing_ok=True)
 
     def allows(self, analysis: CommandAnalysis, *, network: bool, escalated: bool = False) -> bool:
+        rules = self.load()
         return bool(analysis.actions) and all(
             any(
                 rule.matches(
@@ -103,7 +104,7 @@ class CommandRuleStore:
                     network=network,
                     escalated=escalated,
                 )
-                for rule in self.load()
+                for rule in rules
             )
             for action in analysis.actions
         )

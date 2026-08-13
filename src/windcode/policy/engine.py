@@ -15,7 +15,7 @@ from windcode.policy.models import (
 from windcode.policy.rules import CommandRuleStore
 
 _LEGACY_CRITICAL = re.compile(
-    r"(?:^|[;&|]\s*)(?:rm\s+-[^\n]*r[^\n]*f|mkfs\b|shutdown\b|reboot\b|"
+    r"(?:^|[;&|]\s*)(?:rm\s+-[^\n]*(?:[rR][^\n]*[fF]|[fF][^\n]*[rR])|mkfs\b|shutdown\b|reboot\b|"
     r"remove-item\b[^\n]*(?:-recurse[^\n]*-force|-force[^\n]*-recurse)|"
     r"format-volume\b|clear-disk\b|stop-computer\b|restart-computer\b)",
     re.IGNORECASE,
@@ -251,8 +251,14 @@ class PolicyEngine:
                 reason="workspace edits are allowed in accept_edits mode",
             )
 
+        if self.mode is PermissionMode.FULL_ACCESS:
+            return PolicyDecision(
+                action=PolicyAction.ALLOW,
+                risk=risk,
+                reason="full_access mode was explicitly selected",
+            )
         return PolicyDecision(
-            action=PolicyAction.ALLOW,
+            action=PolicyAction.DENY,
             risk=risk,
-            reason="full_access mode was explicitly selected",
+            reason=f"unhandled permission mode: {self.mode}",
         )
