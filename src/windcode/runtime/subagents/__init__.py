@@ -4,6 +4,7 @@ from windcode.runtime.subagents.budgets import (
     AggregateBudgetExceeded,
     AggregateUsage,
 )
+from windcode.runtime.subagents.completion import SubagentCompletionSource
 from windcode.runtime.subagents.coordinator import (
     ChildRunPreparer,
     ChildRunProfile,
@@ -24,6 +25,7 @@ __all__ = [
     "ChildRunProfile",
     "ChildRuntime",
     "RolePolicy",
+    "SubagentCompletionSource",
     "SubagentCoordinator",
     "SubagentCoordinatorError",
     "VerificationRunner",

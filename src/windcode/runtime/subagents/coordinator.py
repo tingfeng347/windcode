@@ -57,6 +57,7 @@ from windcode.runtime.subagents.collaboration import (
     BoundSubagentCollaboration,
     CoordinationSession,
 )
+from windcode.runtime.subagents.completion import SubagentCompletionSource
 from windcode.runtime.subagents.runtime import ChildRuntime
 from windcode.runtime.subagents.verification import VerificationRunner
 from windcode.worktrees import GitBaseline, WorktreeError, WorktreeLease, WorktreeManager
@@ -91,6 +92,7 @@ class SubagentCoordinator:
         verification: VerificationRunner,
         network_enabled: bool = False,
         event_observer: Callable[[SubagentEvent], Awaitable[None]] | None = None,
+        completion_source: SubagentCompletionSource | None = None,
     ) -> None:
         self.parent_session_id = parent_session_id
         self.parent_run_id = parent_run_id
@@ -103,6 +105,7 @@ class SubagentCoordinator:
         self.verification = verification
         self.network_enabled = network_enabled
         self.event_observer = event_observer
+        self.completion_source = completion_source
         self.aggregate_budget = AggregateBudget(
             max_model_steps=config.max_total_model_steps,
             max_tool_calls=config.max_total_tool_calls,
@@ -530,6 +533,8 @@ class SubagentCoordinator:
                 self._completion[record.subagent_id] = loop.create_future()
                 self._startup[record.subagent_id] = loop.create_future()
                 self._queue.append(record.subagent_id)
+                if self.completion_source is not None:
+                    self.completion_source.track()
                 await self._persist(record)
                 await self._publish_record_event(record, SubagentQueued)
                 created.append(record)
@@ -801,6 +806,8 @@ class SubagentCoordinator:
         await self._close_inbox(result.subagent_id)
         self._results[result.subagent_id] = result
         await self._persist_result(result)
+        if self.completion_source is not None:
+            await self.completion_source.deliver(result)
         future = self._completion[result.subagent_id]
         if not future.done():
             future.set_result(result)

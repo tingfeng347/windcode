@@ -45,6 +45,7 @@ from windcode.runtime.subagents import (
     ChildRunPreparer,
     ChildRunProfile,
     ChildRuntime,
+    SubagentCompletionSource,
     SubagentCoordinator,
     VerificationRunner,
 )
@@ -115,7 +116,10 @@ class RunBuilder:
             model=model_chain[0],
         )
         control = self._control(request)
-        coordinator = self._coordinator(preparation, request, resources, access, extensions)
+        completion_source = SubagentCompletionSource()
+        coordinator = self._coordinator(
+            preparation, request, resources, access, extensions, completion_source
+        )
         add_subagent_tools(access.registry, coordinator)
         system_prompt = self._system_prompt(preparation, access, extensions, memory)
         scheduler = self._scheduler(preparation, access, extensions, control)
@@ -140,6 +144,7 @@ class RunBuilder:
                 compact=extensions.compact_lifecycle,
                 completion=completion,
             ),
+            inbound_message_source=completion_source,
         )
         parent = ParentRun(
             request,
@@ -208,6 +213,7 @@ class RunBuilder:
         resources: RunResources,
         access: ParentAccess,
         extensions: RunExtensions,
+        completion_source: SubagentCompletionSource | None = None,
     ) -> SubagentCoordinator:
         prepare_child = self.bind_child(
             access.child_tools,
@@ -232,6 +238,7 @@ class RunBuilder:
             ),
             network_enabled=self.config.sandbox.network_enabled,
             event_observer=extensions.subagent_lifecycle,
+            completion_source=completion_source,
         )
 
     def _system_prompt(

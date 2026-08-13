@@ -40,8 +40,9 @@ def _result_data(result: SubagentResult) -> dict[str, object]:
 class WaitSubagentsTool:
     name = "wait_subagents"
     description = (
-        "Wait once for temporary subagents to reach terminal results. Use this after spawning; "
-        "do not poll list_subagents."
+        "Block until temporary subagents reach terminal results. This is optional — completion "
+        "results are delivered automatically as inbound messages. Use this only when you must "
+        "wait for write-task commits before proceeding. Do not poll list_subagents."
     )
     input_model = WaitSubagentsInput
     effects = frozenset({ToolEffect.READ})
