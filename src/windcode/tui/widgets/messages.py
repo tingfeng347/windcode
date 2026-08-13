@@ -105,6 +105,11 @@ class MessageStream(VerticalScroll):
             self.call_after_refresh(self.scroll_end, animate=False)
 
     async def begin_run(self) -> None:
+        if self._spinner_timer is not None:
+            self._spinner_timer.stop()
+            self._spinner_timer = None
+        if self._spinner_label is not None and self._spinner_label.is_attached:
+            await self._spinner_label.remove()
         self._ai_row = None
         self._streaming_label = None
         self._accumulated_text = ""
