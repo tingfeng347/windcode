@@ -82,7 +82,9 @@ class MemoryManager(ModalScreen[None]):
 
     @on(OptionList.OptionHighlighted, "#memory-list")
     def highlighted(self, event: OptionList.OptionHighlighted) -> None:
-        record = next(item for item in self.records if item.memory_id == event.option.id)
+        record = next((item for item in self.records if item.memory_id == event.option.id), None)
+        if record is None:
+            return
         summary = " ".join(record.summary.split())
         body = " ".join(record.body.split())
         content = (
@@ -103,7 +105,9 @@ class MemoryManager(ModalScreen[None]):
         memory_id = self._selected_id()
         if memory_id is None or event.value is Select.BLANK:
             return
-        record = next(item for item in self.records if item.memory_id == memory_id)
+        record = next((item for item in self.records if item.memory_id == memory_id), None)
+        if record is None:
+            return
         activation = MemoryActivation(str(event.value))
         if record.status is MemoryStatus.ACTIVE and activation is not record.activation:
             self.post_message(self.ActivationChanged(memory_id, activation))
