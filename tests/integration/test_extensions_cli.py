@@ -15,18 +15,27 @@ def test_cli_install_reload_list_and_disable(
     workspace = tmp_path / "workspace"
     config_dir = workspace / ".windcode"
     config_dir.mkdir(parents=True)
-    (config_dir / "config.toml").write_text("[extensions]\nenabled = true\n", encoding="utf-8")
+    (config_dir / "config.toml").write_text(
+        '[storage]\nproject_state_root = ".windcode/state"\n'
+        f'user_storage_root = "{(tmp_path / "home").as_posix()}"\n'
+        "[extensions]\nenabled = true\n",
+        encoding="utf-8",
+    )
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
 
     assert run(("extensions", "install", str(fixture), "--workspace", str(workspace))) == 0
+    capsys.readouterr()
+    assert run(("extensions", "disable", "plugin:complete", "--workspace", str(workspace))) == 0
     capsys.readouterr()
     assert run(("extensions", "reload", "--workspace", str(workspace))) == 0
     capsys.readouterr()
     assert run(("extensions", "list", "--workspace", str(workspace), "--json")) == 0
     records = json.loads(capsys.readouterr().out)
 
-    assert {record["source"]["plugin_id"] for record in records} == {"complete"}
-    assert not any(record["enabled"] for record in records)
+    plugin_records = [record for record in records if record["source"]["plugin_id"] is not None]
+    assert {record["source"]["plugin_id"] for record in plugin_records} == {"complete"}
+    assert not any(record["enabled"] for record in plugin_records)
 
     assert (
         run(

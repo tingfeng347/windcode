@@ -13,7 +13,7 @@ class PathBoundaryError(ValueError):
 def resolve_beneath(root: Path, relative: str | Path, *, require_file: bool = False) -> Path:
     root = root.expanduser().resolve(strict=True)
     candidate_part = Path(relative)
-    if candidate_part.is_absolute() or ".." in candidate_part.parts:
+    if candidate_part.anchor or ".." in candidate_part.parts:
         raise PathBoundaryError(f"path escapes extension root: {relative}")
     candidate = root.joinpath(candidate_part).resolve(strict=True)
     if not candidate.is_relative_to(root):

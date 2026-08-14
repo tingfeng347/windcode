@@ -1,4 +1,5 @@
 import json
+import os
 import stat
 from pathlib import Path
 
@@ -12,8 +13,9 @@ def test_state_round_trip_is_atomic_and_private(tmp_path: Path) -> None:
 
     loaded = store.load()
     assert loaded.state == state
-    assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
-    assert stat.S_IMODE(store.path.parent.stat().st_mode) == 0o700
+    if os.name != "nt":
+        assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
+        assert stat.S_IMODE(store.path.parent.stat().st_mode) == 0o700
 
 
 def test_workspace_symlink_alias_has_same_identity(tmp_path: Path) -> None:

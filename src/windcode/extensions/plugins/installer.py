@@ -78,7 +78,7 @@ def install_local_plugin(source: Path, plugins_root: Path) -> InstallResult:
         parse_plugin_manifest(temporary)
         for directory, _, files in os.walk(temporary):
             for name in files:
-                descriptor = os.open(Path(directory) / name, os.O_RDONLY)
+                descriptor = os.open(Path(directory) / name, os.O_RDWR)
                 try:
                     os.fsync(descriptor)
                 finally:
