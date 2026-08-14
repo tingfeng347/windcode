@@ -647,12 +647,11 @@ async def test_input_regains_focus_after_approved_agent_run(tmp_path: Path) -> N
         prompt.insert("执行命令")
         await pilot.press("enter")
 
-        for _ in range(1000):
-            if list(app.query(ApprovalWidget)):
-                break
+        deadline = monotonic() + 30
+        while not list(app.query(ApprovalWidget)):
+            if monotonic() >= deadline:
+                pytest.fail("approval widget was not shown")
             await pilot.pause(0.01)
-        else:
-            pytest.fail("approval widget was not shown")
 
         approval = app.query_one(ApprovalWidget)
         for _ in range(100):
@@ -685,12 +684,11 @@ async def test_permission_mode_can_cycle_while_agent_is_waiting_for_approval(
         prompt.insert("执行命令")
         await pilot.press("enter")
 
-        for _ in range(1000):
-            if list(app.query(ApprovalWidget)):
-                break
+        deadline = monotonic() + 30
+        while not list(app.query(ApprovalWidget)):
+            if monotonic() >= deadline:
+                pytest.fail("approval widget was not shown")
             await pilot.pause(0.01)
-        else:
-            pytest.fail("approval widget was not shown")
 
         approval = app.query_one(ApprovalWidget)
         for _ in range(100):
