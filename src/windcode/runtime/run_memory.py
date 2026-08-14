@@ -143,7 +143,11 @@ class RunMemory:
         explicit_experience_id = await self._extract_explicit_memory(service)
         if explicit_experience_id is not None:
             if result.verification:
-                experience = await service.store.get(explicit_experience_id)
+                try:
+                    experience = await service.store.get(explicit_experience_id)
+                except KeyError:
+                    # 记忆可能在本轮被 memory_delete 删除; 完成后处理应安全跳过。
+                    return
                 evidence = tuple(dict.fromkeys((*experience.evidence, *result.verification)))
                 if evidence != experience.evidence:
                     await service.store.update(explicit_experience_id, evidence=evidence)
@@ -161,8 +165,11 @@ class RunMemory:
     async def _extract_explicit_memory(self, service: MemoryService) -> str | None:
         explicit_experience_id: str | None = None
         if self._tool_memory_id is not None:
-            tool_memory = await service.store.get(self._tool_memory_id)
-            if tool_memory.kind is MemoryKind.EXPERIENCE:
+            try:
+                tool_memory = await service.store.get(self._tool_memory_id)
+            except KeyError:
+                tool_memory = None
+            if tool_memory is not None and tool_memory.kind is MemoryKind.EXPERIENCE:
                 explicit_experience_id = self._tool_memory_id
         intent_kind = classify_memory_intent(self._request.prompt)
         if (

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from windcode.memory import (
     MemoryActivation,
     MemoryKind,
@@ -51,6 +53,33 @@ async def test_user_memories_cross_projects_but_project_memories_do_not(tmp_path
     unrelated_context = await second.recall("Windcode layers")
     assert "Concise replies" in unrelated_context
     assert "Windcode layers" not in unrelated_context
+
+
+async def test_project_memory_mutations_are_isolated_by_project(tmp_path: Path) -> None:
+    first = MemoryService(tmp_path / "state", tmp_path / "one")
+    project = await first.create_candidate(
+        kind=MemoryKind.EXPERIENCE,
+        scope=MemoryScope.PROJECT,
+        title="Private project experience",
+        summary="Only project one may manage this record",
+        body="Keep this experience inside project one.",
+        evidence=("verified",),
+    )
+    await first.store.transition(project.memory_id, MemoryStatus.ACTIVE)
+    second = MemoryService(tmp_path / "state", tmp_path / "two")
+
+    with pytest.raises(ValueError, match="does not exist in this project"):
+        await second.transition(project.memory_id, MemoryStatus.ARCHIVED)
+    with pytest.raises(ValueError, match="does not exist in this project"):
+        await second.update(project.memory_id, body="changed from project two")
+    with pytest.raises(ValueError, match="does not exist in this project"):
+        await second.delete(project.memory_id)
+    with pytest.raises(ValueError, match="does not exist in this project"):
+        await second.draft_skill(project.memory_id)
+
+    unchanged = await first.get(project.memory_id)
+    assert unchanged.status is MemoryStatus.ACTIVE
+    assert unchanged.body == "Keep this experience inside project one."
 
 
 async def test_layered_context_filters_activation_and_status(tmp_path: Path) -> None:

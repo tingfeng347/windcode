@@ -221,19 +221,25 @@ class MemoryService:
         return matches[0]
 
     async def get(self, memory_id: str) -> MemoryRecord:
-        return await self.store.get(memory_id)
+        record = await self.store.get(memory_id)
+        if record.scope is MemoryScope.PROJECT and record.project_id != self.project_id:
+            raise ValueError("memory ID does not exist in this project")
+        return record
 
     async def transition(self, memory_id: str, status: MemoryStatus) -> MemoryRecord:
+        await self.get(memory_id)
         return await self.store.transition(memory_id, status)
 
     async def update(self, memory_id: str, **changes: Any) -> MemoryRecord:
+        await self.get(memory_id)
         return await self.store.update(memory_id, **changes)
 
     async def delete(self, memory_id: str) -> None:
+        await self.get(memory_id)
         await self.store.delete(memory_id)
 
     async def draft_skill(self, memory_id: str) -> str:
-        record = await self.store.get(memory_id)
+        record = await self.get(memory_id)
         if record.kind is not MemoryKind.EXPERIENCE:
             raise ValueError("only experience memories can become skill drafts")
         if record.status is not MemoryStatus.ACTIVE or not record.evidence:

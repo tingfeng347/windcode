@@ -9,7 +9,9 @@
 2. **CLI**：主命令、extensions 子命令、参数默认值、错误分类和退出码。
 3. **TUI**：12 个内建命令、memory/extensions 子命令、队列、确认、快捷键和审批语义。
 4. **SDK**：`Windcode.open`、`start_run`、`RunHandle`、session、memory、extension 和 provider
-   的公开 interface。
+   的公开 interface。memory 门面（`list_memories`、`search_memories`、`get_memory`、
+   `update_memory`、`delete_memory` 等 14 个方法）自 v0.4.0 起为 async（MemoryStore 异步化
+   所需）；未走 0.3 弃用周期，属已确认的破坏性变更。
 5. **配置**：严格 schema、层级合并、别名，以及 `AppConfig()`、首次用户配置和示例配置
    三套分别兼容的默认值。
 6. **持久化**：Session v1、Extension state v1、Memory Markdown/SQLite v2、trace 和 auth。
