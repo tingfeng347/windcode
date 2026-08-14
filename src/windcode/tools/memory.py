@@ -19,12 +19,7 @@ from windcode.memory import (
     explicitly_always_project_fact,
     has_explicit_memory_intent,
 )
-from windcode.memory.refiner import (
-    RefinedMemory,
-    assess_core_project_fact,
-    assess_experience,
-    refine_memory,
-)
+from windcode.memory.refiner import refine_memory
 from windcode.memory.security import SensitiveMemoryError, validate_memory_text
 from windcode.providers import ModelTarget
 from windcode.tools.registry import ToolRegistry
@@ -265,11 +260,9 @@ class MemoryGetTool(_MemoryTool):
 class MemoryWriteTool(_MemoryTool):
     name = "memory_write"
     description = (
-        "Write a long-term memory when the user explicitly asks, or autonomously when a completed "
-        "task produced a durable, reusable engineering experience. Autonomous writes must use "
-        "kind=experience; do not save routine results, temporary state, guesses, or raw tool "
-        "output. "
-        "Never claim it was saved before this tool succeeds."
+        "Write a long-term memory only when the user explicitly asks you to remember (e.g. 记住、"
+        "写入长期记忆、加入长期记忆). Never save routine conversation, temporary state, guesses, "
+        "or raw tool output on your own. Never claim it was saved before this tool succeeds."
     )
     input_model = MemoryWriteInput
     effects = frozenset({ToolEffect.OUTSIDE_WORKSPACE})
@@ -295,9 +288,10 @@ class MemoryWriteTool(_MemoryTool):
         del context
         parsed = cast(MemoryWriteInput, arguments)
         explicit_intent = has_explicit_memory_intent(self.user_prompt)
-        if not explicit_intent and parsed.kind is not MemoryKind.EXPERIENCE:
+        if not explicit_intent:
             return ToolResult(
-                "autonomous memory writes are limited to reusable engineering experiences",
+                "long-term memory can only be written on explicit user intent "
+                "(e.g. 记住/写入长期记忆/加入长期记忆)",
                 is_error=True,
                 data={"error": "explicit_memory_intent_required"},
             )
@@ -334,36 +328,13 @@ class MemoryWriteTool(_MemoryTool):
             validate_memory_text(content, self.user_prompt)
         except SensitiveMemoryError as exc:
             return ToolResult(str(exc), is_error=True, data={"error": "sensitive_memory_rejected"})
-        # Spec 1: autonomous experience writes must pass model validation gate.
-        # Spec 4a/b: project knowledge activation and title/summary quality use model-driven paths.
         evidence = () if kind is MemoryKind.SOP else (self.user_prompt,)
-        refined: RefinedMemory
-        if kind is MemoryKind.EXPERIENCE and not explicit_intent:
-            assessment = await assess_experience(
-                self.model,
-                text=content,
-                evidence=evidence,
-            )
-            if not assessment.should_store:
-                return ToolResult(
-                    f"experience not stored: {assessment.reason}",
-                    is_error=True,
-                    data={"error": "experience_assessment_rejected", "reason": assessment.reason},
-                )
-            if assessment.memory is None:
-                return ToolResult(
-                    "experience assessment returned no structured memory",
-                    is_error=True,
-                    data={"error": "experience_assessment_malformed"},
-                )
-            refined = assessment.memory
-        else:
-            refined = await refine_memory(
-                self.model,
-                text=content,
-                kind=kind,
-                evidence=evidence,
-            )
+        refined = await refine_memory(
+            self.model,
+            text=content,
+            kind=kind,
+            evidence=evidence,
+        )
         normalized = " ".join(refined.body.casefold().split())
         existing = next(
             (
@@ -387,10 +358,11 @@ class MemoryWriteTool(_MemoryTool):
             return ToolResult(json.dumps(data, ensure_ascii=False), data=data)
         activation = None
         if kind is MemoryKind.PROJECT_KNOWLEDGE:
-            core = explicitly_always_project_fact(
-                self.user_prompt
-            ) or await assess_core_project_fact(self.model, text=content)
-            activation = MemoryActivation.ALWAYS if core else MemoryActivation.MANUAL
+            activation = (
+                MemoryActivation.ALWAYS
+                if explicitly_always_project_fact(self.user_prompt)
+                else MemoryActivation.MANUAL
+            )
         priority = 60 if activation is MemoryActivation.ALWAYS else None
         candidate = await self.service.create_candidate(
             kind=kind,
@@ -405,7 +377,7 @@ class MemoryWriteTool(_MemoryTool):
             activation=activation,
             priority=priority,
         )
-        if kind is MemoryKind.SOP:
+        if kind is MemoryKind.SOP or candidate.conflicts_with:
             record = candidate
             action = "candidate_created"
         else:
@@ -480,6 +452,7 @@ class MemoryUpdateTool(_MemoryTool):
             title=refined.title,
             summary=refined.summary,
             body=refined.body,
+            tags=refined.tags,
         )
         data = {
             "memory_id": record.memory_id,

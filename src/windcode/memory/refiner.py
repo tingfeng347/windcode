@@ -53,7 +53,7 @@ async def assess_core_project_fact(
     )
     try:
         raw = json.loads((await _stream_text(target, request)).strip())
-    except (json.JSONDecodeError, ValueError, RuntimeError, ConnectionError, OSError):
+    except (ValueError, RuntimeError, ConnectionError, OSError):
         return False
     if not isinstance(raw, dict):
         return False
@@ -154,7 +154,7 @@ async def assess_experience(
     )
     try:
         raw = json.loads((await _stream_text(target, request)).strip())
-    except (json.JSONDecodeError, ValueError, RuntimeError, ConnectionError, OSError):
+    except (ValueError, RuntimeError, ConnectionError, OSError):
         return ExperienceAssessment(False, "模型评估失败")
     if not isinstance(raw, dict):
         return ExperienceAssessment(False, "模型评估格式无效")

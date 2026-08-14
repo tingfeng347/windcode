@@ -92,7 +92,17 @@ class RunBuilder:
             str, tuple[SubagentCoordinator, SubagentCompletionSource, EventBus]
         ] = {}
 
+    def _evict_idle_coordinators(self) -> None:
+        """Drop reused coordinators whose background subagents have all finished."""
+        for session_id in [
+            sid
+            for sid, (coordinator, _, _) in self._coordinators.items()
+            if not coordinator.has_running()
+        ]:
+            del self._coordinators[session_id]
+
     def start(self, request: RunRequest) -> RunHandle:
+        self._evict_idle_coordinators()
         preparation = self.prepare_parent(request)
         resources = self.resources(preparation)
         redactor = DynamicRedactor()
@@ -128,6 +138,8 @@ class RunBuilder:
                 event_bus=resources.event_bus,
                 event_observer=extensions.subagent_lifecycle,
                 parent_run_id=preparation.run_id,
+                permission_mode=access.permission_mode,
+                prepare_child=self.bind_child(access.child_tools, default_model=request.model),
             )
         else:
             completion_source = SubagentCompletionSource()

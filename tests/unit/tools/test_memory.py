@@ -48,13 +48,8 @@ class _StubTransport:
         pass
 
 
-# Canned responses for refine_memory and assess_experience
+# Canned response for refine_memory
 _REFINE_RESPONSE = '{"title":"经验","summary":"经验摘要","body":"经验正文","tags":["经验"]}'
-_ASSESS_EXPERIENCE_RESPONSE = (
-    '{"should_store":true,"reason":"可复用经验","problem":"边界检查时机",'
-    '"solution":"先规范化再检查","applicability":"解析器场景","title":"经验标题",'
-    '"summary":"经验摘要","body":"经验正文","tags":["经验"]}'
-)
 
 
 def _model(response: str = _REFINE_RESPONSE) -> ModelTarget:
@@ -261,7 +256,7 @@ async def test_memory_write_activates_experience_without_evidence(tmp_path: Path
     assert record.evidence
 
 
-async def test_memory_write_allows_model_selected_experience_without_explicit_intent(
+async def test_memory_write_rejects_autonomous_experience_without_explicit_intent(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "project"
@@ -277,7 +272,7 @@ async def test_memory_write_allows_model_selected_experience_without_explicit_in
         max_chars=4_000,
         user_prompt="修复解析器后, focused tests 证明边界检查应放在规范化之后",
         source=MemorySource("session", "run"),
-        model=_model(_ASSESS_EXPERIENCE_RESPONSE),
+        model=_model(),
     )
     result = await tool.execute(
         context(workspace),
@@ -287,9 +282,8 @@ async def test_memory_write_allows_model_selected_experience_without_explicit_in
         ),
     )
 
-    assert not result.is_error
-    assert result.data["result"] == "stored"
-    assert result.data["kind"] == MemoryKind.EXPERIENCE.value
+    assert result.is_error
+    assert result.data["error"] == "explicit_memory_intent_required"
 
 
 async def test_memory_update_revises_visible_experience_in_place(tmp_path: Path) -> None:
