@@ -143,7 +143,7 @@ uv run windcode /path/to/project
 发布版本可从 GitHub Container Registry 拉取，并以交互模式挂载待处理的项目目录：
 
 ```bash
-docker run --rm -it -v "$PWD:/workspace" ghcr.io/tingfeng347/windcode:0.4.0
+docker run --rm -it -v "$PWD:/workspace" ghcr.io/tingfeng347/windcode:0.4.1
 ```
 
 完整的发布、私有镜像登录和状态持久化说明见 [GHCR 镜像说明](docs/ghcr.md)。
