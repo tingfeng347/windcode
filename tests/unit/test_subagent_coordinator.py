@@ -56,11 +56,26 @@ def task(name: str) -> SubagentTaskSpec:
     )
 
 
+class FakePolicy:
+    def __init__(self, factory: FakeFactory) -> None:
+        self.factory = factory
+
+    def set_mode(self, mode: PermissionMode) -> None:
+        self.factory.permission_updates.append(mode)
+
+
+class FakeScheduler:
+    def __init__(self, factory: FakeFactory) -> None:
+        self.policy = FakePolicy(factory)
+
+
 class FakeLoop:
     def __init__(self, factory: FakeFactory, name: str, event_bus: EventBus) -> None:
         self.factory = factory
         self.name = name
         self.event_bus = event_bus
+        self.scheduler = FakeScheduler(factory)
+        self.system_prompt = "权限模式: default."
 
     async def run(self, prompt: str, workspace: Path) -> RunResult:
         del prompt, workspace
@@ -84,6 +99,7 @@ class FakeFactory:
         self.started_event = asyncio.Event()
         self.active = 0
         self.peak = 0
+        self.permission_updates: list[PermissionMode] = []
 
     def __call__(self, profile: ChildRunProfile) -> ChildRuntime:
         record = profile.record
@@ -234,6 +250,31 @@ async def test_subagent_tools_accept_consumer_side_fake(tmp_path: Path) -> None:
 
 def test_subagent_error_keeps_runtime_import_identity() -> None:
     assert SubagentCoordinatorError is domain_subagents.SubagentCoordinatorError
+
+
+async def test_reattach_rebinds_running_permissions_and_approval_identity(
+    tmp_path: Path,
+) -> None:
+    coord, factory, bus = coordinator(tmp_path)
+    (record,) = await coord.spawn((task("child"),))
+    await wait_until_started(factory, 1)
+    replacement_factory = FakeFactory(tmp_path)
+    replacement_verification = VerificationRunner()
+
+    coord.reattach(
+        event_bus=bus,
+        event_observer=None,
+        parent_run_id="next-run",
+        permission_mode=PermissionMode.PLAN,
+        prepare_child=cast(ChildRunPreparer, replacement_factory),
+        verification=replacement_verification,
+    )
+
+    assert factory.permission_updates == [PermissionMode.PLAN]
+    assert coord.approvals.parent_run_id == "next-run"
+    assert coord.verification is replacement_verification
+    factory.gates["child"].set()
+    await coord.wait(record.subagent_id)
 
 
 async def test_capacity_validation_is_atomic(tmp_path: Path) -> None:

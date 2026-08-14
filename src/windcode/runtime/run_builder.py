@@ -92,7 +92,17 @@ class RunBuilder:
             str, tuple[SubagentCoordinator, SubagentCompletionSource, EventBus]
         ] = {}
 
+    def _evict_idle_coordinators(self) -> None:
+        """Drop reused coordinators whose background subagents have all finished."""
+        for session_id in [
+            sid
+            for sid, (coordinator, _, _) in self._coordinators.items()
+            if not coordinator.has_running()
+        ]:
+            del self._coordinators[session_id]
+
     def start(self, request: RunRequest) -> RunHandle:
+        self._evict_idle_coordinators()
         preparation = self.prepare_parent(request)
         resources = self.resources(preparation)
         redactor = DynamicRedactor()
@@ -128,6 +138,9 @@ class RunBuilder:
                 event_bus=resources.event_bus,
                 event_observer=extensions.subagent_lifecycle,
                 parent_run_id=preparation.run_id,
+                permission_mode=access.permission_mode,
+                prepare_child=self.bind_child(access.child_tools, default_model=request.model),
+                verification=self._verification(access),
             )
         else:
             completion_source = SubagentCompletionSource()
@@ -246,14 +259,17 @@ class RunBuilder:
                 worktrees_root=self.state_root / "worktrees",
                 fallback_worktrees_root=self.user_storage_root / "worktrees",
             ),
-            verification=VerificationRunner(
-                sandbox=access.sandbox,
-                sandbox_policy=access.sandbox_policy,
-                timeout_seconds=self.config.budgets.shell_timeout_seconds,
-            ),
+            verification=self._verification(access),
             network_enabled=self.config.sandbox.network_enabled,
             event_observer=extensions.subagent_lifecycle,
             completion_source=completion_source,
+        )
+
+    def _verification(self, access: ParentAccess) -> VerificationRunner:
+        return VerificationRunner(
+            sandbox=access.sandbox,
+            sandbox_policy=access.sandbox_policy,
+            timeout_seconds=self.config.budgets.shell_timeout_seconds,
         )
 
     def _system_prompt(

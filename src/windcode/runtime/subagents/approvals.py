@@ -34,6 +34,10 @@ class ApprovalRouter:
         self.publish = publish
         self._pending: dict[str, _PendingApproval] = {}
 
+    def reattach(self, *, parent_run_id: str) -> None:
+        """Route future approvals to the active parent run."""
+        self.parent_run_id = parent_run_id
+
     async def request(
         self,
         subagent_id: str,
