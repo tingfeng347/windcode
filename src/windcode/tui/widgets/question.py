@@ -33,9 +33,6 @@ class QuestionWidget(Vertical):
             yield Select(((option, option) for option in options), id=f"question-{question_id}")
         yield Button("提交", id="question-submit", variant="primary")
 
-    def on_mount(self) -> None:
-        self.focus_first_select()
-
     def focus_first_select(self) -> None:
         try:
             self.query_one(Select).focus()

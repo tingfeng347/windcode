@@ -3,10 +3,12 @@ import os
 from collections.abc import AsyncIterator
 from pathlib import Path
 from time import monotonic
+from typing import cast
 
 import pytest
 from rich.text import Text as RichText
 from textual.content import Content
+from textual.css.query import NoMatches
 from textual.widgets import Button, Markdown, OptionList, Select, Static, Switch
 
 from windcode import Windcode
@@ -174,9 +176,18 @@ async def test_ask_question_selection_reaches_next_model_request(tmp_path: Path)
         while not list(app.query(QuestionWidget)):
             await pilot.pause(0.01)
         question = app.query_one(QuestionWidget)
-        for _ in range(100):
-            if question.query_one(Select).has_focus:
+        deadline = monotonic() + 30
+        while True:
+            try:
+                select = cast(Select[str], question.query_one(Select))
                 break
+            except NoMatches:
+                if monotonic() >= deadline:
+                    pytest.fail("question choices were not mounted")
+                await pilot.pause(0.01)
+        while not select.has_focus:
+            if monotonic() >= deadline:
+                pytest.fail("question choice did not receive focus")
             await pilot.pause(0.01)
 
         await pilot.press("enter", "down", "down", "enter")
@@ -664,7 +675,11 @@ async def test_input_regains_focus_after_approved_agent_run(tmp_path: Path) -> N
         await pilot.press("down", "enter")
         while app.handle is None or not app.handle.done:
             await pilot.pause(0.01)
-        await pilot.pause()
+        deadline = monotonic() + 30
+        while not prompt.has_focus:
+            if monotonic() >= deadline:
+                pytest.fail("chat input did not regain focus")
+            await pilot.pause(0.01)
 
         assert prompt.has_focus
 
