@@ -63,6 +63,58 @@ def test_deleted_inherited_model_stays_disabled_after_reload(tmp_path: Path) -> 
     assert loaded.primary_provider is None
 
 
+def test_editing_inherited_enabled_model_is_persisted_to_project(tmp_path: Path) -> None:
+    user = tmp_path / "user.toml"
+    user.write_text(
+        "[providers.shared]\n"
+        'protocol = "openai_responses"\n'
+        'model = "old"\n'
+        'api_key_env = "MODEL_API_KEY"\n',
+        encoding="utf-8",
+    )
+    project = tmp_path / "project.toml"
+    project.touch()
+    previous = load_config(tmp_path, user_file=user, project_file=project)
+    updated = AppConfig(providers={"shared": provider("new")}, primary_provider="shared")
+
+    save_model_config(project, previous, updated)
+
+    loaded = load_config(tmp_path, user_file=user, project_file=project)
+    assert loaded.providers["shared"].model == "new"
+
+
+def test_saving_user_model_does_not_copy_project_only_providers(tmp_path: Path) -> None:
+    user = tmp_path / "user.toml"
+    user.write_text(
+        "[providers.shared]\n"
+        'protocol = "openai_responses"\n'
+        'model = "old"\n'
+        'api_key_env = "MODEL_API_KEY"\n',
+        encoding="utf-8",
+    )
+    project = tmp_path / "project.toml"
+    project.write_text(
+        "[providers.untouched]\n"
+        'protocol = "openai_responses"\n'
+        'model = "keep-in-project-layer"\n'
+        'api_key_env = "OTHER_API_KEY"\n',
+        encoding="utf-8",
+    )
+    previous = load_config(tmp_path, user_file=user, project_file=project)
+    updated = previous.model_copy(
+        update={"providers": {**previous.providers, "shared": provider("new")}}
+    )
+
+    save_model_config(user, previous, updated)
+
+    raw = user.read_text(encoding="utf-8")
+    assert "[providers.shared]" in raw
+    assert "[providers.untouched]" not in raw
+    loaded = load_config(tmp_path, user_file=user, project_file=project)
+    assert loaded.providers["shared"].model == "new"
+    assert loaded.providers["untouched"].model == "keep-in-project-layer"
+
+
 def test_higher_layer_can_reenable_inherited_model_alias(tmp_path: Path) -> None:
     user = tmp_path / "user.toml"
     user.write_text(

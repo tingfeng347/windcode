@@ -37,13 +37,17 @@ def save_model_config(path: Path, previous: AppConfig, updated: AppConfig) -> No
     file_aliases: set[str] = set(file_providers)
     previous_aliases: set[str] = set(previous.providers.keys())
     updated_aliases: set[str] = set(updated.providers.keys())
+    changed_aliases = {
+        alias
+        for alias in previous_aliases & updated_aliases
+        if previous.providers[alias] != updated.providers[alias]
+    }
     user_added = updated_aliases - previous_aliases
     user_removed = previous_aliases - updated_aliases
 
     merged: dict[str, Any] = {alias: file_providers[alias] for alias in file_aliases - user_removed}
-    for alias in sorted(updated_aliases):
-        if alias in file_aliases or alias in user_added:
-            merged[alias] = updated.providers[alias].model_dump(mode="json", exclude_none=True)
+    for alias in sorted((file_aliases | user_added | changed_aliases) & updated_aliases):
+        merged[alias] = updated.providers[alias].model_dump(mode="json", exclude_none=True)
     data["providers"] = merged
 
     if updated.primary_provider is None:
