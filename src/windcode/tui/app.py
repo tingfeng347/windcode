@@ -164,7 +164,7 @@ class WindcodeApp(App[None]):
             yield WelcomeView(
                 model=self._display_model(),
                 permission=self.permission_mode,
-                sandbox=self.config.sandbox.enabled,
+                sandbox=self.client.sandbox_enabled(self.workspace),
                 workspace=self.workspace,
                 id="welcome-view",
             )
@@ -269,14 +269,14 @@ class WindcodeApp(App[None]):
         self.query_one("#status-bar", StatusBar).set_state(
             model=self._display_model(),
             permission=self.permission_mode,
-            sandbox=self.config.sandbox.enabled,
+            sandbox=self.client.sandbox_enabled(self.workspace),
             state=state,
             delegation=self.config.subagents.mode.value,
         )
         self.query_one("#welcome-view", WelcomeView).set_context(
             model=self._display_model(),
             permission=self.permission_mode,
-            sandbox=self.config.sandbox.enabled,
+            sandbox=self.client.sandbox_enabled(self.workspace),
             workspace=self.workspace,
         )
 
@@ -312,7 +312,7 @@ class WindcodeApp(App[None]):
         welcome.set_context(
             model=self._display_model(),
             permission=self.permission_mode,
-            sandbox=self.config.sandbox.enabled,
+            sandbox=self.client.sandbox_enabled(self.workspace),
             workspace=self.workspace,
         )
         welcome.display = mode == "welcome"

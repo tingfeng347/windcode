@@ -67,7 +67,7 @@ class ParentAccessBuilder:
             if request.permission_mode is not None
             else self.config.permission.mode
         )
-        preset = SandboxPreset(self.config.sandbox.preset)
+        configured_preset = SandboxPreset(self.config.sandbox.preset)
         writable_roots = tuple(
             (workspace / value).resolve()
             if not Path(value).is_absolute()
@@ -76,10 +76,11 @@ class ParentAccessBuilder:
         )
         sandbox, sandbox_policy = create_sandbox_backend(
             workspace,
-            preset=preset,
+            preset=configured_preset,
             writable_roots=writable_roots,
             network_enabled=self.config.sandbox.network_enabled,
         )
+        effective_preset = sandbox_policy.preset
         registry = self._parent_registry(
             run_extensions,
             extension_snapshot,
@@ -90,7 +91,7 @@ class ParentAccessBuilder:
         )
         policy = PolicyEngine(
             mode,
-            sandbox_enabled=preset is not SandboxPreset.DANGER_FULL_ACCESS,
+            sandbox_enabled=effective_preset is not SandboxPreset.DANGER_FULL_ACCESS,
             sandbox_available=sandbox is not None and sandbox.status.available,
             rule_store=CommandRuleStore(self.state_root, workspace),
         )
@@ -102,7 +103,7 @@ class ParentAccessBuilder:
                 search_mcp_tools.add_registry(child_tools)
         return ParentAccess(
             mode,
-            preset,
+            effective_preset,
             sandbox,
             sandbox_policy,
             registry,

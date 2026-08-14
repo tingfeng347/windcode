@@ -204,21 +204,18 @@ class PolicyEngine:
             return _approval("network access requires explicit approval", risk, reusable=reusable)
 
         if ToolEffect.PROCESS in effects and request.tool_name == "shell":
-            if (
-                self.sandbox_enabled
-                and self.sandbox_available
-                and request.sandbox_backend is not None
-            ):
-                return PolicyDecision(
-                    action=PolicyAction.ALLOW,
-                    risk=risk,
-                    reason="ordinary command is confined by the active system sandbox",
+            if self.sandbox_enabled:
+                if self.sandbox_available and request.sandbox_backend is not None:
+                    return PolicyDecision(
+                        action=PolicyAction.ALLOW,
+                        risk=risk,
+                        reason="ordinary command is confined by the active system sandbox",
+                    )
+                return _approval(
+                    "system sandbox is unavailable; explicit approval is required",
+                    risk,
+                    reusable=reusable,
                 )
-            return _approval(
-                "system sandbox is unavailable; explicit approval is required",
-                risk,
-                reusable=reusable,
-            )
 
         if (
             ToolEffect.PROCESS in effects

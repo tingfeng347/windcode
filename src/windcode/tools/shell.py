@@ -15,6 +15,7 @@ from windcode.sandbox import (
     SandboxBackend,
     SandboxPermissions,
     SandboxPolicy,
+    SandboxPreset,
 )
 from windcode.tools.filesystem import require_workspace_path
 from windcode.tools.process import ProcessRunner, terminate_process_tree
@@ -120,11 +121,14 @@ class ShellTool:
         if arguments.get("network") is True:
             effects.add(ToolEffect.NETWORK)
         requested = arguments.get("sandbox_permissions")
-        unavailable = self.sandbox is None or not self.sandbox.status.available
+        sandbox_disabled = self.sandbox_policy.preset is SandboxPreset.DANGER_FULL_ACCESS
+        unavailable = self.sandbox is not None and not self.sandbox.status.available
+        missing = self.sandbox is None and not sandbox_disabled
         if (
             requested == SandboxPermissions.REQUIRE_ESCALATED.value
             or requested is SandboxPermissions.REQUIRE_ESCALATED
             or unavailable
+            or missing
         ):
             effects.add(ToolEffect.OUTSIDE_WORKSPACE)
         return frozenset(effects)

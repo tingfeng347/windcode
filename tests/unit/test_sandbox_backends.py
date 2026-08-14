@@ -4,7 +4,26 @@ from pathlib import Path
 
 import pytest
 
-from windcode.sandbox import SandboxPolicy, SandboxPreset, SeatbeltSandbox, WindowsSandbox
+from windcode.sandbox import (
+    SandboxPolicy,
+    SandboxPreset,
+    SeatbeltSandbox,
+    WindowsSandbox,
+    create_sandbox_backend,
+)
+
+
+def test_windows_disables_os_sandbox_instead_of_creating_native_backend(
+    tmp_path: Path,
+) -> None:
+    backend, policy = create_sandbox_backend(
+        tmp_path,
+        platform="win32",
+        preset=SandboxPreset.WORKSPACE_WRITE,
+    )
+
+    assert backend is None
+    assert policy.preset is SandboxPreset.DANGER_FULL_ACCESS
 
 
 def test_seatbelt_profile_limits_writes_and_network(tmp_path: Path) -> None:

@@ -108,8 +108,6 @@ class ToolScheduler:
             escalation_reason = None
         if ToolEffect.OUTSIDE_WORKSPACE in effects and escalation_reason is None:
             escalation_reason = getattr(getattr(sandbox, "status", None), "warning", None)
-            if escalation_reason is None and call.tool_name == "shell":
-                escalation_reason = "the system sandbox is disabled or unavailable"
         summarizer = getattr(tool, "approval_summary", None)
         summary = (
             cast(_ApprovalSummarizer, tool).approval_summary(call.arguments)

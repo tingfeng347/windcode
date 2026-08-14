@@ -25,8 +25,9 @@ from windcode.policy import (
 )
 from windcode.runtime import ScheduledCall, ToolScheduler
 from windcode.runtime.scheduler import PolicyConstraints, ScheduledResult
-from windcode.sandbox import SandboxCapabilities, SandboxPolicy, SandboxStatus
+from windcode.sandbox import SandboxCapabilities, SandboxPolicy, SandboxPreset, SandboxStatus
 from windcode.tools import ToolRegistry
+from windcode.tools.shell import ShellTool
 
 
 class DelayInput(BaseModel):
@@ -107,6 +108,47 @@ def setup_scheduler(
         ToolContext(tmp_path, "run", lambda: False),
         timeline,
     )
+
+
+@pytest.mark.asyncio
+async def test_full_access_runs_intentionally_unsandboxed_shell_without_prompt(
+    tmp_path: Path,
+) -> None:
+    registry = ToolRegistry()
+    registry.register(
+        ShellTool(
+            sandbox=None,
+            sandbox_policy=SandboxPolicy(SandboxPreset.DANGER_FULL_ACCESS),
+            platform="posix",
+            shell_executable="bash",
+        )
+    )
+    requests: list[PolicyRequest] = []
+    decisions: list[PolicyDecision] = []
+
+    async def observe(
+        _call: ScheduledCall,
+        request: PolicyRequest,
+        decision: PolicyDecision,
+    ) -> None:
+        requests.append(request)
+        decisions.append(decision)
+
+    scheduler = ToolScheduler(
+        registry,
+        PolicyEngine(PermissionMode.FULL_ACCESS, sandbox_enabled=False),
+        permission_observer=observe,
+    )
+    (result,) = await scheduler.execute(
+        (ScheduledCall("shell", "shell", {"command": "printf windcode"}),),
+        ToolContext(tmp_path, "run", lambda: False),
+    )
+
+    assert not result.result.is_error
+    assert result.result.output == "windcode"
+    assert requests[0].effects == {ToolEffect.PROCESS}
+    assert requests[0].escalation_reason is None
+    assert decisions[0].action is PolicyAction.ALLOW
 
 
 @pytest.mark.asyncio

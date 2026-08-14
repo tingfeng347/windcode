@@ -177,6 +177,7 @@ class ChildRunSupport:
             writable_roots=writable_roots,
             network_enabled=self.config.sandbox.network_enabled,
         )
+        effective_preset = sandbox_policy.preset
         if "shell" in registry.names():
             registry.register(
                 ShellTool(

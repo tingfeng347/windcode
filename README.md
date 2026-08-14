@@ -93,16 +93,15 @@ Windcode 是一个面向真实代码仓库的终端 Coding Agent。它可以理�
   取消命令以及项目级命令前缀规则。
 - Linux 使用 Bubblewrap，macOS 使用 Seatbelt；支持 `read_only`、`workspace_write` 和
   `danger_full_access` 三种沙箱 preset。
-- Windows 默认使用 PowerShell，并通过可选的 `windcode-sandbox` 原生助手提供文件、网络与进程
-  隔离；助手未安装时会如实显示降级状态，并继续由权限策略保护高风险命令，而不会伪装成已隔离。
+- Windows 默认使用 PowerShell，不启用 OS 沙箱；配置的沙箱 preset 在 Windows 上确定性降级为
+  `danger_full_access`，避免不可用后端反复触发提示。权限模式与危险命令检查仍然生效。
 
 ## 快速开始
 
 环境要求：Linux、macOS 或 Windows，Python 3.11+、[uv](https://docs.astral.sh/uv/)。
 
-Linux 使用 Bubblewrap，macOS 使用 Seatbelt，Windows 通过可选的 `windcode-sandbox` 助手提供
-隔离（可运行 `windcode sandbox setup` 安装/初始化）。助手不可用时，PowerShell 命令通过权限
-策略逐次授权；`full_access` 模式下可按配置直接执行。
+Linux 使用 Bubblewrap，macOS 使用 Seatbelt。Windows 不使用 OS 沙箱：`full_access` 模式直接
+执行 PowerShell 命令，其他权限模式仍按既有权限策略处理审批和危险命令。
 
 沙箱 preset 为 `read_only`、默认的 `workspace_write` 和显式的
 `danger_full_access`。旧配置 `enabled=true/false` 仍可读取，并分别映射到

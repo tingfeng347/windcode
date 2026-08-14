@@ -179,12 +179,21 @@ class Windcode:
         selected_workspace = (workspace or self.workspace).expanduser().resolve()
         preset = SandboxPreset(self.config.sandbox.preset)
         try:
-            backend, _ = create_sandbox_backend(selected_workspace, preset=preset)
+            backend, policy = create_sandbox_backend(selected_workspace, preset=preset)
         except RuntimeError as exc:
             return f"unavailable/{preset.value} ({exc})"
         if backend is None:
-            return f"none/{preset.value}"
-        return f"{backend.status.backend}/{preset.value}/{backend.status.state.value}"
+            return f"none/{policy.preset.value}"
+        return f"{backend.status.backend}/{policy.preset.value}/{backend.status.state.value}"
+
+    def sandbox_enabled(self, workspace: Path | None = None) -> bool:
+        selected_workspace = (workspace or self.workspace).expanduser().resolve()
+        preset = SandboxPreset(self.config.sandbox.preset)
+        try:
+            backend, _ = create_sandbox_backend(selected_workspace, preset=preset)
+        except RuntimeError:
+            return False
+        return backend is not None
 
     @classmethod
     def open(

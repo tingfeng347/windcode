@@ -87,6 +87,15 @@ def test_missing_sandbox_requires_approval_even_in_full_access() -> None:
     assert "unavailable" in decision.reason
 
 
+def test_intentionally_disabled_sandbox_uses_normal_permission_policy() -> None:
+    decision = PolicyEngine(PermissionMode.DEFAULT, sandbox_enabled=False).evaluate(
+        request(ToolEffect.PROCESS, tool_name="shell")
+    )
+
+    assert decision.action is PolicyAction.ASK
+    assert decision.reason == "default mode requires approval for side effects"
+
+
 def test_full_access_allows_shell_network_without_approval() -> None:
     analysis = analyze_bash("curl https://example.com")
     decision = PolicyEngine(PermissionMode.FULL_ACCESS).evaluate(
