@@ -173,6 +173,7 @@ async def test_ask_question_selection_reaches_next_model_request(tmp_path: Path)
             await pilot.pause(0.01)
 
         await pilot.press("enter", "down", "down", "enter")
+        await pilot.pause()
         while app.handle is None or not app.handle.done:
             await pilot.pause(0.01)
 
