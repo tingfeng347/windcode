@@ -14,7 +14,7 @@ def _plugin(tmp_path: Path, body: str = "body") -> Path:
 id = "example"
 name = "Example"
 version = "1.0.0"
-windcode = ">=3.0,<4.0"
+windcode = ">=0.3.0,<0.5.0"
 skills = [{ id = "review", path = "skills/review" }]
 """
     )
