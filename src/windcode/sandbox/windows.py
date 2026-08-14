@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ctypes
 import json
+import os
 import shutil
 import subprocess
 from collections.abc import Mapping
@@ -19,6 +21,9 @@ DEFAULT_WINDOWS_SANDBOX_HELPER = "windcode-sandbox"
 
 
 def _helper_path(helper: str) -> Path | None:
+    bundled = Path(__file__).with_name("bin") / "windcode-sandbox.exe"
+    if bundled.is_file():
+        return bundled.resolve()
     located = shutil.which(helper)
     if located is None:
         candidate = Path(helper).expanduser()
@@ -35,6 +40,8 @@ def _invoke_helper(helper: Path, *arguments: str) -> dict[str, object]:
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
         )
     except subprocess.TimeoutExpired as exc:
@@ -64,13 +71,61 @@ def _capabilities(value: object) -> SandboxCapabilities:
     )
 
 
+def _is_elevated() -> bool:
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def _ps_single_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _invoke_elevated_setup(executable: Path) -> dict[str, object]:
+    script = (
+        "$ErrorActionPreference = 'Stop'; "
+        f"$p = Start-Process -FilePath {_ps_single_quote(str(executable))} "
+        "-ArgumentList 'setup','--json' -Verb RunAs -WindowStyle Hidden -Wait -PassThru; "
+        "exit $p.ExitCode"
+    )
+    try:
+        completed = subprocess.run(
+            ("powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script),
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            "Windows sandbox setup timed out; approve the elevation prompt and retry"
+        ) from exc
+    if completed.returncode != 0:
+        detail = (
+            completed.stderr or completed.stdout or ""
+        ).strip() or f"elevated setup exited with status {completed.returncode}"
+        raise RuntimeError(detail)
+    return _invoke_helper(executable, "status", "--json")
+
+
 def setup_windows_sandbox(
     helper: str = DEFAULT_WINDOWS_SANDBOX_HELPER,
 ) -> dict[str, object]:
     executable = _helper_path(helper)
     if executable is None:
         raise FileNotFoundError(f"Windows sandbox helper is unavailable: {helper}")
-    return _invoke_helper(executable, "setup", "--json")
+    try:
+        status = _invoke_helper(executable, "status", "--json")
+    except (OSError, RuntimeError, ValueError):
+        status = None
+    if status is not None and status.get("ready") is True:
+        return status
+    if _is_elevated():
+        return _invoke_helper(executable, "setup", "--json")
+    return _invoke_elevated_setup(executable)
 
 
 class WindowsSandbox:
@@ -136,6 +191,8 @@ class WindowsSandbox:
             str(cwd.resolve()),
             "--preset",
             policy.preset.value,
+            "--parent-pid",
+            str(os.getpid()),
         ]
         for root in policy.writable_roots:
             arguments.extend(("--writable-root", str(root.resolve())))

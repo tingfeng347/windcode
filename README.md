@@ -101,8 +101,17 @@ Windcode 是一个面向真实代码仓库的终端 Coding Agent。它可以理�
 环境要求：Linux、macOS 或 Windows，Python 3.11+、[uv](https://docs.astral.sh/uv/)。
 
 Linux 使用 Bubblewrap，macOS 使用 Seatbelt，Windows 通过可选的 `windcode-sandbox` 助手提供
-隔离（可运行 `windcode sandbox setup` 安装/初始化）。助手不可用时，PowerShell 命令通过权限
-策略逐次授权；`full_access` 模式下可按配置直接执行。
+隔离。助手随 Windows wheel 打包，或从源码构建（源码位于 `native/windows-sandbox/`）。
+
+首次使用需初始化一次（创建 AppContainer 配置与防火墙规则），直接运行：
+
+```powershell
+windcode sandbox setup --json
+```
+
+它会自动弹出 UAC 授权框，点击“是”即可，无需手动打开管理员终端。
+
+助手不可用时，PowerShell 命令通过权限策略逐次授权；`full_access` 模式下可按配置直接执行。
 
 沙箱 preset 为 `read_only`、默认的 `workspace_write` 和显式的
 `danger_full_access`。旧配置 `enabled=true/false` 仍可读取，并分别映射到

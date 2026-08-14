@@ -7,8 +7,13 @@ wheels/
 *.egg-info
 .ruff_cache/
 .pytest_cache/
+.codegraph/
 # Virtual environments
 .venv*/
+
+# Native Windows sandbox helper artifacts
+native/windows-sandbox/target/
+src/windcode/sandbox/bin/windcode-sandbox.exe
 
 .windcode/config.toml
 .windcode/state/

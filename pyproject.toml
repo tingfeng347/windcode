@@ -65,6 +65,9 @@ exclude = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/windcode"]
 
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
+
 [dependency-groups]
 dev = [
     "pyright>=1.1.400",
