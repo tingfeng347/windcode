@@ -30,7 +30,9 @@ def ensure_user_config(path: Path | None = None) -> Path:
 
     data = AppConfig().model_dump(mode="json", exclude_none=True, by_alias=True)
     cast(dict[str, Any], data["memory"])["enabled"] = True
-    cast(dict[str, Any], data["sandbox"])["network_enabled"] = True
+    sandbox = cast(dict[str, Any], data["sandbox"])
+    sandbox.pop("enabled", None)
+    sandbox["network_enabled"] = True
     content = tomli_w.dumps(data).encode()
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -72,9 +74,18 @@ def _ensure_user_defaults(path: Path) -> None:
         changed = True
 
     sandbox_value = data.setdefault("sandbox", {})
-    if isinstance(sandbox_value, dict) and "network_enabled" not in sandbox_value:
-        cast(dict[str, Any], sandbox_value)["network_enabled"] = True
-        changed = True
+    if isinstance(sandbox_value, dict):
+        sandbox = cast(dict[str, Any], sandbox_value)
+        if "enabled" in sandbox:
+            sandbox.setdefault(
+                "preset",
+                "workspace_write" if bool(sandbox["enabled"]) else "danger_full_access",
+            )
+            sandbox.pop("enabled")
+            changed = True
+        if "network_enabled" not in sandbox:
+            sandbox["network_enabled"] = True
+            changed = True
     if not changed:
         return
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import warnings
 from collections.abc import Mapping
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self, cast
@@ -97,13 +96,8 @@ class SandboxConfig(StrictModel):
             return value
         data = dict(cast(Mapping[str, Any], value))
         if "enabled" in data and "preset" not in data:
-            warnings.warn(
-                "sandbox.enabled is deprecated; use sandbox.preset",
-                DeprecationWarning,
-                stacklevel=2,
-            )
             data["preset"] = "workspace_write" if bool(data["enabled"]) else "danger_full_access"
-        if "preset" in data and "enabled" not in data:
+        if "preset" in data:
             data["enabled"] = data["preset"] != "danger_full_access"
         return data
 

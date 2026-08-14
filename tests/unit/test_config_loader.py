@@ -1,3 +1,6 @@
+import os
+import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -15,7 +18,8 @@ def test_ensure_user_config_creates_defaults_with_private_permissions(tmp_path: 
     target = ensure_user_config(tmp_path / "windcode" / "config.toml")
 
     assert target.exists()
-    assert target.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert target.stat().st_mode & 0o777 == 0o600
     content = target.read_text(encoding="utf-8")
     assert "[memory]" in content
     assert "[extensions]" in content
@@ -25,6 +29,20 @@ def test_ensure_user_config_creates_defaults_with_private_permissions(tmp_path: 
     assert config.sandbox.network_enabled
     assert config.extensions.enabled
     assert config.extensions.mcp_servers == {}
+    with target.open("rb") as stream:
+        assert "enabled" not in tomllib.load(stream)["sandbox"]
+
+
+def test_ensure_user_config_migrates_legacy_sandbox_enabled(tmp_path: Path) -> None:
+    target = tmp_path / "config.toml"
+    target.write_text("[sandbox]\nenabled = false\n", encoding="utf-8")
+
+    ensure_user_config(target)
+
+    with target.open("rb") as stream:
+        sandbox = tomllib.load(stream)["sandbox"]
+    assert sandbox["preset"] == "danger_full_access"
+    assert "enabled" not in sandbox
 
 
 def test_ensure_user_config_preserves_explicit_existing_settings(tmp_path: Path) -> None:
@@ -89,7 +107,7 @@ def test_parse_error_contains_source_path(tmp_path: Path) -> None:
     broken = tmp_path / "broken.toml"
     broken.write_text("not = [valid")
 
-    with pytest.raises(ConfigError, match=str(broken)):
+    with pytest.raises(ConfigError, match=re.escape(str(broken))):
         load_config(tmp_path, explicit_file=broken)
 
 
