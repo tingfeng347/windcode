@@ -283,7 +283,7 @@ class WorktreeManager:
             if removed.returncode != 0:
                 return CleanupResult(False, lease.path, removed.stderr.strip() or "remove failed")
             branch = await self.runner.run(
-                ("branch", "-d", lease.branch), cwd=repository, check=False
+                ("branch", "-D", lease.branch), cwd=repository, check=False
             )
             if branch.returncode != 0:
                 return CleanupResult(False, None, branch.stderr.strip() or "branch cleanup failed")

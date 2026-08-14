@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -8,15 +9,21 @@ from windcode.runtime.subagents.verification import VerificationRunner
 
 async def test_verification_preserves_order_and_stops_after_failure(tmp_path: Path) -> None:
     runner = VerificationRunner()
+    commands = (
+        (
+            "[Console]::Out.Write('first')",
+            "[Console]::Error.Write('failed'); exit 3",
+            "[Console]::Out.Write('skipped')",
+        )
+        if os.name == "nt"
+        else ("printf first", "printf failed >&2; exit 3", "printf skipped")
+    )
     results = await runner.run(
-        ("printf first", "printf failed >&2; exit 3", "printf skipped"),
+        commands,
         workspace=tmp_path,
         run_id="run",
     )
-    assert [result.command for result in results] == [
-        "printf first",
-        "printf failed >&2; exit 3",
-    ]
+    assert [result.command for result in results] == list(commands[:2])
     assert results[0].passed
     assert not results[1].passed
     assert results[1].exit_code == 3

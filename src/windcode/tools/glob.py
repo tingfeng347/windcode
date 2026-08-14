@@ -11,8 +11,10 @@ from windcode.domain.tools import ToolContext, ToolEffect, ToolResult
 
 def _workspace_pattern(root: Path, pattern: str) -> str | None:
     raw_pattern = Path(pattern).expanduser()
-    if not raw_pattern.is_absolute():
+    if not raw_pattern.anchor:
         return pattern
+    if not raw_pattern.is_absolute():
+        return None
     try:
         return str(raw_pattern.relative_to(root))
     except ValueError:

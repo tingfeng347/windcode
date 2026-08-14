@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import re
 import shlex
@@ -212,7 +211,8 @@ def analyze_bash(command: str, *, max_bytes: int = 128_000) -> CommandAnalysis:
 _POWERSHELL_PARSER = (
     r"""
 $ErrorActionPreference='Stop'
-$src=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($args[0]))
+[Console]::InputEncoding=[Text.UTF8Encoding]::new($false)
+$src=[Console]::In.ReadToEnd()
 $tokens=$null; $errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseInput($src,[ref]$tokens,[ref]$errors)
 if ($errors.Count -gt 0) { throw 'PowerShell parse error' }
@@ -237,12 +237,14 @@ def analyze_powershell(command: str, *, executable: str | None = None) -> Comman
             trusted=False,
             error="PowerShell parser unavailable",
         )
-    encoded = base64.b64encode(command.encode("utf-16-le")).decode()
     try:
         result = subprocess.run(
-            (shell, "-NoProfile", "-NonInteractive", "-Command", _POWERSHELL_PARSER, encoded),
+            (shell, "-NoProfile", "-NonInteractive", "-Command", _POWERSHELL_PARSER),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
+            input=command,
             timeout=1.0,
             check=True,
         )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -141,7 +142,8 @@ async def test_subagent_approval_renders_source_tool_arguments_and_risk() -> Non
         plain = RichText.from_markup(content).plain
         assert "高风险" in plain
         assert "child-1 · worker" in plain
-        assert "bash: uv run pytest -q" in plain
+        shell = "PowerShell" if os.name == "nt" else "bash"
+        assert f"{shell}: uv run pytest -q" in plain
 
 
 class SnapshotHandle:

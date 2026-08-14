@@ -1,3 +1,4 @@
+import os
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -274,7 +275,7 @@ async def test_read_child_rejects_shell_write_and_preserves_workspace(tmp_path: 
     direct = await runtime.loop.scheduler.registry.execute(
         "shell",
         context,
-        {"command": "true", "network": True},
+        {"command": "Write-Output ok" if os.name == "nt" else "true", "network": True},
     )
     assert not direct.is_error
 

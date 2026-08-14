@@ -1,6 +1,10 @@
+import json
+import subprocess
 from pathlib import Path
 
-from windcode.policy import ShellDialect, analyze_bash, propose_rule
+import pytest
+
+from windcode.policy import ShellDialect, analyze_bash, analyze_powershell, propose_rule
 from windcode.policy.rules import CommandRuleStore
 
 
@@ -24,6 +28,28 @@ def test_bash_analysis_includes_substitutions_and_redirects() -> None:
         ("whoami",),
     )
     assert redirected.actions[0].redirects == ("output.txt",)
+
+
+def test_powershell_analysis_decodes_parser_output_as_utf8(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del args
+        assert kwargs["encoding"] == "utf-8"
+        assert kwargs["errors"] == "replace"
+        assert kwargs["input"] == "Write-Output '中文'"
+        output = json.dumps(
+            {"source": "Write-Output '中文'", "argv": ["Write-Output", "'中文'"]},
+            ensure_ascii=False,
+        )
+        return subprocess.CompletedProcess(("pwsh",), 0, output, "")
+
+    monkeypatch.setattr("windcode.policy.commands.subprocess.run", run)
+
+    analysis = analyze_powershell("Write-Output '中文'", executable="pwsh")
+
+    assert analysis.trusted
+    assert analysis.actions[0].argv == ("Write-Output", "'中文'")
 
 
 def test_rule_proposal_uses_stable_subcommand_prefix() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from collections.abc import AsyncIterator
@@ -9,7 +10,8 @@ from pathlib import Path
 import pytest
 
 from tests.run_builder_support import child_preparer
-from windcode.config import AppConfig, PermissionMode
+from windcode.config import AppConfig, PermissionMode, SandboxConfig
+from windcode.domain.events import ApprovalRequested, ApprovalResponse
 from windcode.domain.messages import Role, TextBlock
 from windcode.domain.models import (
     ModelCompleted,
@@ -28,6 +30,7 @@ from windcode.domain.subagents import (
 from windcode.observability import TraceStore
 from windcode.providers import ModelTarget
 from windcode.runtime.event_bus import EventBus
+from windcode.runtime.subagents.approvals import ApprovalRouter
 from windcode.runtime.subagents.coordinator import (
     SubagentCoordinator,
     SubagentCoordinatorError,
@@ -78,15 +81,9 @@ class CommittingTransport:
             assert task_match is not None
             task_name = task_match.group(1)
             if "change the shared base line" in block.text:
-                command = (
-                    "printf 'child\\n' > example.txt && git add example.txt && "
-                    f"git commit -m '{task_name}'"
-                )
+                command = commit_command("example.txt", "child", task_name)
             else:
-                command = (
-                    f"printf '{task_name}\\n' > {task_name}.txt && git add {task_name}.txt && "
-                    f"git commit -m '{task_name}'"
-                )
+                command = commit_command(f"{task_name}.txt", task_name, task_name)
             yield ToolCallDelta("commit", "shell", json.dumps({"command": command}))
             yield ModelCompleted(StopReason.TOOL_USE)
             return
@@ -95,6 +92,15 @@ class CommittingTransport:
 
     async def aclose(self) -> None:
         pass
+
+
+def commit_command(path: str, content: str, message: str) -> str:
+    if os.name == "nt":
+        return (
+            f'Set-Content -NoNewline -Encoding utf8 {path} "{content}`n"; '
+            f"git add {path}; git commit -m '{message}'"
+        )
+    return f"printf '{content}\\n' > {path} && git add {path} && git commit -m '{message}'"
 
 
 def write_task(name: str, goal: str = "add an independent file") -> SubagentTaskSpec:
@@ -135,14 +141,14 @@ def coordinator(
     )
     transport = CommittingTransport()
     target = ModelTarget("committing", "model", transport)
-    app_config = AppConfig()
+    app_config = AppConfig(sandbox=SandboxConfig(preset="danger_full_access"))
     prepare_child = child_preparer(
         config=app_config,
         state_root=state,
         parent_tools=create_builtin_registry(),
         model_chain=lambda _model: (target,),
     )
-    return SubagentCoordinator(
+    coord = SubagentCoordinator(
         parent_session_id="parent",
         parent_run_id="parent-run",
         workspace=repo,
@@ -153,6 +159,15 @@ def coordinator(
         worktrees=worktrees or WorktreeManager(worktrees_root=tmp_path / "worktrees"),
         verification=VerificationRunner(),
     )
+
+    router: ApprovalRouter
+
+    async def approve(event: ApprovalRequested) -> None:
+        router.respond(ApprovalResponse(event.request_id, "allow_once"))
+
+    router = ApprovalRouter(parent_session_id="parent", parent_run_id="parent-run", publish=approve)
+    coord.approvals = router
+    return coord
 
 
 class UnavailableWorktreeManager(WorktreeManager):
@@ -189,10 +204,12 @@ async def test_write_task_integrates_verifies_and_cleans(tmp_path: Path) -> None
     worktree = coord.list()[0].worktree_path
     assert worktree is not None and worktree.exists()
 
-    integrated = await coord.integrate(
-        record.subagent_id,
-        ("test -f add_child.txt",),
+    verification = (
+        "if (-not (Test-Path add_child.txt)) { exit 1 }"
+        if os.name == "nt"
+        else "test -f add_child.txt"
     )
+    integrated = await coord.integrate(record.subagent_id, (verification,))
     assert integrated.status is SubagentStatus.INTEGRATED
     assert (repo / "add_child.txt").read_text(encoding="utf-8") == "add_child\n"
     assert not worktree.exists()
@@ -252,7 +269,10 @@ async def test_parent_verification_failure_preserves_integrated_evidence(tmp_pat
     worktree = coord.list()[0].worktree_path
     assert worktree is not None
 
-    result = await coord.integrate(record.subagent_id, ("false",))
+    result = await coord.integrate(
+        record.subagent_id,
+        ("exit 1" if os.name == "nt" else "false",),
+    )
     assert result.status is SubagentStatus.INTEGRATION_FAILED
     assert (repo / "bad_verification.txt").exists()
     assert worktree.exists()

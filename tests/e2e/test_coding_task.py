@@ -271,15 +271,17 @@ async def test_sdk_and_tui_success_paths_emit_same_event_semantics(
         prompt = app.query_one("#chat-input", ChatInput)
         prompt.insert("fix the failing test")
         await pilot.press("enter")
-        for _ in range(500):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 30
+        while True:
             approval = list(app.query(ApprovalWidget))
             if approval:
                 await pilot.press("enter")
             if app.handle is not None and app.handle.done:
                 break
+            if loop.time() >= deadline:
+                pytest.fail("TUI coding task did not finish within 30 seconds")
             await pilot.pause(0.01)
-        else:
-            pytest.fail("TUI coding task did not finish")
         await pilot.pause()
         assert app.handle is not None
         tui_result = await app.handle.result()

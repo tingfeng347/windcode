@@ -153,15 +153,20 @@ class SubagentCoordinator:
         event_bus: EventBus,
         event_observer: Callable[[SubagentEvent], Awaitable[None]] | None,
         parent_run_id: str,
+        permission_mode: PermissionMode,
+        prepare_child: ChildRunPreparer,
     ) -> None:
-        """Rebind the coordinator to a new run's event bus and observer.
+        """Rebind the coordinator to a new run's event bus, observer and preparer.
 
         Called when a coordinator is reused across runs so that background
-        subagents can publish events to the active run's bus.
+        subagents can publish events to the active run's bus while new spawns
+        use the new run's permission mode and child tools.
         """
         self.event_bus = event_bus
         self.event_observer = event_observer
         self.parent_run_id = parent_run_id
+        self.permission_mode = permission_mode
+        self.prepare_child = prepare_child
 
     async def _publish_approval(self, event: ApprovalRequested) -> None:
         await self.event_bus.publish(event, durable=True)

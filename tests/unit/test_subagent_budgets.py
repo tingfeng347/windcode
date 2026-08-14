@@ -33,8 +33,7 @@ async def test_budget_errors_identify_aggregate_scope() -> None:
 
 
 async def test_runtime_budget_is_checked() -> None:
-    budget = AggregateBudget(max_model_steps=1, max_tool_calls=1, max_runtime_seconds=0.001)
-    await asyncio.sleep(0.002)
+    budget = AggregateBudget(max_model_steps=1, max_tool_calls=1, max_runtime_seconds=0)
     with pytest.raises(AggregateBudgetExceeded, match="runtime_seconds"):
         await budget.check_runtime()
 

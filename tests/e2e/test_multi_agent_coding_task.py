@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import re
 import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
 
 from tests.run_builder_support import child_preparer
-from windcode.config import AppConfig, PermissionMode
+from windcode.config import AppConfig, PermissionMode, SandboxConfig
+from windcode.domain.events import ApprovalRequested, ApprovalResponse
 from windcode.domain.messages import Role, TextBlock
 from windcode.domain.models import (
     ModelCompleted,
@@ -76,10 +79,17 @@ class MultiAgentTransport:
             yield ModelCompleted(StopReason.STOP, usage=usage)
             return
         if request.messages[-1].role is Role.USER:
-            command = (
-                f"printf '{task_name} completed\\n' > {task_name}.txt && "
-                f"git add {task_name}.txt && git commit -m '{task_name}'"
-            )
+            if os.name == "nt":
+                command = (
+                    f"Set-Content -NoNewline -Encoding utf8 {task_name}.txt "
+                    f'"{task_name} completed`n"; '
+                    f"git add {task_name}.txt; git commit -m '{task_name}'"
+                )
+            else:
+                command = (
+                    f"printf '{task_name} completed\\n' > {task_name}.txt && "
+                    f"git add {task_name}.txt && git commit -m '{task_name}'"
+                )
             yield ToolCallDelta(f"commit-{task_name}", "shell", json.dumps({"command": command}))
             yield ModelCompleted(StopReason.TOOL_USE, usage=usage)
             return
@@ -110,7 +120,7 @@ async def test_parallel_children_commit_then_integrate_in_order(tmp_path: Path) 
     parent_session = SessionStore.create(state / "sessions", "parent")
     parent_bus = EventBus(parent_session, TraceStore("parent-run", root=state / "traces"))
     transport = MultiAgentTransport()
-    config = AppConfig()
+    config = AppConfig(sandbox=SandboxConfig(preset="danger_full_access"))
     prepare_child = child_preparer(
         config=config,
         state_root=state,
@@ -128,14 +138,31 @@ async def test_parallel_children_commit_then_integrate_in_order(tmp_path: Path) 
         worktrees=WorktreeManager(worktrees_root=tmp_path / "worktrees"),
         verification=VerificationRunner(),
     )
+
+    async def approve_shell_commands() -> None:
+        async for event in parent_bus.subscribe():
+            if isinstance(event, ApprovalRequested):
+                coordinator.approvals.respond(ApprovalResponse(event.request_id, "allow_once"))
+
+    approver = asyncio.create_task(approve_shell_commands())
     specs = (
         task("inspect_base", SubagentTaskKind.READ),
         task("add_alpha", SubagentTaskKind.WRITE),
         task("add_beta", SubagentTaskKind.WRITE),
     )
 
-    records = await coordinator.spawn(specs)
-    results = tuple([await coordinator.wait(record.subagent_id) for record in records])
+    try:
+        records = await coordinator.spawn(specs)
+        async with asyncio.timeout(30):
+            results = tuple([await coordinator.wait(record.subagent_id) for record in records])
+    except TimeoutError as exc:
+        states = ", ".join(
+            f"{record.spec.task_name}={record.status.value}" for record in coordinator.list()
+        )
+        raise AssertionError(f"subagents did not finish within 30 seconds: {states}") from exc
+    finally:
+        approver.cancel()
+        await asyncio.gather(approver, return_exceptions=True)
     assert [result.task_name for result in results] == [spec.task_name for spec in specs]
     assert all(result.status is SubagentStatus.COMPLETED for result in results)
     assert all(result.usage.input_tokens > 0 for result in results)
@@ -152,9 +179,14 @@ async def test_parallel_children_commit_then_integrate_in_order(tmp_path: Path) 
     assert not (repo / "add_beta.txt").exists()
 
     for record in write_records:
+        verification_command = (
+            f"if (-not (Test-Path {record.spec.task_name}.txt)) {{ exit 1 }}"
+            if os.name == "nt"
+            else f"test -f {record.spec.task_name}.txt"
+        )
         integrated = await coordinator.integrate(
             record.subagent_id,
-            (f"test -f {record.spec.task_name}.txt",),
+            (verification_command,),
         )
         assert integrated.status is SubagentStatus.INTEGRATED
         assert integrated.verification[0].passed

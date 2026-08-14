@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -36,9 +37,14 @@ def test_uses_bash_on_posix() -> None:
 
 @pytest.mark.asyncio
 async def test_captures_stdout_stderr_and_exit_code(tmp_path: Path) -> None:
+    command = (
+        "[Console]::Out.Write('out'); [Console]::Error.Write('err'); exit 3"
+        if os.name == "nt"
+        else "printf out; printf err >&2; exit 3"
+    )
     result = await ShellTool().execute(
         ToolContext(tmp_path, "run", lambda: False),
-        ShellInput(command="printf out; printf err >&2; exit 3"),
+        ShellInput(command=command),
     )
 
     assert result.is_error

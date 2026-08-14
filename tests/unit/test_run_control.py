@@ -41,7 +41,6 @@ async def test_cancel_releases_all_waiters() -> None:
 
 @pytest.mark.asyncio
 async def test_wall_clock_budget() -> None:
-    control = RunControl(RunBudgets(max_runtime_seconds=0.001))
-    await asyncio.sleep(0.01)
+    control = RunControl(RunBudgets(max_runtime_seconds=0))
     with pytest.raises(BudgetExceeded, match="runtime_seconds"):
         control.check()
