@@ -104,5 +104,7 @@ async def test_question_widget_submits_selected_answer() -> None:
     async with app.run_test() as pilot:
         await pilot.press("enter", "down", "down", "enter")
         await pilot.pause()
+        await pilot.click("#question-submit")
+        await pilot.pause()
 
         assert app.answers == {"strategy": "方案 B"}

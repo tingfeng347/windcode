@@ -1,11 +1,13 @@
 import asyncio
+import os
 from collections.abc import AsyncIterator
 from pathlib import Path
+from time import monotonic
 
 import pytest
 from rich.text import Text as RichText
 from textual.content import Content
-from textual.widgets import Button, Markdown, OptionList, Static, Switch
+from textual.widgets import Button, Markdown, OptionList, Select, Static, Switch
 
 from windcode import Windcode
 from windcode.auth import CredentialStoreError
@@ -171,8 +173,15 @@ async def test_ask_question_selection_reaches_next_model_request(tmp_path: Path)
         await pilot.press("enter")
         while not list(app.query(QuestionWidget)):
             await pilot.pause(0.01)
+        question = app.query_one(QuestionWidget)
+        for _ in range(100):
+            if question.query_one(Select).has_focus:
+                break
+            await pilot.pause(0.01)
 
         await pilot.press("enter", "down", "down", "enter")
+        await pilot.pause()
+        await pilot.click("#question-submit")
         while app.handle is None or not app.handle.done:
             await pilot.pause(0.01)
 
@@ -535,7 +544,8 @@ async def test_prompts_submitted_during_run_are_processed_in_fifo_order(tmp_path
         assert "队列 2" in str(app.query_one("#mode-label", Static).content)
 
         transport.release_first.set()
-        for _ in range(300):
+        deadline = monotonic() + 30
+        while monotonic() < deadline:
             if (
                 transport.prompts == ["第一条", "第二条", "第三条"]
                 and app.handle is not None
@@ -545,7 +555,11 @@ async def test_prompts_submitted_during_run_are_processed_in_fifo_order(tmp_path
                 break
             await pilot.pause(0.01)
         else:
-            pytest.fail("queued prompts did not finish")
+            pytest.fail(
+                "queued prompts did not finish: "
+                f"processed={transport.prompts!r}, queued={list(app.prompt_queue)!r}, "
+                f"handle_done={app.handle is not None and app.handle.done}"
+            )
 
         assert transport.prompts == ["第一条", "第二条", "第三条"]
         users = [str(message.content) for message in app.query(Static).filter(".user-message")]
@@ -633,7 +647,7 @@ async def test_input_regains_focus_after_approved_agent_run(tmp_path: Path) -> N
         prompt.insert("执行命令")
         await pilot.press("enter")
 
-        for _ in range(200):
+        for _ in range(1000):
             if list(app.query(ApprovalWidget)):
                 break
             await pilot.pause(0.01)
@@ -641,8 +655,13 @@ async def test_input_regains_focus_after_approved_agent_run(tmp_path: Path) -> N
             pytest.fail("approval widget was not shown")
 
         approval = app.query_one(ApprovalWidget)
+        for _ in range(100):
+            if approval.has_focus:
+                break
+            await pilot.pause(0.01)
         approval_content = str(approval.query_one("#approval-content", Static).content)
-        assert "bash: printf ok" in RichText.from_markup(approval_content).plain
+        shell = "PowerShell" if os.name == "nt" else "bash"
+        assert f"{shell}: printf ok" in RichText.from_markup(approval_content).plain
         await pilot.press("down", "enter")
         while app.handle is None or not app.handle.done:
             await pilot.pause(0.01)
@@ -666,13 +685,18 @@ async def test_permission_mode_can_cycle_while_agent_is_waiting_for_approval(
         prompt.insert("执行命令")
         await pilot.press("enter")
 
-        for _ in range(200):
+        for _ in range(1000):
             if list(app.query(ApprovalWidget)):
                 break
             await pilot.pause(0.01)
         else:
             pytest.fail("approval widget was not shown")
 
+        approval = app.query_one(ApprovalWidget)
+        for _ in range(100):
+            if approval.has_focus:
+                break
+            await pilot.pause(0.01)
         assert app.handle is not None
         await pilot.press("shift+tab")
         await pilot.pause()

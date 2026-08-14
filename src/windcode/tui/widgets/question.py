@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import cast
 
-from textual import on
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.css.query import NoMatches
 from textual.message import Message
 from textual.widgets import Button, Label, Select
 
@@ -34,7 +34,13 @@ class QuestionWidget(Vertical):
         yield Button("提交", id="question-submit", variant="primary")
 
     def on_mount(self) -> None:
-        self.query_one(Select).focus()
+        self.focus_first_select()
+
+    def focus_first_select(self) -> None:
+        try:
+            self.query_one(Select).focus()
+        except NoMatches:
+            pass
 
     def _answers(self) -> dict[str, str] | None:
         answers: dict[str, str] = {}
@@ -53,10 +59,6 @@ class QuestionWidget(Vertical):
         self._submitted = True
         self.post_message(self.Submitted(self.request.request_id, answers))
         self.remove()
-
-    @on(Select.Changed)
-    def selection_changed(self) -> None:
-        self._submit_if_complete()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "question-submit":

@@ -32,6 +32,7 @@ async def open_provider_manager(app: WindcodeApp, pilot: Pilot[None]) -> Provide
     prompt.insert("/model")
     await pilot.press("enter")
     await pilot.click("#model-manage")
+    await pilot.pause()
     return cast(ProviderManager, app.screen)
 
 

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import sys
 from collections import deque
 from pathlib import Path
 from time import monotonic
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, cast
 
 from rich.text import Text as RichText
 from textual import events, on
@@ -11,6 +13,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Vertical
 from textual.css.query import NoMatches
+from textual.screen import Screen
 from textual.theme import Theme
 from textual.widgets import Static
 
@@ -209,6 +212,10 @@ class WindcodeApp(App[None]):
             welcome.show_notice(setup_message)
         if self.client.mcp_startup_status.total:
             self.run_worker(self._load_required_mcp(), group="mcp-startup", exclusive=True)
+        if sys.platform.startswith("win") and not self.is_headless:
+            self.run_worker(
+                self._maybe_initialize_windows_sandbox(), group="sandbox-setup", exclusive=True
+            )
         if self.session_id is not None and self.client.session_exists(self.session_id):
             await self._restore_session(self.session_id, announce=False)
 
@@ -227,6 +234,43 @@ class WindcodeApp(App[None]):
             await self._show_system_message(
                 self._combine_startup_messages(self._model_setup_message(), message)
             )
+
+    async def _maybe_initialize_windows_sandbox(self) -> None:
+        def check_and_setup() -> tuple[bool, str | None]:
+            from windcode.sandbox import (
+                SandboxPreset,
+                create_sandbox_backend,
+                setup_windows_sandbox,
+            )
+
+            preset = SandboxPreset(self.config.sandbox.preset)
+            if preset is SandboxPreset.DANGER_FULL_ACCESS:
+                return (False, None)
+            try:
+                backend, _ = create_sandbox_backend(self.workspace, preset=preset)
+            except RuntimeError:
+                return (False, None)
+            if backend is None or backend.status.executable is None or backend.status.available:
+                return (False, None)
+            try:
+                result = setup_windows_sandbox()
+            except Exception as exc:
+                return (True, str(exc))
+            return (
+                True,
+                None if result.get("ready") is True else "sandbox is not ready after setup",
+            )
+
+        attempted, error = await asyncio.to_thread(check_and_setup)
+        if not attempted:
+            return
+        if error is not None:
+            await self._show_system_message(
+                f"Windows 沙箱初始化失败 (可稍后运行 `windcode sandbox setup` 重试): {error}",
+                error=True,
+            )
+        else:
+            await self._show_system_message("Windows 沙箱已初始化, 普通命令将自动在沙箱内执行")
 
     def _mcp_status_message(self) -> str | None:
         status = self.client.mcp_startup_status
@@ -266,19 +310,23 @@ class WindcodeApp(App[None]):
     def _update_status(self, state: str) -> None:
         if self._unmounting:
             return
-        self.query_one("#status-bar", StatusBar).set_state(
-            model=self._display_model(),
-            permission=self.permission_mode,
-            sandbox=self.config.sandbox.enabled,
-            state=state,
-            delegation=self.config.subagents.mode.value,
-        )
-        self.query_one("#welcome-view", WelcomeView).set_context(
-            model=self._display_model(),
-            permission=self.permission_mode,
-            sandbox=self.config.sandbox.enabled,
-            workspace=self.workspace,
-        )
+        try:
+            self.query_one("#status-bar", StatusBar).set_state(
+                model=self._display_model(),
+                permission=self.permission_mode,
+                sandbox=self.config.sandbox.enabled,
+                state=state,
+                delegation=self.config.subagents.mode.value,
+            )
+            self.query_one("#welcome-view", WelcomeView).set_context(
+                model=self._display_model(),
+                permission=self.permission_mode,
+                sandbox=self.config.sandbox.enabled,
+                workspace=self.workspace,
+            )
+        except NoMatches:
+            # The DOM is being torn down (e.g. app exit); status is irrelevant then.
+            return
 
     async def action_cycle_permission_mode(self) -> None:
         modes = tuple(PermissionMode)
@@ -378,15 +426,22 @@ class WindcodeApp(App[None]):
         if self.rewind_selector is not None:
             await self.rewind_selector.remove()
             self.rewind_selector = None
-        if self.model_manager is not None:
-            await self.model_manager.dismiss()
-        self.model_manager = ModelManager(
+        manager = ModelManager(
             self.config.providers,
             selected=selected or self.model,
             primary=self.config.primary_provider,
             connected=self._connected_providers(),
         )
-        await self.push_screen(self.model_manager)
+        current = self.screen
+        replacing_modal = current is self.provider_manager
+        self.provider_manager = None
+        self.model_manager = manager
+        if replacing_modal:
+            await self.switch_screen(  # pyright: ignore[reportUnknownMemberType]
+                cast(Screen[None], manager)
+            )
+        else:
+            await self.push_screen(manager)
 
     async def _close_model_manager(self) -> None:
         if self.model_manager is not None:
@@ -400,15 +455,30 @@ class WindcodeApp(App[None]):
         selected: str | None = None,
         preset_id: str | None = None,
     ) -> None:
-        await self._close_model_manager()
-        if self.provider_manager is not None:
-            await self.provider_manager.dismiss()
-        self.provider_manager = ProviderManager(
+        if self.provider_manager is not None and self.screen is self.provider_manager:
+            self.provider_manager.refresh_profiles(
+                self.provider_service.snapshot(),
+                selected=selected or self.model,
+                preset_id=preset_id,
+            )
+            self.provider_manager.focus_editor()
+            return
+        manager = ProviderManager(
             self.provider_service.snapshot(),
             selected=selected or self.model,
             preset_id=preset_id,
         )
-        await self.push_screen(self.provider_manager)
+        current = self.screen
+        replacing_modal = current is self.model_manager or current is self.provider_manager
+        self.model_manager = None
+        self.provider_manager = manager
+        if replacing_modal:
+            await self.switch_screen(  # pyright: ignore[reportUnknownMemberType]
+                cast(Screen[None], manager)
+            )
+        else:
+            await self.push_screen(manager)
+        manager.focus_editor()
 
     async def _close_provider_manager(self) -> None:
         if self.provider_manager is not None:
@@ -561,9 +631,12 @@ class WindcodeApp(App[None]):
                     widget = ApprovalWidget(event)
                     self.approval_widgets[event.request_id] = widget
                     await messages.mount(widget)
+                    widget.call_after_refresh(widget.focus)
                 elif isinstance(event, UserInputRequested):
                     await messages.begin_block()
-                    await messages.mount(QuestionWidget(event))
+                    question = QuestionWidget(event)
+                    await messages.mount(question)
+                    question.call_after_refresh(question.focus_first_select)
                 elif isinstance(event, SubagentEvent):
                     if self.subagent_group is None or not self.subagent_group.is_attached:
                         await messages.begin_block()
@@ -750,7 +823,6 @@ class WindcodeApp(App[None]):
 
     @on(ProviderManager.Closed)
     async def provider_manager_closed(self) -> None:
-        await self._close_provider_manager()
         await self._open_model_manager()
 
     @on(MemoryManager.EnabledChanged)

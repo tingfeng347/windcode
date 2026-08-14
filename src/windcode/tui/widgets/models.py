@@ -412,6 +412,25 @@ class ProviderManager(ModalScreen[None]):
         self._refresh_options()
         self._open_editor(self.selected if self.initial_preset_id is None else None)
 
+    def focus_editor(self) -> None:
+        self.query_one("#provider-api-key", Input).focus()
+
+    def refresh_profiles(
+        self,
+        health: tuple[ProviderHealth, ...],
+        *,
+        selected: str | None,
+        preset_id: str | None = None,
+    ) -> None:
+        self.health = {item.alias: item for item in health}
+        self.profiles = {item.alias: item.provider for item in health}
+        primary = next((item.alias for item in health if item.is_default), None)
+        self.selected = selected if selected in self.profiles else primary
+        self.initial_preset_id = preset_id
+        self._aliases = tuple(self.profiles)
+        self._refresh_options()
+        self._open_editor(self.selected if preset_id is None else None)
+
     def _refresh_options(self) -> None:
         options: list[Option] = []
         for alias in self._aliases:
@@ -581,7 +600,7 @@ class ProviderManager(ModalScreen[None]):
         model_options.set_options(())
         model_options.clear()
         self._update_details(alias)
-        self.query_one("#provider-api-key", Input).focus()
+        self.focus_editor()
 
     def _apply_preset(self, preset: ProviderPreset) -> None:
         self.query_one("#provider-alias", Input).value = preset.id
