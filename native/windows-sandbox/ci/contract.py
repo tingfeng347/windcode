@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import ctypes
 import json
 import os
@@ -143,9 +144,14 @@ def main() -> None:
         assert after_cancellation.returncode != 0, after_cancellation
 
         child_pid_file = workspace / "child.pid"
+        child_command = base64.b64encode("Start-Sleep 300".encode("utf-16-le")).decode()
         script = (
-            "$p=Start-Process cmd.exe -ArgumentList '/d','/c','ping -t 127.0.0.1' "
-            "-PassThru; Set-Content -Path child.pid -Value $p.Id; Wait-Process $p.Id"
+            "$p=Start-Process -FilePath 'powershell.exe' "
+            f"-ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','{child_command}' "
+            "-PassThru; "
+            "$path=Join-Path (Get-Location) 'child.pid'; "
+            "[IO.File]::WriteAllText($path,[string]$p.Id,[Text.Encoding]::ASCII); "
+            "Wait-Process -Id $p.Id"
         )
         argv = [
             str(helper),
@@ -167,15 +173,21 @@ def main() -> None:
         ]
         wrapper = subprocess.Popen(
             argv,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
         for _ in range(100):
             if child_pid_file.exists():
                 break
             if wrapper.poll() is not None:
+                try:
+                    stdout, stderr = wrapper.communicate(timeout=1)
+                except subprocess.TimeoutExpired:
+                    stdout, stderr = "<pipe still open>", "<pipe still open>"
                 raise AssertionError(
-                    f"helper exited before spawning descendant: {wrapper.returncode}"
+                    "helper exited before spawning descendant: "
+                    f"{wrapper.returncode}; stdout={stdout!r}; stderr={stderr!r}"
                 )
             time.sleep(0.1)
         else:
