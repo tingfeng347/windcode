@@ -138,7 +138,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG" --generate-notes
+            gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG"
           else
             gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --generate-notes
           fi
