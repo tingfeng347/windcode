@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 from windcode.sandbox.models import (
     LaunchSpec,
@@ -18,6 +18,14 @@ from windcode.sandbox.models import (
 )
 
 DEFAULT_WINDOWS_SANDBOX_HELPER = "windcode-sandbox"
+
+
+class _Shell32(Protocol):
+    def IsUserAnAdmin(self) -> int: ...
+
+
+class _WindowsLibraries(Protocol):
+    shell32: _Shell32
 
 
 def _helper_path(helper: str) -> Path | None:
@@ -73,7 +81,8 @@ def _capabilities(value: object) -> SandboxCapabilities:
 
 def _is_elevated() -> bool:
     try:
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        libraries = cast(_WindowsLibraries | None, getattr(ctypes, "windll", None))
+        return libraries is not None and bool(libraries.shell32.IsUserAnAdmin())
     except Exception:
         return False
 
