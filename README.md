@@ -1,147 +1,165 @@
-# Windcode
 
-> 安全、可扩展的终端 Coding Agent：让 AI 在真实代码仓库中理解项目、修改代码、执行命令、运行测试。
+<h1 align="center">Windcode</h1>
 
-## 项目简介
+<p align="center">
+  <em>A safe, extensible terminal coding agent that understands real repositories, edits code, runs commands, and verifies its work.</em>
+</p>
 
-Windcode 是一个面向真实代码仓库的终端 Coding Agent。它可以理解项目、修改文件、执行命令、
-运行测试，并在高风险操作前请求授权；同时提供多模型接入、多智能体协作、MCP/Skills/Plugins
-扩展、会话恢复和长期记忆。交互界面基于 Textual，核心运行时也可以作为 Python SDK 使用。
+<p align="center">
+  <a href="https://pypi.org/project/windcode/"><img src="https://img.shields.io/pypi/v/windcode?logo=pypi&label=PyPI" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/windcode/"><img src="https://img.shields.io/pypi/pyversions/windcode?logo=python" alt="Python versions"></a>
+  <a href="https://github.com/tingfeng347/windcode/actions/workflows/ci.yml"><img src="https://github.com/tingfeng347/windcode/actions/workflows/ci.yml/badge.svg" alt="Cross-platform CI"></a>
+  <a href="https://github.com/tingfeng347/windcode/stargazers"><img src="https://img.shields.io/github/stars/tingfeng347/windcode?logo=github&label=Stars" alt="GitHub stars"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-65a30d" alt="Apache-2.0 license"></a>
+  <br>
+  <img src="https://img.shields.io/badge/Textual-TUI-111827" alt="Textual TUI">
+  <img src="https://img.shields.io/badge/MCP-enabled-0ea5e9" alt="MCP enabled">
+  <img src="https://img.shields.io/badge/Multi--agent-ready-7c3aed" alt="Multi-agent ready">
+  <img src="https://img.shields.io/badge/Python-SDK-3776AB?logo=python&logoColor=white" alt="Python SDK">
+</p>
 
-它解决的核心问题是：让模型在真实、可审计、可回滚的开发环境中完成编码任务，而不是只在玩具
-示例里演示。因此 Windcode 内置了权限审批、进程沙箱、会话持久化、运行预算和 Trace 追踪，让
-开发者能在同一个 TUI 里完成从对话、改代码到运行测试、审查变更的完整闭环。
-
-- 面向人群：希望把 AI 接入日常开发流程的开发者与团队。
-- 使用形态：交互式 TUI（基于 Textual），核心运行时也可作为 Python SDK 使用。
-- 设计理念：安全优先、默认可审计、易于通过 MCP / Skills / Plugins 扩展。
-
-## 演示
-![2026-07-18 23-16-58.png](https://pic1.imgdb.cn/i/033rgL8ytDrAySvBniqhgs.png)
-
----
-
-![2026-07-19 00-21-22.png](https://pic1.imgdb.cn/i/033rhoraACOSdTMUADV8IH.png)
-
----
-
-![2026-07-19 00-12-18.png](https://pic1.imgdb.cn/i/033rhryNejzD7nUXIJxqqT.png)
+<p align="center">
+  <b>English</b> · <a href="README.zh-CN.md">中文</a>
+</p>
 
 ---
 
-![2026-07-19 00-28-41.png](https://pic1.imgdb.cn/i/033ri07lrFD4Pt6SIu3Maz.png)
+## Overview
 
-## 功能
+Windcode is a terminal coding agent for real software repositories. It can inspect a project, edit
+files, run commands and tests, and ask for approval before high-risk operations. It combines a
+Textual-based TUI with multi-provider model access, subagent collaboration, MCP, Skills, Plugins,
+recoverable sessions, long-term memory, and an asynchronous Python SDK.
 
-### 代码工作台
+Windcode is designed for auditable development work rather than isolated code-generation demos.
+Permission decisions, process isolation, run budgets, session persistence, and trace events are
+built into the runtime so a task can move from discussion to implementation and verification in a
+single workspace.
 
-- 在同一个 TUI 中完成对话、文件读取与搜索、补丁修改、Shell 命令、测试和构建。
-- 工具调用、推理状态、耗时、Token 用量、审批请求和子智能体进度实时展示。
-- 支持任务队列、运行中取消、模型流重试以及空闲超时，网络流中断不会无限卡住界面。
-- 内置 Provider、扩展、长期记忆、会话和历史回退管理界面。
-- 未配置模型、Provider 配置无效或凭据文件不可读时仍可进入 TUI；界面会显示原因，并引导重新连接
-  Provider，不会因为模型初始化失败而退出整个应用。
-- 提供异步 Python SDK，可订阅结构化事件、响应审批、取消运行、压缩上下文和管理子智能体。
+- **For:** developers and teams bringing AI into daily engineering workflows.
+- **Interfaces:** an interactive terminal UI and an asynchronous Python SDK.
+- **Principles:** safe by default, observable, recoverable, and open to extension.
 
-### 多模型与可靠运行
+## Demo
 
-- 原生支持 Anthropic Messages、OpenAI Responses 和 OpenAI-compatible 三种协议。
-- 内置 OpenAI、DeepSeek、Moonshot AI、SiliconFlow、OpenRouter、智谱 AI、
-  阿里云、Groq、Mistral、xAI 和 Google Gemini 配置预设，也可连接自定义兼容端点。
-- 支持主 Provider、显式 fallback chain、流式文本/推理/工具调用、网络错误重试和模型回退。
-- Provider 可直接在 `/model` 管理界面中新增、编辑、断开、设为默认和加载模型列表；API Key
-  可保存到独立凭据存储，也可通过环境变量提供。
-- 模型流连续无数据时自动超时并重试，`model_stream_idle_timeout_seconds` 可配置。
-- 上下文达到阈值时自动压缩，也可以使用 `/compact` 主动请求压缩。
+<p align="center">
+  <img src="https://pic1.imgdb.cn/i/033rgL8ytDrAySvBniqhgs.png" alt="Windcode TUI" width="920">
+</p>
 
-### 多智能体协作
+![Windcode conversation and tool execution](https://pic1.imgdb.cn/i/033rhoraACOSdTMUADV8IH.png)
 
-- 支持 `explicit` 和 `proactive` 两种委派策略，以及 researcher、worker、verifier 三类角色。
-- 可以并行派发独立任务，也可以通过 `collaborate_subagents` 进行 division、negotiation 或
-  hybrid 协作，由参与者分轮交换结果，再由独立 verifier 汇总。
-- 子智能体之间支持受控消息传递、同步轮次、超时、取消和聚合预算，TUI 会持续显示每个任务状态。
-- 写任务使用独立 Git Worktree，完成后检查提交、变更文件和验证结果，再由父智能体决定是否集成。
-- 子智能体继承经过角色和任务类型过滤的工具、MCP、Skills、权限与沙箱边界，禁止递归创建子智能体。
+---
 
-### MCP、Skills、Hooks 与插件
+![Windcode provider and runtime interface](https://pic1.imgdb.cn/i/033rhryNejzD7nUXIJxqqT.png)
 
-- MCP 同时支持 stdio 和 Streamable HTTP，可调用 Tools、Resources、Resource Templates 和 Prompts。
-- `enable` 控制服务器是否可见，`required` 只控制已启用服务器是否在启动阶段主动连接；单个 MCP
-  加载失败会显示降级状态，不会阻断普通对话；启动完成后会显示已加载、失败和按需加载数量。
-- 少量 MCP 工具可直接注入，较大目录通过 `search_mcp_tools` 按需发现；模型调用名统一使用
-  `mcp_` 前缀，同名工具会自动消歧。
-- Skills 从项目 `.windcode/skills/<skill-name>/SKILL.md` 和用户
-  `~/.windcode/skills/<skill-name>/SKILL.md` 发现，同名时项目级覆盖用户级，并支持 `$skill-name` 激活。
-- 本地插件通过 `.windcode-plugin/plugin.toml` 组合 Skills、MCP Servers、Hooks 和自定义命令，
-  支持安装、信任、启用、禁用、检查和显式 reload。
-- Hooks 覆盖会话、运行、工具策略前后、权限申请、上下文压缩及子智能体生命周期；决策 Hook
-  可以拒绝操作或收紧工具权限。
+---
 
-### 会话、记忆与可观测性
+![Windcode terminal workflow](https://pic1.imgdb.cn/i/033ri07lrFD4Pt6SIu3Maz.png)
 
-- 会话和事件增量持久化，支持恢复已有会话、选择历史输入回退、修改原输入后重新发送。
-- 长期记忆区分用户画像、项目事实、经验、SOP 和参考资料，支持候选确认、拒绝、遗忘、搜索、
-  激活策略和索引重建。
-- 稳定用户事实可以自动激活；经验和 SOP 结合真实变更与验证结果生成，避免把未验证结论直接固化。
-- Trace 记录模型、工具、审批、扩展和子智能体事件，并提供保留天数、容量和瞬态事件配置。
-- 大型工具结果可外置为会话 Artifact，减少上下文膨胀，同时保留可追溯引用。
+## Features
 
-### 权限、沙箱与跨平台
+### Coding workspace
 
-- 提供 `plan`、`default`、`accept_edits` 和 `full_access` 四种权限模式，可在运行中切换。
-- 根据工具副作用、命令解析、工作目录、网络需求和沙箱状态计算风险，并支持仅本次允许、拒绝、
-  取消命令以及项目级命令前缀规则。
-- Linux 使用 Bubblewrap，macOS 使用 Seatbelt；支持 `read_only`、`workspace_write` 和
-  `danger_full_access` 三种沙箱 preset。
-- Windows 默认使用 PowerShell，不启用 OS 沙箱；配置的沙箱 preset 在 Windows 上确定性降级为
-  `danger_full_access`，避免不可用后端反复触发提示。权限模式与危险命令检查仍然生效。
+- Discuss a task, inspect and search files, apply patches, run shell commands, test, and build from
+  one TUI.
+- See tool calls, reasoning state, elapsed time, token use, approvals, and subagent progress as they
+  happen.
+- Queue tasks, cancel active runs, retry model streams, and recover from idle network streams.
+- Manage providers, extensions, long-term memory, sessions, and history from built-in screens.
+- Enter the TUI even when a provider is missing or invalid, then repair the connection through
+  `/model` without restarting the application.
+- Use the asynchronous SDK to subscribe to structured events, answer approvals, cancel runs,
+  compact context, and coordinate subagents.
 
-## 快速开始
+### Models and reliable execution
 
-环境要求：Linux、macOS 或 Windows，Python 3.11+、[uv](https://docs.astral.sh/uv/)。
+- Native adapters for Anthropic Messages, OpenAI Responses, and OpenAI-compatible APIs.
+- Presets for OpenAI, DeepSeek, Moonshot AI, SiliconFlow, OpenRouter, Zhipu AI, Alibaba Cloud,
+  Groq, Mistral, xAI, and Google Gemini, plus custom compatible endpoints.
+- Primary providers, explicit fallback chains, streaming text/reasoning/tool calls, retries, and
+  model fallback.
+- Add, edit, disconnect, select, and query models from `/model`; store API keys in a dedicated
+  credential store or provide them through environment variables.
+- Automatic retry when a model stream stays idle beyond `model_stream_idle_timeout_seconds`.
+- Automatic context compaction at the configured threshold, with `/compact` for manual compaction.
 
-Linux 使用 Bubblewrap，macOS 使用 Seatbelt。Windows 不使用 OS 沙箱：`full_access` 模式直接
-执行 PowerShell 命令，其他权限模式仍按既有权限策略处理审批和危险命令。
+### Multi-agent collaboration
 
-沙箱 preset 为 `read_only`、默认的 `workspace_write` 和显式的
-`danger_full_access`。旧配置 `enabled=true/false` 仍可读取，并分别映射到
-`workspace_write/danger_full_access`。命令联网和沙箱外运行单独审批；项目级命令前缀规则保存
-在 state root 的 `permissions/projects/`，不会写入仓库。
+- `explicit` and `proactive` delegation modes with researcher, worker, and verifier roles.
+- Parallel independent tasks and structured `division`, `negotiation`, or `hybrid` collaboration.
+- Controlled messaging, synchronized rounds, cancellation, timeouts, and aggregate budgets.
+- Isolated Git worktrees for write tasks, followed by commit, changed-file, and verification checks.
+- Role-filtered tools, MCP servers, Skills, permissions, and sandbox boundaries for every child;
+  recursive subagent creation is disabled.
 
-从 PyPI 安装命令行工具：
+### MCP, Skills, Hooks, and Plugins
+
+- MCP over stdio and Streamable HTTP, including Tools, Resources, Resource Templates, and Prompts.
+- Direct injection for small tool catalogs and on-demand `search_mcp_tools` discovery for large
+  catalogs.
+- Project Skills in `.windcode/skills/<skill-name>/SKILL.md` and user Skills in
+  `~/.windcode/skills/<skill-name>/SKILL.md`, with `$skill-name` activation.
+- Local plugins declared through `.windcode-plugin/plugin.toml`, combining Skills, MCP servers,
+  Hooks, and custom commands.
+- Hooks across session, run, tool policy, approval, compaction, and subagent lifecycle events.
+
+### Sessions, memory, and observability
+
+- Incrementally persisted sessions and events, resumable conversations, and history rewind.
+- Long-term user profiles, project knowledge, engineering experiences, SOPs, and references with
+  review, activation, search, rejection, and forgetting workflows.
+- Trace events for models, tools, approvals, extensions, and subagents with retention controls.
+- Session artifacts for large tool results, keeping context compact without losing provenance.
+
+### Permissions, sandboxing, and platforms
+
+- `plan`, `default`, `accept_edits`, and `full_access` permission modes, switchable during a run.
+- Risk decisions based on side effects, parsed commands, working directories, network access, and
+  sandbox state, including one-time approvals and project command-prefix rules.
+- Bubblewrap on Linux and Seatbelt on macOS with `read_only`, `workspace_write`, and
+  `danger_full_access` presets.
+- PowerShell without an OS sandbox on Windows. Sandbox presets deterministically fall back to
+  `danger_full_access`, while permission modes and dangerous-command checks remain active.
+
+## Quick Start
+
+Requirements: Linux, macOS, or Windows; Python 3.11+; and
+[`uv`](https://docs.astral.sh/uv/).
+
+Install the command from PyPI:
 
 ```bash
 uv tool install windcode
 windcode /path/to/project
 ```
 
-也可以安装到当前 Python 环境：
+Or install it into the current Python environment:
 
 ```bash
 uv pip install windcode
 ```
 
-从源码运行：
+Run from source:
 
 ```bash
 uv sync --frozen --all-groups
 uv run windcode /path/to/project
 ```
 
-### Docker 镜像
+### Container image
 
-发布版本可从 GitHub Container Registry 拉取，并以交互模式挂载待处理的项目目录：
+Run a published image from GitHub Container Registry with an interactive TTY and a mounted project:
 
 ```bash
 docker run --rm -it -v "$PWD:/workspace" ghcr.io/tingfeng347/windcode:0.4.2
 ```
 
-完整的发布、私有镜像登录和状态持久化说明见 [GHCR 镜像说明](docs/ghcr.md)。
+See the [GHCR guide](docs/ghcr.md) for image login, persistence, and runtime details.
 
-首次运行不要求预先配置模型。进入 TUI 后输入 `/model` 即可连接 Provider。若希望使用文件配置，
-可将 `.windcode/config.toml.example` 复制到项目目录，再修改其中的模型和扩展设置。
+### Connect a model
 
-最小模型配置：
+The first launch does not require a configured model. Enter `/model` in the TUI to connect a
+provider. For file-based configuration, start from `.windcode/config.toml.example`.
 
 ```toml
 primary_provider = "primary"
@@ -153,18 +171,19 @@ base_url = "https://example.com/v1"
 api_key_env = "MODEL_API_KEY"
 ```
 
-密钥应通过环境变量或 Windcode 凭据存储提供，不要写入项目配置。
+Provide secrets through an environment variable or the Windcode credential store, never through
+project configuration:
 
 ```bash
 export MODEL_API_KEY="..."
 uv run windcode .
 ```
 
-如果没有配置 Provider、API Key 缺失、Provider 配置字段无效，或凭据文件损坏，Windcode 会保留
-TUI 和扩展功能并显示具体原因。此时输入任务或执行 `/model` 会打开 Provider 管理器。只有 TOML
-语法错误或与 Provider 无关的基础配置错误仍会阻止启动，因为这类配置无法安全恢复。
+If a provider is absent, invalid, or has unreadable credentials, Windcode keeps the TUI and
+extension system available and explains how to reconnect. Only invalid TOML or unrelated base
+configuration errors prevent startup.
 
-常用启动参数：
+Common startup options:
 
 ```text
 --config FILE
@@ -174,27 +193,29 @@ TUI 和扩展功能并显示具体原因。此时输入任务或执行 `/model` 
 --sandbox / --no-sandbox
 ```
 
-## 常用命令与快捷键
+## Commands and Shortcuts
 
 ```text
-/new                         新建会话
-/resume [SESSION_ID]         恢复会话
-/rewind                      选择历史输入并回退
-/model [PROVIDER_ALIAS]      管理或切换模型与 Provider
-/memory [ACTION]             管理长期记忆
-/extensions [ACTION] [ID]    管理扩展、插件与信任状态
-/compact                     压缩当前上下文
-/clear                       清空当前消息显示
-/agents                      查看子智能体
-/status                      查看运行状态
-/help                        查看全部命令及插件命令
-/quit                        退出 Windcode
+/new                         Start a new session
+/resume [SESSION_ID]         Resume a session
+/rewind                      Rewind to an earlier user message
+/model [PROVIDER_ALIAS]      Manage or switch models and providers
+/memory [ACTION]             Manage long-term memory
+/extensions [ACTION] [ID]    Manage extensions, plugins, and trust
+/compact                     Compact the current context
+/clear                       Clear the visible message history
+/agents                      View subagents
+/status                      View runtime status
+/help                        List built-in and plugin commands
+/quit                        Exit Windcode
 
-Shift+Tab                    循环切换权限模式
-Esc（连续两次）              中断当前运行
+Shift+Tab                    Cycle the permission mode
+Esc twice                    Interrupt the active run
 ```
 
 ## MCP Server
+
+Streamable HTTP example:
 
 ```toml
 [extensions]
@@ -207,7 +228,7 @@ enable = true
 required = false
 ```
 
-stdio MCP 示例：
+stdio example:
 
 ```toml
 [extensions.mcp_servers.local-example]
@@ -218,12 +239,11 @@ enable = true
 required = false
 ```
 
-`enable = false` 的服务器不会连接、不会参与工具搜索，也不会注入模型上下文。`required` 只在
-服务器启用时表示启动阶段主动连接；连接失败会显示降级状态，但不会阻断普通消息。默认配置不
-启用任何 MCP 服务器，需要时请在 `~/.windcode/config.toml` 或项目 `.windcode/config.toml`
-中显式添加。
+Disabled servers do not connect, enter tool search, or appear in model context. `required` only
+controls eager startup for an enabled server; a failed server reports degraded status without
+blocking ordinary conversation. No MCP server is enabled by default.
 
-## 多智能体配置
+## Subagent Configuration
 
 ```toml
 [subagents]
@@ -237,10 +257,11 @@ max_total_model_steps = 80
 max_total_tool_calls = 200
 ```
 
-`explicit` 只在用户明确要求委派、并行或使用子智能体时开放委派；`proactive` 允许模型根据任务
-复杂度主动拆分。并发数、单任务预算和聚合预算会同时生效。
+`explicit` exposes delegation only when the user asks for subagents or parallel work. `proactive`
+allows the model to split complex work when useful. Per-task, concurrency, and aggregate budgets
+apply together.
 
-## 运行预算与流超时
+## Run Budgets and Stream Timeouts
 
 ```toml
 [budgets]
@@ -251,12 +272,12 @@ model_stream_idle_timeout_seconds = 60
 shell_timeout_seconds = 120
 ```
 
-模型流在配置时间内没有产生任何事件时会按网络错误进入重试/回退流程；手动中断则记录为正常
-取消，不会被包装成 Provider 失败。
+A model stream that produces no event before the idle deadline enters the network retry and
+fallback path. Manual interruption is recorded as cancellation, not as a provider failure.
 
-## 本地状态
+## Local State
 
-Windcode 将记忆、会话、trace、扩展状态和 Worktree 统一存放在选定的状态根下：
+Windcode stores memory, sessions, traces, extension state, and worktrees under one selected root:
 
 ```toml
 [storage]
@@ -264,27 +285,25 @@ project_state_root = ".windcode"
 user_storage_root = "~/.windcode"
 ```
 
-用户级配置固定读取 `~/.windcode/config.toml`；项目中的 `.windcode/config.toml` 优先级更高。
-配置项目状态根时优先使用项目目录；未配置时使用 `~/.windcode`。Skill 会同时扫描两边的
-`skills/`，同名时项目级覆盖用户级。项目 `.windcode/config.toml` 和 `.windcode/` 下的运行
-状态都不应提交到 Git。
+User configuration is read from `~/.windcode/config.toml`; project configuration in
+`.windcode/config.toml` has higher precedence. Project configuration and runtime state under
+`.windcode/` should not be committed.
 
-模型 API Key 不写入 TOML，而是保存在用户存储根下的 `auth.json`。Windcode 不会在错误信息或
-项目配置中回显密钥内容。
+API keys are stored in `auth.json` under the user storage root rather than in TOML. Windcode does
+not echo credential values in project configuration or error messages.
 
-## 常见问题
+## Troubleshooting
 
-### 启动后提示尚未配置模型 Provider
+### No model provider is configured
 
-这是可恢复状态，不会影响查看扩展、MCP、Skills、会话和长期记忆。执行 `/model`，选择内置预设
-或自定义兼容端点，填写模型 ID 和 API Key 后保存即可。
+This is recoverable. Extensions, MCP, Skills, sessions, and memory remain available. Run `/model`,
+select a preset or custom endpoint, enter the model ID and API key, and save.
 
-### Provider 配置或凭据错误
+### Provider configuration or credentials are invalid
 
-Windcode 会临时停用不可用的模型连接并继续启动。欢迎页会显示配置校验或凭据读取错误；通过
-`/model` 修复 Provider 字段或重新连接后，新配置会立即生效，无需重启应用。若 `auth.json`
-已经损坏或不可读，需要先备份并修复该文件；若配置文件本身不是合法 TOML，请先根据终端错误
-修复对应文件的语法。
+Windcode temporarily disables the unavailable model connection and continues to the welcome
+screen. Repair the provider through `/model`; the updated connection takes effect without a
+restart. Invalid TOML must be corrected in the file reported by the terminal.
 
 ## License
 
