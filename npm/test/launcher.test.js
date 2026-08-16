@@ -13,7 +13,7 @@ test("launches the matching Python package and forwards arguments", () => {
   assert.equal(status, 7);
   assert.deepEqual(invocation, [
     "uvx",
-    ["--from", "windcode==0.4.2", "windcode", ".", "--model", "primary"],
+    ["--from", "windcode==0.4.3", "windcode", ".", "--model", "primary"],
     { stdio: "inherit" },
   ]);
 });
