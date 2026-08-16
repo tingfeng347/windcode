@@ -130,3 +130,57 @@ jobs:
         with:
           skip-existing: true
           attestations: false
+
+  publish-npm:
+    name: Publish npm CLI wrapper
+    needs: [publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify release versions
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          NPM_VERSION="$(node -p 'require("./package.json").version')"
+          PYTHON_VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -n 1)"
+          TAG_VERSION="${RELEASE_TAG#v}"
+          test "$RELEASE_TAG" = "v$TAG_VERSION" \
+            && test -n "$TAG_VERSION" \
+            && test "$TAG_VERSION" = "$NPM_VERSION" \
+            && test "$TAG_VERSION" = "$PYTHON_VERSION" || {
+              echo "Version mismatch: tag=$TAG_VERSION npm=$NPM_VERSION python=$PYTHON_VERSION"
+              exit 1
+            }
+
+      - name: Test CLI wrapper
+        run: pnpm test
+
+      - name: Verify package contents
+        run: pnpm run pack:check
+
+      - name: Publish package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
+        run: pnpm publish --access public --no-git-checks

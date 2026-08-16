@@ -133,6 +133,14 @@ uv tool install windcode
 windcode /path/to/project
 ```
 
+Or install the npm CLI wrapper (requires Node.js 20+ and
+[`uv`](https://docs.astral.sh/uv/)):
+
+```bash
+pnpm add --global windcode
+windcode /path/to/project
+```
+
 Or install it into the current Python environment:
 
 ```bash

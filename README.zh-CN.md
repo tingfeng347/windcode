@@ -139,6 +139,14 @@ uv tool install windcode
 windcode /path/to/project
 ```
 
+也可以安装 npm CLI 包装器（需要 Node.js 20+ 和
+[`uv`](https://docs.astral.sh/uv/)）：
+
+```bash
+pnpm add --global windcode
+windcode /path/to/project
+```
+
 也可以安装到当前 Python 环境：
 
 ```bash

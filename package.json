@@ -1,0 +1,42 @@
+{
+  "name": "windcode",
+  "version": "0.4.2",
+  "description": "npm CLI wrapper for the Windcode terminal coding agent",
+  "license": "Apache-2.0",
+  "author": "Tingfeng347",
+  "type": "module",
+  "bin": {
+    "windcode": "npm/bin/windcode.js"
+  },
+  "files": [
+    "npm/bin/",
+    "npm/lib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test npm/test/*.test.js",
+    "pack:check": "pnpm publish --dry-run --access public --no-git-checks"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tingfeng347/windcode.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tingfeng347/windcode/issues"
+  },
+  "homepage": "https://github.com/tingfeng347/windcode#readme",
+  "keywords": [
+    "ai",
+    "coding-agent",
+    "cli",
+    "terminal"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "packageManager": "pnpm@10.34.5"
+}
