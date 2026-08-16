@@ -12,6 +12,7 @@
     "npm/bin/",
     "npm/lib/",
     "README.md",
+    "README.en.md",
     "LICENSE"
   ],
   "engines": {

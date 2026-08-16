@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"
+     role="img" aria-labelledby="title desc">
+  <title id="title">Windcode logo</title>
+  <desc id="desc">A colorful pixel-neon wind vortex forming a W and code brackets.</desc>
+  <defs>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f2347"/>
+      <stop offset="0.5" stop-color="#11133b"/>
+      <stop offset="1" stop-color="#28113f"/>
+    </linearGradient>
+    <linearGradient id="letter" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#67e8f9"/>
+      <stop offset="0.34" stop-color="#60a5fa"/>
+      <stop offset="0.68" stop-color="#e879f9"/>
+      <stop offset="1" stop-color="#fde047"/>
+    </linearGradient>
+    <filter id="soft-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="9" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="bright-glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <g shape-rendering="crispEdges" filter="url(#soft-glow)">
+    <path d="M96 96H192V64H288V96H352V128H416V192H448V256H384V224H352V192H288V160H192V192H128V224H64V160H96Z"
+          fill="#22d3ee"/>
+    <path d="M320 64H384V96H416V128H448V224H416V192H384V160H320V128H256V96H320Z"
+          fill="#8b5cf6"/>
+    <path d="M416 256H448V352H416V416H352V448H256V384H288V352H352V320H384V288H416Z"
+          fill="#f43f8d"/>
+    <path d="M352 384H416V416H384V448H320V480H224V448H160V416H224V384H288V352H352Z"
+          fill="#fb923c"/>
+    <path d="M64 288H128V320H160V352H224V384H256V448H160V416H96V384H64Z"
+          fill="#facc15"/>
+    <path d="M32 224H96V256H128V288H160V352H96V320H64V288H32Z"
+          fill="#34d399"/>
+  </g>
+
+  <g shape-rendering="crispEdges">
+    <path d="M160 144H352V176H384V336H352V368H160V336H128V176H160Z"
+          fill="#020617" opacity="0.76"/>
+    <path d="M176 160H336V176H368V336H336V352H176V336H144V176H176Z"
+          fill="url(#core)"/>
+    <path d="M176 176H336V192H352V320H336V336H176V320H160V192H176Z"
+          fill="#020617" opacity="0.72"/>
+    <path d="M160 176H176V336H160ZM336 176H352V336H336Z"
+          fill="#38bdf8" opacity="0.3"/>
+  </g>
+
+  <g fill="none" stroke-linecap="square" stroke-linejoin="miter"
+     shape-rendering="geometricPrecision" filter="url(#bright-glow)">
+    <path d="M216 208L176 256L216 304" stroke="#67e8f9" stroke-width="18"/>
+    <path d="M296 208L336 256L296 304" stroke="#f472b6" stroke-width="18"/>
+    <path d="M216 224L240 304L256 256L272 304L296 224"
+          stroke="url(#letter)" stroke-width="20"/>
+  </g>
+
+  <g shape-rendering="crispEdges" filter="url(#bright-glow)">
+    <rect x="80" y="112" width="24" height="24" fill="#a5f3fc"/>
+    <rect x="400" y="152" width="24" height="24" fill="#c4b5fd"/>
+    <rect x="400" y="376" width="24" height="24" fill="#fda4af"/>
+    <rect x="112" y="384" width="24" height="24" fill="#fde047"/>
+  </g>
+</svg>
