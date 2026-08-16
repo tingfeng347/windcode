@@ -10,14 +10,21 @@ wheels/
 # Virtual environments
 .venv*/
 
+# Node-generated files
+node_modules/
+*.tgz
+
+# Local development tools
+.codegraph/
+
+# Windcode project-local runtime state
 .windcode/config.toml
 .windcode/state/
-.windcode/skills/
 .windcode/memory/
 .windcode/sessions/
 .windcode/traces/
 .windcode/extensions/
+.windcode/permissions/
 .windcode/worktrees/
-
 
 spec/

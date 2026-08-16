@@ -20,9 +20,10 @@ Windcode is a Python 3.11+ terminal coding agent. Production code lives under `s
 - `config/`, `sessions/`, `context/`, `policy/`, `sandbox/`, and `observability/` own their
   corresponding infrastructure concerns.
 
-Local tests mirror behavior in `tests/unit/`, `tests/contract/`, `tests/integration/`, `tests/e2e/`,
-and `tests/smoke/`. Product requirements and checklists live under `spec/`. Both directories are
-intentionally Git-ignored and must not be force-added unless the user explicitly requests it.
+Tracked tests mirror behavior in `tests/unit/`, `tests/contract/`, `tests/integration/`, `tests/e2e/`,
+and `tests/smoke/`. Product requirements and checklists live under `spec/`; that directory is
+intentionally local-only and Git-ignored, and must not be force-added unless the user explicitly
+requests it.
 
 ## Development Commands
 
@@ -59,9 +60,10 @@ explicit SDK state_root
 The root contains `skills/`, `memory/`, `sessions/`, `traces/`, `extensions/`, and `worktrees/`.
 Project Skills live at `.windcode/skills/<skill-name>/SKILL.md`; user Skills live at
 `~/.windcode/skills/<skill-name>/SKILL.md`.
-`.windcode/config.toml`, runtime directories under `.windcode/`, `tests/`, and `spec/` are local-only
-ignored paths.
-Never remove, rewrite, force-add, or commit them without an explicit user request.
+`.windcode/config.toml` and runtime directories such as `memory/`, `sessions/`, `traces/`,
+`extensions/`, `permissions/`, and `worktrees/` are local-only ignored paths. Public references such
+as `.windcode/config.toml.example` and project Skills under `.windcode/skills/` are trackable. Never
+remove, rewrite, force-add, or commit local runtime state without an explicit user request.
 
 For MCP servers, `enable` controls discovery and runtime visibility; `required` only controls startup
 requirements for an enabled server. Disabled servers must not connect, appear in default server

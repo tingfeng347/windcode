@@ -3,6 +3,8 @@
 .codegraph
 .venv
 .windcode
+node_modules
+npm
 __pycache__
 *.py[cod]
 *.egg-info
