@@ -1,0 +1,108 @@
+.composerWrap {
+  padding: 0 max(32px, calc((100% - 1080px) / 2)) 10px;
+  background: linear-gradient(transparent, var(--bg) 32%);
+}
+
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 22px;
+  padding-top: 10px;
+  background: var(--layer);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 4px 20px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.composer[data-disabled] { opacity: 0.65; }
+
+.commandMenu {
+  max-height: 204px;
+  overflow: auto;
+  margin: -10px 8px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 5px;
+  background: var(--layer);
+  box-shadow: var(--shadow);
+  scrollbar-width: thin;
+}
+.commandMenu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 9px 10px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.commandMenu button:hover { background: var(--layer-2); }
+.commandMenu code { min-width: 96px; color: var(--accent); font-weight: 600; }
+.commandMenu span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 13px; }
+
+.composer textarea {
+  display: block;
+  width: 100%;
+  min-height: 52px;
+  max-height: 220px;
+  resize: none;
+  border: 0;
+  outline: 0;
+  padding: 4px 16px 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 15.5px;
+  line-height: 24px;
+}
+.composer textarea:focus-visible { outline: none; }
+.composer textarea::placeholder { color: var(--faint); }
+
+.composerBar { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 2px 8px 6px; }
+.composerBar > div { min-width: 0; display: flex; align-items: center; gap: 12px; }
+.composerBar select {
+  max-width: 230px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  outline: 0;
+  padding: 0 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.composerBar select:hover { background: var(--layer-2); }
+.permissionMenu { display: flex; align-items: center; gap: 2px; color: var(--muted); }
+
+.sendButton, .stopButton {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+.sendButton { background: var(--accent); color: #fff; }
+.sendButton:hover:not(:disabled) { background: var(--accent-hover); }
+.sendButton:active:not(:disabled) { transform: scale(0.94); }
+.sendButton:disabled { opacity: 0.4; cursor: default; }
+.stopButton { background: color-mix(in srgb, var(--red) 13%, var(--layer)); color: var(--red); }
+.stopButton:hover { background: color-mix(in srgb, var(--red) 20%, var(--layer)); }
+
+.errorLine { max-width: 1080px; margin: 6px auto 0; color: var(--red); font-size: 12px; }
+
+@media (max-width: 700px) {
+  .composerWrap { padding-inline: 12px; }
+}

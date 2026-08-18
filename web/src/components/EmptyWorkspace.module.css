@@ -1,0 +1,49 @@
+.emptyWorkspace {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+.emptyWorkspace > img { width: 96px; height: 96px; }
+.emptyWorkspace h1 { margin: 16px 0 5px; font-size: 24px; letter-spacing: -0.4px; }
+.emptyWorkspace p { margin: 0; color: var(--muted); font-size: 14px; }
+
+.emptyWorkspace form {
+  width: min(620px, calc(100% - 40px));
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 26px;
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  padding: 0 8px 0 16px;
+  background: var(--layer);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.emptyWorkspace form:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 4px 20px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.emptyWorkspace form > svg { color: var(--faint); }
+.emptyWorkspace input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; }
+.emptyWorkspace button {
+  border: 0;
+  border-radius: 9px;
+  padding: 8px 15px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.emptyWorkspace button:hover:not(:disabled) { background: var(--accent-hover); }
+.emptyWorkspace button:disabled { opacity: 0.45; cursor: default; }
+.emptyWorkspace .browseButton { background: var(--layer-2); color: var(--text); }
+.emptyWorkspace .browseButton:hover:not(:disabled) { background: var(--border-strong); }
+
+.formError { margin: 12px 0 0; color: var(--red); font-size: 13px; }

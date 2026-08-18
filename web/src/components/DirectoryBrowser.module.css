@@ -1,0 +1,131 @@
+.directoryBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 42%);
+  backdrop-filter: blur(3px);
+}
+
+.directoryBrowser {
+  width: min(640px, 100%);
+  max-height: min(600px, 100%);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--layer);
+  box-shadow: var(--shadow);
+  animation: browserIn 0.18s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+@keyframes browserIn {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+}
+
+.directoryBrowser header {
+  flex: none;
+  height: 54px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px 0 18px;
+  border-bottom: 1px solid var(--border);
+}
+.directoryBrowser header > svg { color: var(--accent); }
+.directoryBrowser header strong { flex: 1; font-size: 15px; }
+.directoryBrowser header button {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+}
+.directoryBrowser header button:hover { background: var(--layer-2); color: var(--text); }
+
+.directoryPath {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar);
+}
+.directoryPath > button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 6px 11px;
+  background: var(--layer);
+  color: var(--muted);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.directoryPath > button:hover:not(:disabled) { border-color: var(--faint); color: var(--text); }
+.directoryPath > button:disabled { opacity: 0.4; cursor: default; }
+.directoryPath > button:first-child svg { margin-left: -2px; }
+.directoryPath .directoryPick { border-color: var(--accent); background: var(--accent); color: #fff; }
+.directoryPath .directoryPick:hover:not(:disabled) { background: var(--accent-hover); color: #fff; }
+.directoryPath code {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.directoryError { margin: 0; padding: 10px 16px; color: var(--red); font-size: 13px; }
+
+.directoryBrowser nav {
+  min-height: 120px;
+  flex: 1;
+  overflow: auto;
+  padding: 8px;
+  scrollbar-width: thin;
+}
+.directoryBrowser nav > button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.directoryBrowser nav > button:hover { background: var(--layer-2); }
+.directoryBrowser nav svg:first-child { color: var(--accent); }
+.directoryBrowser nav span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.directoryBrowser nav svg:last-child { color: var(--faint); }
+
+.directoryEmpty {
+  margin: 0;
+  padding: 36px 16px;
+  color: var(--faint);
+  font-size: 13px;
+  text-align: center;
+}
+
+@media (max-width: 700px) {
+  .directoryBackdrop { padding: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .directoryBrowser { animation: none; }
+}
