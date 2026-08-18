@@ -28,6 +28,17 @@ jobs:
       - name: Install Python
         run: uv python install 3.12
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
       - name: Verify release tag matches package version
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -40,7 +51,9 @@ jobs:
           }
 
       - name: Install locked dependencies
-        run: uv sync --frozen --all-groups
+        run: |
+          uv sync --frozen --all-groups
+          pnpm install --frozen-lockfile
 
       - name: Verify runtime version
         env:
@@ -61,6 +74,10 @@ jobs:
         run: |
           uv run ruff format --check .
           uv run ruff check .
+          uv run pyright
+          pnpm web:test
+          pnpm web:build
+          git diff --exit-code -- src/windcode/web/static
 
       - name: Build distributions
         run: uv build --no-sources
@@ -75,7 +92,13 @@ jobs:
           wheel = next(Path("dist").glob("*.whl"))
           with zipfile.ZipFile(wheel) as archive:
               names = archive.namelist()
-          required = ("windcode/__init__.py", "windcode/tui/styles.tcss")
+          required = (
+              "windcode/__init__.py",
+              "windcode/tui/styles.tcss",
+              "windcode/web/static/index.html",
+              "windcode/web/static/assets/app.js",
+              "windcode/web/static/assets/app.css",
+          )
           missing = [item for item in required if not any(name.endswith(item) for name in names)]
           if missing:
               raise SystemExit(f"Wheel is missing required files: {', '.join(missing)}")

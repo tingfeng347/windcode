@@ -20,7 +20,10 @@
   },
   "scripts": {
     "test": "node --test npm/test/*.test.js",
-    "pack:check": "pnpm publish --dry-run --access public --no-git-checks"
+    "pack:check": "pnpm publish --dry-run --access public --no-git-checks",
+    "web:build": "pnpm --dir web build",
+    "web:dev": "node scripts/web-dev.mjs",
+    "web:test": "pnpm --dir web test"
   },
   "repository": {
     "type": "git",

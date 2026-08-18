@@ -5,6 +5,25 @@ on:
   pull_request:
 
 jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Test Web workspace
+        run: pnpm web:test
+      - name: Build Web workspace
+        run: pnpm web:build
+      - name: Verify committed Web assets are current
+        run: git diff --exit-code -- src/windcode/web/static
+
   python-contracts:
     strategy:
       fail-fast: false
