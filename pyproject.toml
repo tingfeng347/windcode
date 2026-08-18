@@ -27,6 +27,7 @@ classifiers = [
 dependencies = [
     "aiohttp>=3.12.0",
     "anthropic[aiohttp]>=0.98.0",
+    "fastapi>=0.116.0,<1",
     "httpx>=0.28.0,<1",
     "jsonschema>=4.25.0,<5",
     "mcp>=1.10.0,<2",
@@ -38,6 +39,8 @@ dependencies = [
     "tree-sitter>=0.25.0,<0.26",
     "tree-sitter-bash>=0.25.0,<0.26",
     "tomli-w>=1.2.0",
+    "uvicorn>=0.35.0,<1",
+    "websockets>=15.0,<16",
 ]
 
 [project.scripts]
