@@ -162,6 +162,54 @@ uv sync --frozen --all-groups
 uv run windcode /path/to/project
 ```
 
+### Web 工作台
+
+Windcode 除了 TUI，还提供一个浏览器端的工作台，适合在桌面或远程环境中使用。界面默认使用
+中文，支持明暗主题跟随系统，以及会话、流式对话、审批、权限切换，Provider / 插件 / Skill /
+MCP 管理，并可在侧栏添加和删除工作区。
+
+#### 从安装包启动
+
+```bash
+windcode web /path/to/project
+```
+
+默认地址为 `http://127.0.0.1:8765`，可通过 `--port` 修改端口，使用 `--no-open` 禁止自动打开
+浏览器。Web 服务只监听本机回环地址，不提供公网绑定。
+
+#### 从源码启动（前后端联调）
+
+仓库根目录是一个 pnpm workspace（`pnpm-workspace.yaml` 包含 `web/`），前端源码在 `web/`，
+构建产物输出到 `src/windcode/web/static/`，由 Python 端直接托管。
+
+```bash
+# 安装依赖
+uv sync --frozen --all-groups
+pnpm install
+
+# 方式一：一键联调（后端 :8765 + Vite 热更新 :5173）
+pnpm web:dev
+
+# 方式二：仅构建前端（产物写入 src/windcode/web/static/）
+pnpm web:build
+
+# 仅运行前端测试
+pnpm web:test
+```
+
+`pnpm web:dev` 会同时启动 Windcode API（`127.0.0.1:8765`）和 Vite 开发服务器
+（`127.0.0.1:5173`），后者把 `/api` 和 WebSocket 请求代理到后端，支持前端热更新；浏览器访问
+`http://127.0.0.1:5173` 即可。修改前端代码后页面会自动刷新，无需重启后端。
+
+前端技术栈：React 18 + TypeScript + Vite，样式使用 CSS Modules，图标使用 lucide-react，
+Markdown 渲染使用 react-markdown + remark-gfm。
+
+#### 数据与安全
+
+Web 中的项目设置通过 SDK 原子写入项目 `.windcode/config.toml`；API Key 只写入 Windcode 凭据
+存储，不会返回明文，也不会保存在 Web 工作区列表中。工作区列表本身保存在用户存储根下的
+`workspaces.json`，删除工作区只移除列表记录和会话索引，不会删除磁盘上的项目目录。
+
 ### Docker 镜像
 
 发布版本可从 GitHub Container Registry 拉取，并以交互模式挂载待处理的项目目录：

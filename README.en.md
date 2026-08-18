@@ -153,6 +153,57 @@ uv sync --frozen --all-groups
 uv run windcode /path/to/project
 ```
 
+### Web workspace
+
+Windcode ships a browser-based workspace alongside the TUI, suited to desktop or remote use. The
+interface defaults to Chinese with light/dark theme that follows the system, and supports sessions,
+streaming runs, approvals, permission switching, Provider / plugin / Skill / MCP management, and
+adding or removing workspaces from the sidebar.
+
+#### From an install
+
+```bash
+windcode web /path/to/project
+```
+
+It opens at `http://127.0.0.1:8765` by default. Use `--port` to select another port and
+`--no-open` to disable automatic browser launch. The server only binds to a loopback address.
+
+#### From source (full-stack dev)
+
+The repo root is a pnpm workspace (`pnpm-workspace.yaml` includes `web/`). Frontend sources live in
+`web/` and build into `src/windcode/web/static/`, served directly by the Python backend.
+
+```bash
+# Install dependencies
+uv sync --frozen --all-groups
+pnpm install
+
+# Option 1: full-stack dev (backend :8765 + Vite HMR :5173)
+pnpm web:dev
+
+# Option 2: build the frontend only (into src/windcode/web/static/)
+pnpm web:build
+
+# Frontend tests only
+pnpm web:test
+```
+
+`pnpm web:dev` starts the Windcode API (`127.0.0.1:8765`) and the Vite dev server
+(`127.0.0.1:5173`) together; Vite proxies `/api` and WebSocket traffic to the backend, so open
+`http://127.0.0.1:5173` for hot-reloading frontend edits without restarting the backend.
+
+Frontend stack: React 18 + TypeScript + Vite, CSS Modules for styling, lucide-react for icons,
+react-markdown + remark-gfm for Markdown rendering.
+
+#### Data and security
+
+Project settings are written atomically through the SDK to `.windcode/config.toml`. API keys are
+stored only in the Windcode credential store, are never returned as plaintext, and are not saved
+in the Web workspace registry. The workspace registry itself lives at `workspaces.json` under the
+user storage root; removing a workspace only deletes the registry entry and session index, never
+the project directory on disk.
+
 ### Container image
 
 Run a published image from GitHub Container Registry with an interactive TTY and a mounted project:
