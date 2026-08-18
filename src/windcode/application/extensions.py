@@ -267,6 +267,15 @@ class ExtensionApplication:
                 retirement.add_done_callback(self._retirement_done)
             return result
 
+    async def probe_mcp(self, server_id: str) -> McpServerState:
+        current = self._require_generation()
+        await current.extensions.mcp.activate(server_id)
+        return current.extensions.mcp.state(server_id)
+
+    def mcp_states(self) -> dict[str, McpServerState]:
+        runtime = self._require_generation().extensions.mcp
+        return {server_id: runtime.state(server_id) for server_id in runtime.server_ids}
+
     def _retirement_done(self, task: asyncio.Task[None]) -> None:
         self._retirements.discard(task)
         if not task.cancelled():

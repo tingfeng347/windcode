@@ -10,6 +10,10 @@ from windcode.config.models import (
     BudgetConfig,
     ContextConfig,
     DelegationMode,
+    ExtensionConfig,
+    McpHttpConfig,
+    McpServerConfig,
+    McpStdioConfig,
     MemoryConfig,
     PermissionConfig,
     PermissionMode,
@@ -21,7 +25,7 @@ from windcode.config.models import (
     TraceConfig,
 )
 from windcode.config.paths import default_user_config_path, default_user_storage_root
-from windcode.config.writer import save_memory_config, save_model_config
+from windcode.config.writer import save_extension_config, save_memory_config, save_model_config
 from windcode.sandbox import SandboxPreset
 
 __all__ = [
@@ -32,6 +36,10 @@ __all__ = [
     "ConfigError",
     "ContextConfig",
     "DelegationMode",
+    "ExtensionConfig",
+    "McpHttpConfig",
+    "McpServerConfig",
+    "McpStdioConfig",
     "MemoryConfig",
     "PermissionConfig",
     "PermissionMode",
@@ -46,6 +54,7 @@ __all__ = [
     "default_user_storage_root",
     "ensure_user_config",
     "load_config",
+    "save_extension_config",
     "save_memory_config",
     "save_model_config",
 ]

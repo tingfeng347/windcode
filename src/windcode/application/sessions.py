@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
 from windcode.domain.messages import (
     Message,
@@ -79,6 +80,14 @@ class SessionApplication:
                 continue
             sessions.append(self._ensure_summary(SessionStore.open(self.sessions_root, path.name)))
         return tuple(sorted(sessions, key=lambda item: item.updated_at, reverse=True))
+
+    def clear(self) -> int:
+        sessions = self.list()
+        archive_root = self.sessions_root / ".archive" / uuid4().hex
+        for session in sessions:
+            archive_root.mkdir(parents=True, exist_ok=True)
+            (self.sessions_root / session.session_id).replace(archive_root / session.session_id)
+        return len(sessions)
 
     def rewind(
         self,

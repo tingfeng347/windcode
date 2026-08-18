@@ -34,6 +34,7 @@ from windcode.application.contracts import (
     MemoryStatus,
     Message,
     ModelTransport,
+    ProviderService,
     RunHandle,
     RunRequest,
     SessionMetadata,
@@ -43,7 +44,7 @@ from windcode.application.contracts import (
     TransportRegistry,
 )
 from windcode.auth import CredentialStore, FileCredentialStore
-from windcode.config import AppConfig
+from windcode.config import AppConfig, ExtensionConfig, McpServerConfig
 from windcode.sandbox import SandboxPreset, create_sandbox_backend
 
 
@@ -270,6 +271,70 @@ class Windcode:
         """Return enabled, trusted, unshadowed Skills from the current snapshot."""
         return self._extension_application.search_skills(query)
 
+    def create_provider_service(self, *, config_file: Path) -> ProviderService:
+        """Create a stateful Provider editor backed by this SDK client."""
+
+        async def apply_config(config: AppConfig) -> None:
+            await self.reconfigure_models(config, config_file=config_file)
+
+        return ProviderService(
+            self.config,
+            self.credential_store,
+            apply_config=apply_config,
+            connected_aliases=lambda: self.transport_registry.aliases,
+        )
+
+    async def configure_extensions(
+        self, extensions: ExtensionConfig, *, config_file: Path
+    ) -> ManagementResult:
+        """Persist extension configuration and activate a new runtime generation."""
+        self._configuration.replace_extensions(extensions, config_file=config_file)
+        result = await self.reload_extensions()
+        return ManagementResult(True, False, result.diagnostics)
+
+    async def add_skill_root(self, path: Path, *, config_file: Path) -> ManagementResult:
+        root = str(path.expanduser().resolve())  # noqa: ASYNC240 - atomic config transaction
+        roots = tuple(dict.fromkeys((*self.config.extensions.skill_roots, root)))
+        updated = self.config.extensions.model_copy(update={"skill_roots": roots})
+        return await self.configure_extensions(updated, config_file=config_file)
+
+    async def remove_skill_root(self, path: Path, *, config_file: Path) -> ManagementResult:
+        root = str(path.expanduser().resolve())  # noqa: ASYNC240 - atomic config transaction
+        roots = tuple(item for item in self.config.extensions.skill_roots if item != root)
+        updated = self.config.extensions.model_copy(update={"skill_roots": roots})
+        return await self.configure_extensions(updated, config_file=config_file)
+
+    async def upsert_mcp_server(
+        self, server_id: str, server: McpServerConfig, *, config_file: Path
+    ) -> ManagementResult:
+        servers = dict(self.config.extensions.mcp_servers)
+        servers[server_id] = server
+        updated = self.config.extensions.model_copy(update={"mcp_servers": servers})
+        return await self.configure_extensions(updated, config_file=config_file)
+
+    async def remove_mcp_server(self, server_id: str, *, config_file: Path) -> ManagementResult:
+        servers = dict(self.config.extensions.mcp_servers)
+        servers.pop(server_id, None)
+        updated = self.config.extensions.model_copy(update={"mcp_servers": servers})
+        return await self.configure_extensions(updated, config_file=config_file)
+
+    async def probe_mcp_server(self, server_id: str) -> str:
+        return (await self._extension_application.probe_mcp(server_id)).value
+
+    def mcp_server_states(self) -> dict[str, str]:
+        states = {
+            server_id: "disabled"
+            for server_id, server in self.config.extensions.mcp_servers.items()
+            if not server.enabled
+        }
+        states.update(
+            {
+                server_id: state.value
+                for server_id, state in self._extension_application.mcp_states().items()
+            }
+        )
+        return states
+
     def extension_audit(self) -> tuple[ManagementAuditRecord, ...]:
         return self._extension_application.audit_records
 
@@ -403,6 +468,9 @@ class Windcode:
 
     def list_sessions(self) -> tuple[SessionMetadata, ...]:
         return self._sessions.list()
+
+    def clear_sessions(self) -> int:
+        return self._sessions.clear()
 
     def rewind_session(
         self,

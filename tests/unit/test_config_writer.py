@@ -2,11 +2,14 @@ from pathlib import Path
 
 from windcode.config import (
     AppConfig,
+    ExtensionConfig,
+    McpStdioConfig,
     PermissionConfig,
     PermissionMode,
     ProviderConfig,
     ProviderProtocol,
     load_config,
+    save_extension_config,
     save_model_config,
 )
 
@@ -135,3 +138,21 @@ def test_higher_layer_can_reenable_inherited_model_alias(tmp_path: Path) -> None
     loaded = load_config(tmp_path, user_file=user, project_file=project)
     assert loaded.providers["shared"].model == "new"
     assert loaded.primary_provider == "shared"
+
+
+def test_saves_extensions_atomically_without_overwriting_other_settings(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('[permission]\nmode = "plan"\n', encoding="utf-8")
+    extensions = ExtensionConfig(
+        skill_roots=(str(tmp_path / "skills"),),
+        mcp_servers={
+            "disabled": McpStdioConfig(command="never-started", enabled=False),
+        },
+    )
+
+    save_extension_config(path, extensions)
+
+    content = path.read_text(encoding="utf-8")
+    assert 'mode = "plan"' in content
+    assert 'command = "never-started"' in content
+    assert not tuple(path.parent.glob("config.toml.tmp-*"))

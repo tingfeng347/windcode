@@ -91,6 +91,28 @@ def build_sandbox_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_web_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="windcode web", description="Windcode Web workspace")
+    parser.add_argument("workspace", nargs="?", type=Path, default=Path.cwd())
+    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--no-open", action="store_true", help="do not open the browser")
+    return parser
+
+
+def _run_web(argv: Sequence[str]) -> int:
+    namespace = build_web_parser().parse_args(argv)
+    workspace: Path = namespace.workspace.expanduser().resolve()
+    if not workspace.is_dir():
+        raise ConfigError(workspace, "workspace is not a directory")
+    port = int(namespace.port)
+    if not 1 <= port <= 65535:
+        raise ConfigError("web port", "port must be between 1 and 65535")
+    from windcode.web.server import run_web_server
+
+    run_web_server(workspace, port=port, open_browser=not bool(namespace.no_open))
+    return 0
+
+
 def _run_sandbox(argv: Sequence[str]) -> int:
     namespace = build_sandbox_parser().parse_args(argv)
     from windcode import sandbox
@@ -180,6 +202,12 @@ def run(argv: Sequence[str] | None = None) -> int:
         except OSError as exc:
             print(f"windcode: {exc}", file=sys.stderr)
             return 5
+    if arguments and arguments[0] == "web":
+        try:
+            return _run_web(arguments[1:])
+        except (ConfigError, OSError) as exc:
+            print(f"windcode: {exc}", file=sys.stderr)
+            return 2
     provider_startup_error: str | None = None
     try:
         options = parse_options(arguments)

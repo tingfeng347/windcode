@@ -288,6 +288,34 @@ class ProviderService:
         self.config = candidate
         return ProviderApplyResult(candidate, self.health(alias))
 
+    async def set_fallback_chain(self, aliases: tuple[str, ...]) -> AppConfig:
+        primary = self.config.primary_provider
+        if primary is None and aliases:
+            raise ProviderConfigurationError("请先设置默认 Provider")
+        if len(set(aliases)) != len(aliases):
+            raise ProviderConfigurationError("fallback chain 不能包含重复 Provider")
+        invalid = [
+            alias for alias in aliases if alias == primary or alias not in self.config.providers
+        ]
+        if invalid:
+            raise ProviderConfigurationError(
+                f"fallback chain 包含无效 Provider: {', '.join(invalid)}"
+            )
+        candidate = self._config_with(
+            dict(self.config.providers), primary=primary, fallback=aliases
+        )
+        await self._apply_config(candidate)
+        self.config = candidate
+        return candidate
+
+    def delete_credential(self, alias: str) -> ProviderHealth:
+        provider = self.config.providers.get(alias)
+        if provider is None:
+            raise KeyError(f"unknown provider: {alias}")
+        if provider.credential_id is not None:
+            self.credential_store.delete(provider.credential_id)
+        return self.health(alias)
+
     async def delete(self, alias: str) -> AppConfig:
         provider = self.config.providers.get(alias)
         if provider is None:

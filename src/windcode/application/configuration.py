@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from windcode.config import AppConfig, save_memory_config, save_model_config
+from windcode.config import (
+    AppConfig,
+    ExtensionConfig,
+    save_extension_config,
+    save_memory_config,
+    save_model_config,
+)
 
 
 class ConfigurationApplication:
@@ -25,5 +31,11 @@ class ConfigurationApplication:
         updated_memory = self.current.memory.model_copy(update={"enabled": enabled})
         updated = self.current.model_copy(update={"memory": updated_memory})
         save_memory_config(config_file, updated)
+        self.current = updated
+        return updated
+
+    def replace_extensions(self, extensions: ExtensionConfig, *, config_file: Path) -> AppConfig:
+        updated = self.current.model_copy(update={"extensions": extensions})
+        save_extension_config(config_file, extensions)
         self.current = updated
         return updated

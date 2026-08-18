@@ -71,6 +71,48 @@ async def test_disconnected_provider_is_saved_but_not_promoted_to_default(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_fallback_order_and_credential_deletion_use_public_service() -> None:
+    store = MemoryCredentialStore()
+    store.set("primary", "primary-secret")
+    store.set("fallback", "fallback-secret")
+    config = AppConfig(
+        providers={
+            "primary": ProviderConfig(
+                protocol=ProviderProtocol.OPENAI_RESPONSES,
+                model="primary-model",
+                credential_id="primary",
+            ),
+            "fallback": ProviderConfig(
+                protocol=ProviderProtocol.OPENAI_RESPONSES,
+                model="fallback-model",
+                credential_id="fallback",
+            ),
+        },
+        primary_provider="primary",
+    )
+    applied: list[AppConfig] = []
+
+    async def apply(updated: AppConfig) -> None:
+        applied.append(updated)
+
+    service = ProviderService(
+        config,
+        store,
+        apply_config=apply,
+        connected_aliases=lambda: ("primary", "fallback"),
+        environ={},
+    )
+
+    updated = await service.set_fallback_chain(("fallback",))
+    health = service.delete_credential("fallback")
+
+    assert updated.fallback_chain == ("fallback",)
+    assert applied[-1].fallback_chain == ("fallback",)
+    assert store.get("fallback") is None
+    assert health.credential_source is None
+
+
+@pytest.mark.asyncio
 async def test_connected_provider_becomes_default_and_probe_uses_saved_secret() -> None:
     store = MemoryCredentialStore()
     connected: set[str] = set()

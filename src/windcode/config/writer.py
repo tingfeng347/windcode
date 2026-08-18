@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import tomli_w
 
-from windcode.config.models import AppConfig
+from windcode.config.models import AppConfig, ExtensionConfig
 
 
 def _read_config(path: Path) -> dict[str, Any]:
@@ -78,6 +78,28 @@ def save_memory_config(path: Path, config: AppConfig) -> None:
     path = path.expanduser().resolve()
     data = _read_config(path)
     data["memory"] = config.memory.model_dump(mode="json", exclude_none=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(f"{path.suffix}.tmp-{uuid4().hex}")
+    try:
+        with temporary.open("wb") as stream:
+            tomli_w.dump(data, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def save_extension_config(path: Path, extensions: ExtensionConfig) -> None:
+    """Persist extension discovery and MCP configuration atomically."""
+    path = path.expanduser().resolve()
+    data = _read_config(path)
+    data["extensions"] = extensions.model_dump(
+        mode="json",
+        by_alias=True,
+        exclude={"project_mcp_servers"},
+        exclude_none=True,
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(f"{path.suffix}.tmp-{uuid4().hex}")
     try:
