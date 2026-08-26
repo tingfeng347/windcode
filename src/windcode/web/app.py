@@ -26,7 +26,7 @@ from windcode.domain.events import ApprovalResponse, UserResponse
 from windcode.extensions.models import ExtensionScope
 from windcode.providers import ProviderDraft
 from windcode.providers.registry import ProviderConfigurationError
-from windcode.tui.commands import COMMANDS, COMMAND_CATALOG
+from windcode.tui.commands import COMMAND_CATALOG, COMMANDS
 from windcode.version import VERSION
 from windcode.web.runtime import WebRuntimeManager, WorkspaceStore, json_value
 
