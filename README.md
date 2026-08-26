@@ -210,6 +210,31 @@ Web 中的项目设置通过 SDK 原子写入项目 `.windcode/config.toml`；AP
 存储，不会返回明文，也不会保存在 Web 工作区列表中。工作区列表本身保存在用户存储根下的
 `workspaces.json`，删除工作区只移除列表记录和会话索引，不会删除磁盘上的项目目录。
 
+### 桌面应用
+
+Windcode 还可以作为原生桌面窗口运行，复用与 Web 工作台相同的界面与后端。桌面壳通过系统
+WebView 渲染，无需额外浏览器：
+
+```bash
+# 启动桌面窗口
+uv run windcode desktop /path/to/project
+```
+
+`windcode desktop` 会在本机回环地址随机选取可用端口启动 Web 服务，并打开原生窗口承载前端。
+窗口关闭后服务自动退出。`--width` 和 `--height` 可设置初始窗口尺寸。
+
+桌面壳采用平台自适应策略，不捆绑 Chromium：
+
+- **Linux**：自动探测系统 `python3` + `gi` + `WebKit2` 绑定，以子进程方式启动 WebKitGTK
+  窗口。只需系统安装 `python-gobject` 和 `webkit2gtk`（Arch 上即 `python-gobject` +
+  `webkit2gtk-4.1`），无需任何 Python 额外依赖，内存占用约为 Chromium 方案的 1/5。
+- **Windows / macOS**：通过可选依赖 `pywebview` 复用系统 EdgeChromium / WebKit，安装方式：
+  `uv sync --extra desktop --all-groups` 或 `pip install "windcode[desktop]"`。
+- **Linux 无 WebKitGTK 时的 fallback**：同样安装 `windcode[desktop]` 走 `pywebview`
+  Qt WebEngine 后端。
+
+若需要单文件分发，可在此基础上叠加 PyInstaller 冻结。
+
 ### Docker 镜像
 
 发布版本可从 GitHub Container Registry 拉取，并以交互模式挂载待处理的项目目录：

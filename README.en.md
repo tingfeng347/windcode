@@ -204,6 +204,34 @@ in the Web workspace registry. The workspace registry itself lives at `workspace
 user storage root; removing a workspace only deletes the registry entry and session index, never
 the project directory on disk.
 
+### Desktop application
+
+Windcode can also run as a native desktop window, reusing the same frontend and backend as the Web
+workspace. The desktop shell renders through the system WebView, so no extra browser is needed:
+
+```bash
+# Launch the desktop window
+uv run windcode desktop /path/to/project
+```
+
+`windcode desktop` starts the Web service on a random free loopback port and opens a native window
+hosting the frontend. The service shuts down automatically when the window closes. `--width` and
+`--height` set the initial window size.
+
+The desktop shell uses a platform-adaptive strategy with no bundled Chromium:
+
+- **Linux**: auto-detects the system `python3` + `gi` + `WebKit2` bindings and launches a
+  WebKitGTK window via a subprocess. Only requires system packages `python-gobject` and
+  `webkit2gtk` (on Arch: `python-gobject` + `webkit2gtk-4.1`) — no extra Python dependencies,
+  ~5x less memory than a Chromium-based shell.
+- **Windows / macOS**: uses `pywebview` (optional dependency) to reuse the system EdgeChromium /
+  WebKit runtime. Install with `uv sync --extra desktop --all-groups` or
+  `pip install "windcode[desktop]"`.
+- **Linux fallback** (no WebKitGTK): install `windcode[desktop]` to use the `pywebview`
+  Qt WebEngine backend.
+
+For single-file distribution, layer PyInstaller freezing on top of this.
+
 ### Container image
 
 Run a published image from GitHub Container Registry with an interactive TTY and a mounted project:
