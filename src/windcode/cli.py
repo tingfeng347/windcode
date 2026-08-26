@@ -113,6 +113,26 @@ def _run_web(argv: Sequence[str]) -> int:
     return 0
 
 
+def build_desktop_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="windcode desktop", description="Windcode desktop application"
+    )
+    parser.add_argument("workspace", nargs="?", type=Path, default=Path.cwd())
+    parser.add_argument("--width", type=int, default=1280, help="initial window width")
+    parser.add_argument("--height", type=int, default=820, help="initial window height")
+    return parser
+
+
+def _run_desktop(argv: Sequence[str]) -> int:
+    namespace = build_desktop_parser().parse_args(argv)
+    workspace: Path = namespace.workspace.expanduser().resolve()
+    if not workspace.is_dir():
+        raise ConfigError(workspace, "workspace is not a directory")
+    from windcode.desktop import launch_desktop
+
+    return launch_desktop(workspace, width=int(namespace.width), height=int(namespace.height))
+
+
 def _run_sandbox(argv: Sequence[str]) -> int:
     namespace = build_sandbox_parser().parse_args(argv)
     from windcode import sandbox
@@ -206,6 +226,12 @@ def run(argv: Sequence[str] | None = None) -> int:
         try:
             return _run_web(arguments[1:])
         except (ConfigError, OSError) as exc:
+            print(f"windcode: {exc}", file=sys.stderr)
+            return 2
+    if arguments and arguments[0] == "desktop":
+        try:
+            return _run_desktop(arguments[1:])
+        except (ConfigError, OSError, RuntimeError) as exc:
             print(f"windcode: {exc}", file=sys.stderr)
             return 2
     provider_startup_error: str | None = None
