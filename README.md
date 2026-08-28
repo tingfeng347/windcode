@@ -124,152 +124,38 @@ Windcode 是一个面向真实代码仓库的终端 Coding Agent。它可以理�
 
 ## 快速开始
 
-环境要求：Linux、macOS 或 Windows，Python 3.11+、[uv](https://docs.astral.sh/uv/)。
-
-Linux 使用 Bubblewrap，macOS 使用 Seatbelt。Windows 不使用 OS 沙箱：`full_access` 模式直接
-执行 PowerShell 命令，其他权限模式仍按既有权限策略处理审批和危险命令。
-
-沙箱 preset 为 `read_only`、默认的 `workspace_write` 和显式的
-`danger_full_access`。旧配置 `enabled=true/false` 仍可读取，并分别映射到
-`workspace_write/danger_full_access`。命令联网和沙箱外运行单独审批；项目级命令前缀规则保存
-在 state root 的 `permissions/projects/`，不会写入仓库。
-
-从 PyPI 安装命令行工具：
+需要 Python 3.11+ 和 [uv](https://docs.astral.sh/uv/)，支持 Linux、macOS 和 Windows。
 
 ```bash
 uv tool install windcode
-windcode /path/to/project
+windcode .
 ```
 
-也可以安装 npm CLI 包装器（需要 Node.js 20+ 和
-[`uv`](https://docs.astral.sh/uv/)）：
+首次启动无需提前配置模型。在 TUI 中执行 `/model`，选择 Provider、填写模型和 API Key 即可；
+密钥会进入独立凭据存储，不会写入项目配置。
+
+其他安装方式：
 
 ```bash
+# npm 包装器，需要 Node.js 20+ 和 uv
 pnpm add --global windcode
-windcode /path/to/project
-```
 
-也可以安装到当前 Python 环境：
-
-```bash
+# 安装到当前 Python 环境
 uv pip install windcode
 ```
 
-从源码运行：
+### 使用入口
 
-```bash
-uv sync --frozen --all-groups
-uv run windcode /path/to/project
-```
+| 入口 | 命令 | 说明 |
+| --- | --- | --- |
+| TUI | `windcode /path/to/project` | 默认终端工作台 |
+| Web | `windcode web /path/to/project` | 打开 `http://127.0.0.1:8765` |
+| Desktop | `windcode desktop /path/to/project` | 使用系统 WebView 打开桌面窗口 |
+| Docker | `docker run --rm -it -v "$PWD:/workspace" ghcr.io/tingfeng347/windcode:latest` | 挂载当前目录并启动 TUI |
 
-### Web 工作台
-
-Windcode 除了 TUI，还提供一个浏览器端的工作台，适合在桌面或远程环境中使用。界面默认使用
-中文，支持明暗主题跟随系统，以及会话、流式对话、审批、权限切换，Provider / 插件 / Skill /
-MCP 管理，并可在侧栏添加和删除工作区。
-
-#### 从安装包启动
-
-```bash
-windcode web /path/to/project
-```
-
-默认地址为 `http://127.0.0.1:8765`，可通过 `--port` 修改端口，使用 `--no-open` 禁止自动打开
-浏览器。Web 服务只监听本机回环地址，不提供公网绑定。
-
-#### 从源码启动（前后端联调）
-
-仓库根目录是一个 pnpm workspace（`pnpm-workspace.yaml` 包含 `web/`），前端源码在 `web/`，
-构建产物输出到 `src/windcode/web/static/`，由 Python 端直接托管。
-
-```bash
-# 安装依赖
-uv sync --frozen --all-groups
-pnpm install
-
-# 方式一：一键联调（后端 :8765 + Vite 热更新 :5173）
-pnpm web:dev
-
-# 方式二：仅构建前端（产物写入 src/windcode/web/static/）
-pnpm web:build
-
-# 仅运行前端测试
-pnpm web:test
-```
-
-`pnpm web:dev` 会同时启动 Windcode API（`127.0.0.1:8765`）和 Vite 开发服务器
-（`127.0.0.1:5173`），后者把 `/api` 和 WebSocket 请求代理到后端，支持前端热更新；浏览器访问
-`http://127.0.0.1:5173` 即可。修改前端代码后页面会自动刷新，无需重启后端。
-
-前端技术栈：React 18 + TypeScript + Vite，样式使用 CSS Modules，图标使用 lucide-react，
-Markdown 渲染使用 react-markdown + remark-gfm。
-
-#### 数据与安全
-
-Web 中的项目设置通过 SDK 原子写入项目 `.windcode/config.toml`；API Key 只写入 Windcode 凭据
-存储，不会返回明文，也不会保存在 Web 工作区列表中。工作区列表本身保存在用户存储根下的
-`workspaces.json`，删除工作区只移除列表记录和会话索引，不会删除磁盘上的项目目录。
-
-### 桌面应用
-
-Windcode 还可以作为原生桌面窗口运行，复用与 Web 工作台相同的界面与后端。桌面壳通过系统
-WebView 渲染，无需额外浏览器：
-
-```bash
-# 启动桌面窗口
-uv run windcode desktop /path/to/project
-```
-
-`windcode desktop` 会在本机回环地址随机选取可用端口启动 Web 服务，并打开原生窗口承载前端。
-窗口关闭后服务自动退出。`--width` 和 `--height` 可设置初始窗口尺寸。
-
-桌面壳采用平台自适应策略，不捆绑 Chromium：
-
-- **Linux**：自动探测系统 `python3` + `gi` + `WebKit2` 绑定，以子进程方式启动 WebKitGTK
-  窗口。只需系统安装 `python-gobject` 和 `webkit2gtk`（Arch 上即 `python-gobject` +
-  `webkit2gtk-4.1`），无需任何 Python 额外依赖，内存占用约为 Chromium 方案的 1/5。
-- **Windows / macOS**：通过可选依赖 `pywebview` 复用系统 EdgeChromium / WebKit，安装方式：
-  `uv sync --extra desktop --all-groups` 或 `pip install "windcode[desktop]"`。
-- **Linux 无 WebKitGTK 时的 fallback**：同样安装 `windcode[desktop]` 走 `pywebview`
-  Qt WebEngine 后端。
-
-若需要单文件分发，可在此基础上叠加 PyInstaller 冻结。
-
-### Docker 镜像
-
-发布版本可从 GitHub Container Registry 拉取，并以交互模式挂载待处理的项目目录：
-
-```bash
-docker run --rm -it -v "$PWD:/workspace" ghcr.io/tingfeng347/windcode:0.4.2
-```
-
-完整的发布、私有镜像登录和状态持久化说明见 [GHCR 镜像说明](docs/ghcr.md)。
-
-首次运行不要求预先配置模型。进入 TUI 后输入 `/model` 即可连接 Provider。若希望使用文件配置，
-可将 `.windcode/config.toml.example` 复制到项目目录，再修改其中的模型和扩展设置。
-
-最小模型配置：
-
-```toml
-primary_provider = "primary"
-
-[providers.primary]
-protocol = "openai_compatible"
-model = "your-model"
-base_url = "https://example.com/v1"
-api_key_env = "MODEL_API_KEY"
-```
-
-密钥应通过环境变量或 Windcode 凭据存储提供，不要写入项目配置。
-
-```bash
-export MODEL_API_KEY="..."
-uv run windcode .
-```
-
-如果没有配置 Provider、API Key 缺失、Provider 配置字段无效，或凭据文件损坏，Windcode 会保留
-TUI 和扩展功能并显示具体原因。此时输入任务或执行 `/model` 会打开 Provider 管理器。只有 TOML
-语法错误或与 Provider 无关的基础配置错误仍会阻止启动，因为这类配置无法安全恢复。
+Web 仅监听本机回环地址，支持 `--port` 和 `--no-open`。Desktop 在 Linux 上优先使用
+WebKitGTK；Windows/macOS 或 Linux fallback 安装时使用 `uv tool install "windcode[desktop]"`。
+完整容器说明见 [GHCR 镜像说明](docs/ghcr.md)。
 
 常用启动参数：
 
@@ -301,97 +187,39 @@ Shift+Tab                    循环切换权限模式
 Esc（连续两次）              中断当前运行
 ```
 
-## MCP Server
+## 配置
 
-```toml
-[extensions]
-enabled = true
+推荐直接在 `/model` 和管理界面中完成配置。需要文件配置时，以
+[`.windcode/config.toml.example`](.windcode/config.toml.example) 为参考：用户级配置位于
+`~/.windcode/config.toml`，项目级 `.windcode/config.toml` 优先级更高。
 
-[extensions.mcp_servers.example]
-transport = "streamable_http"
-url = "https://example.com/mcp"
-enable = true
-required = false
+- API Key 只应通过环境变量或凭据存储提供，不要写入 TOML 或提交到 Git。
+- 项目状态默认位于 `.windcode/`，包含会话、记忆、Trace、扩展和 Worktree；这些运行数据不要提交。
+- MCP 支持 `stdio` 和 `streamable_http`；`enable` 控制可见性，`required` 只控制已启用服务的
+  启动连接。
+- 子智能体支持 `explicit` 和 `proactive` 模式，并受并发数、单任务预算和聚合预算共同限制。
+- 运行预算可限制模型步骤、工具调用、总耗时、模型流空闲时间和 Shell 命令时间。
+- 沙箱 preset 包括 `read_only`、`workspace_write` 和 `danger_full_access`。Linux 使用 Bubblewrap，
+  macOS 使用 Seatbelt；Windows 不启用 OS 沙箱，但权限审批和危险命令检查仍然生效。
+
+Provider 缺失或配置无效时，TUI 仍会启动并给出修复入口；TOML 语法错误等基础配置错误需要先按
+终端提示修复。
+
+## 从源码开发
+
+```bash
+uv sync --frozen --all-groups
+uv run windcode .
 ```
 
-stdio MCP 示例：
+Web 前端位于 `web/`，由 React、TypeScript 和 Vite 构建：
 
-```toml
-[extensions.mcp_servers.local-example]
-transport = "stdio"
-command = "uvx"
-args = ["example-mcp-server"]
-enable = true
-required = false
+```bash
+pnpm install
+pnpm web:dev    # API :8765 + Vite :5173
+pnpm web:build  # 构建到 src/windcode/web/static/
+pnpm web:test
 ```
-
-`enable = false` 的服务器不会连接、不会参与工具搜索，也不会注入模型上下文。`required` 只在
-服务器启用时表示启动阶段主动连接；连接失败会显示降级状态，但不会阻断普通消息。默认配置不
-启用任何 MCP 服务器，需要时请在 `~/.windcode/config.toml` 或项目 `.windcode/config.toml`
-中显式添加。
-
-## 多智能体配置
-
-```toml
-[subagents]
-mode = "explicit" # explicit | proactive
-max_tasks = 8
-max_concurrent = 4
-max_model_steps = 20
-max_tool_calls = 50
-max_runtime_seconds = 900
-max_total_model_steps = 80
-max_total_tool_calls = 200
-```
-
-`explicit` 只在用户明确要求委派、并行或使用子智能体时开放委派；`proactive` 允许模型根据任务
-复杂度主动拆分。并发数、单任务预算和聚合预算会同时生效。
-
-## 运行预算与流超时
-
-```toml
-[budgets]
-max_model_steps = 40
-max_tool_calls = 100
-max_runtime_seconds = 1800
-model_stream_idle_timeout_seconds = 60
-shell_timeout_seconds = 120
-```
-
-模型流在配置时间内没有产生任何事件时会按网络错误进入重试/回退流程；手动中断则记录为正常
-取消，不会被包装成 Provider 失败。
-
-## 本地状态
-
-Windcode 将记忆、会话、trace、扩展状态和 Worktree 统一存放在选定的状态根下：
-
-```toml
-[storage]
-project_state_root = ".windcode"
-user_storage_root = "~/.windcode"
-```
-
-用户级配置固定读取 `~/.windcode/config.toml`；项目中的 `.windcode/config.toml` 优先级更高。
-配置项目状态根时优先使用项目目录；未配置时使用 `~/.windcode`。Skill 会同时扫描两边的
-`skills/`，同名时项目级覆盖用户级。项目 `.windcode/config.toml` 和 `.windcode/` 下的运行
-状态都不应提交到 Git。
-
-模型 API Key 不写入 TOML，而是保存在用户存储根下的 `auth.json`。Windcode 不会在错误信息或
-项目配置中回显密钥内容。
-
-## 常见问题
-
-### 启动后提示尚未配置模型 Provider
-
-这是可恢复状态，不会影响查看扩展、MCP、Skills、会话和长期记忆。执行 `/model`，选择内置预设
-或自定义兼容端点，填写模型 ID 和 API Key 后保存即可。
-
-### Provider 配置或凭据错误
-
-Windcode 会临时停用不可用的模型连接并继续启动。欢迎页会显示配置校验或凭据读取错误；通过
-`/model` 修复 Provider 字段或重新连接后，新配置会立即生效，无需重启应用。若 `auth.json`
-已经损坏或不可读，需要先备份并修复该文件；若配置文件本身不是合法 TOML，请先根据终端错误
-修复对应文件的语法。
 
 ## 许可证
 
