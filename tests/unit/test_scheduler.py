@@ -289,6 +289,111 @@ async def test_unparsed_shell_only_offers_one_time_approval(tmp_path: Path) -> N
     assert shell.executions == 0
 
 
+class GateReadTool:
+    """只读工具桩: 记录同时 in-flight 的调用数并等待共享门闩释放."""
+
+    name = "read"
+    description = "Gated read for concurrency tests."
+    input_model = DelayInput
+    effects = frozenset({ToolEffect.READ})
+
+    def __init__(self, notify_at: int) -> None:
+        self.active = 0
+        self.peak = 0
+        self.completed = 0
+        self.notify_at = notify_at
+        self.reached_limit = asyncio.Event()
+        self.gate = asyncio.Event()
+
+    async def execute(self, context: ToolContext, arguments: BaseModel) -> ToolResult:
+        del context
+        self.active += 1
+        self.peak = max(self.peak, self.active)
+        if self.active >= self.notify_at:
+            self.reached_limit.set()
+        await self.gate.wait()
+        self.active -= 1
+        self.completed += 1
+        return ToolResult(cast(DelayInput, arguments).label)
+
+
+async def _run_gated_batch(
+    tmp_path: Path, *, calls: int, read_only_concurrency: int
+) -> tuple[GateReadTool, tuple[ScheduledResult, ...]]:
+    tool = GateReadTool(notify_at=min(calls, read_only_concurrency))
+    registry = ToolRegistry()
+    registry.register(tool)
+    scheduler = ToolScheduler(
+        registry,
+        PolicyEngine(PermissionMode.FULL_ACCESS, sandbox_enabled=False),
+        read_only_concurrency=read_only_concurrency,
+    )
+    context = ToolContext(tmp_path, "run", lambda: False)
+    batch = tuple(
+        ScheduledCall(f"call-{index}", "read", {"label": f"call-{index}"}) for index in range(calls)
+    )
+    task = asyncio.create_task(scheduler.execute(batch, context))
+    await asyncio.wait_for(tool.reached_limit.wait(), timeout=5)
+    # 留出调度窗口: 若无并发上限, 其余调用会在此时段内全部激活.
+    await asyncio.sleep(0.1)
+    assert tool.active == min(calls, read_only_concurrency)
+    tool.gate.set()
+    results = await asyncio.wait_for(task, timeout=5)
+    return tool, results
+
+
+@pytest.mark.asyncio
+async def test_large_read_only_batch_bounded_by_configured_concurrency(tmp_path: Path) -> None:
+    tool, results = await _run_gated_batch(tmp_path, calls=24, read_only_concurrency=4)
+
+    assert tool.peak == 4
+    assert tool.completed == 24
+    assert [item.call_id for item in results] == [f"call-{index}" for index in range(24)]
+    assert all(not item.result.is_error for item in results)
+
+
+@pytest.mark.asyncio
+async def test_read_only_batch_smaller_than_limit_runs_fully_concurrent(tmp_path: Path) -> None:
+    tool, results = await _run_gated_batch(tmp_path, calls=3, read_only_concurrency=8)
+
+    assert tool.peak == 3
+    assert tool.completed == 3
+    assert [item.result.output for item in results] == ["call-0", "call-1", "call-2"]
+
+
+@pytest.mark.asyncio
+async def test_default_scheduler_bounds_read_only_concurrency(tmp_path: Path) -> None:
+    tool = GateReadTool(notify_at=8)
+    registry = ToolRegistry()
+    registry.register(tool)
+    scheduler = ToolScheduler(registry, PolicyEngine(PermissionMode.FULL_ACCESS))
+    assert scheduler.read_only_concurrency == 8
+    context = ToolContext(tmp_path, "run", lambda: False)
+    batch = tuple(
+        ScheduledCall(f"call-{index}", "read", {"label": f"call-{index}"}) for index in range(64)
+    )
+    task = asyncio.create_task(scheduler.execute(batch, context))
+    await asyncio.wait_for(tool.reached_limit.wait(), timeout=5)
+    await asyncio.sleep(0.1)
+    assert tool.active == 8
+    tool.gate.set()
+    results = await asyncio.wait_for(task, timeout=5)
+
+    assert tool.peak == 8
+    assert tool.completed == 64
+    assert len(results) == 64
+
+
+def test_scheduler_rejects_invalid_read_only_concurrency(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    with pytest.raises(ValueError, match="read_only_concurrency"):
+        ToolScheduler(
+            registry,
+            PolicyEngine(PermissionMode.DEFAULT),
+            read_only_concurrency=0,
+        )
+
+
 def test_runtime_scheduler_preserves_domain_contract_identity() -> None:
     assert ScheduledCall is domain_tools.ScheduledCall
     assert ScheduledResult is domain_tools.ScheduledResult

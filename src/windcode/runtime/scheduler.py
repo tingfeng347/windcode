@@ -54,7 +54,10 @@ class ToolScheduler:
         permission_observer: PermissionObserver | None = None,
         after_execute: AfterExecute | None = None,
         session_approval_recorder: SessionApprovalRecorder | None = None,
+        read_only_concurrency: int = 8,
     ) -> None:
+        if read_only_concurrency < 1:
+            raise ValueError("read_only_concurrency must be at least 1")
         self.registry = registry
         self.policy = policy
         self.approval_handler = approval_handler
@@ -63,6 +66,7 @@ class ToolScheduler:
         self.permission_observer = permission_observer
         self.after_execute = after_execute
         self.session_approval_recorder = session_approval_recorder
+        self.read_only_concurrency = read_only_concurrency
 
     async def _policy_request(
         self,
@@ -247,6 +251,15 @@ class ToolScheduler:
         except KeyError:
             return False
 
+    async def _bounded_execute(
+        self,
+        call: ScheduledCall,
+        context: ToolContext,
+        semaphore: asyncio.Semaphore,
+    ) -> ScheduledResult:
+        async with semaphore:
+            return await self._execute_one(call, context)
+
     async def execute(
         self,
         calls: tuple[ScheduledCall, ...],
@@ -263,8 +276,11 @@ class ToolScheduler:
             while end < len(calls) and self._is_read_only(calls[end]):
                 end += 1
             batch = calls[index:end]
+            # 只读批次仍并行执行, 但同时 in-flight 的操作数封顶,
+            # 防止大批连续只读调用同时激活全部工具操作.
+            semaphore = asyncio.Semaphore(self.read_only_concurrency)
             batch_results = await asyncio.gather(
-                *(self._execute_one(call, context) for call in batch),
+                *(self._bounded_execute(call, context, semaphore) for call in batch),
                 return_exceptions=True,
             )
             for call, item in zip(batch, batch_results, strict=True):
