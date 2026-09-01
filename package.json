@@ -1,6 +1,6 @@
 {
   "name": "windcode",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "npm CLI wrapper for the Windcode terminal coding agent",
   "license": "Apache-2.0",
   "author": "Tingfeng347",

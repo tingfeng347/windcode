@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { runWindcode } from "../lib/launcher.js";
+
+const packageMetadata = JSON.parse(
+  readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+);
 
 test("launches the matching Python package and forwards arguments", () => {
   let invocation;
@@ -13,7 +18,7 @@ test("launches the matching Python package and forwards arguments", () => {
   assert.equal(status, 7);
   assert.deepEqual(invocation, [
     "uvx",
-    ["--from", "windcode==0.4.4", "windcode", ".", "--model", "primary"],
+    ["--from", `windcode==${packageMetadata.version}`, "windcode", ".", "--model", "primary"],
     { stdio: "inherit" },
   ]);
 });
